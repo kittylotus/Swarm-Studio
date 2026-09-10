@@ -1,5 +1,6 @@
 import { createId } from "./id";
-import { StudioStore, folderIds } from "./library/store";
+import { StudioStore, folderIds, PERSISTED_OUTPUT_CACHE_LIMIT } from "./library/store";
+import { normalizeLibraryFolderSelection, shouldAutoSyncLibraryHistory } from "./library/session";
 import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
 import { importLumiSwarmStack } from "./lora/import";
 import { loraRequestValue, resolveLoraModelName } from "./lora/request";
@@ -316,6 +317,7 @@ export class StudioApp {
   private libraryLastSelectedId = "";
   private libraryRenderLimit = 240;
   private libraryBatchBusy = false;
+  private libraryAutoSyncStarted = false;
   private toast: ToastMessage | null = null;
   private toastTimer = 0;
   private draftSaveTimer = 0;
@@ -490,7 +492,14 @@ export class StudioApp {
     this.client = new SwarmClient(this.effectiveSwarmBaseUrl(), this.store.state.connection.authToken);
     this.view = this.store.state.ui.lastView;
     this.lastNonSettingsView = this.view === "settings" ? "create" : this.view;
-    this.libraryFolder = this.store.state.ui.libraryFolder;
+    const savedLibraryFolder = this.store.state.ui.libraryFolder;
+    this.libraryFolder = normalizeLibraryFolderSelection(savedLibraryFolder, this.store.state.folders);
+    if (this.libraryFolder !== savedLibraryFolder) {
+      // A deleted/legacy folder id used to survive in UI state and filter every cached output out
+      // while the header still reported that images existed. Recover to All outputs instead of
+      // opening Library as an unexplained empty room.
+      this.store.updateUi({ libraryFolder: this.libraryFolder });
+    }
     try {
       this.loraMobileGrid = (localStorage.getItem("swarm-studio-lora-view") ?? localStorage.getItem("swarm-studio-lora-mobile-view")) === "grid";
       this.loraShowNonMatching = localStorage.getItem("swarm-studio-lora-show-nonmatching") === "true";
@@ -1148,6 +1157,7 @@ export class StudioApp {
   private async connect(launchFirst = false, quiet = false): Promise<void> {
     if (this.connecting) return;
     this.connecting = true;
+    this.libraryAutoSyncStarted = false;
     this.parameterHydrationEpoch += 1;
     this.connectionError = "";
     this.backendControlLoaded = false;
@@ -1319,6 +1329,7 @@ export class StudioApp {
         </main>
       </div>
       <div id="toast-host" class="toast-host"></div>
+      <div id="clue-tooltip" class="clue-tooltip" role="tooltip" hidden></div>
       <div class="external-image-drop-overlay" data-external-image-drop hidden><div><span>⇩</span><b>Drop a Swarm image to inspect</b><small>PNG parameters and JPEG UserComment metadata are read locally.</small></div></div>
       <nav class="mobile-tabbar mobile-tabbar--context" aria-label="Mobile context navigation">
         ${this.mobileContextTabsMarkup()}
@@ -1372,6 +1383,21 @@ export class StudioApp {
         const browseScroll = this.root.querySelector<HTMLElement>(".library-browse-scroll");
         if (browseScroll) browseScroll.scrollTop = this.libraryBrowseScrollTop;
       });
+    }
+    // LocalStorage intentionally keeps only a compact recent-output cache. On the first Library
+    // visit of a connected session, quietly rehydrate the authoritative Swarm history when the
+    // in-memory index is still at/below that cache ceiling. Large libraries therefore come back
+    // automatically after restart instead of looking mysteriously truncated until Sync is clicked.
+    if (shouldAutoSyncLibraryHistory({
+      view: this.view,
+      connected: this.connected,
+      syncing: this.librarySyncing,
+      autoSyncStarted: this.libraryAutoSyncStarted,
+      outputCount: this.store.state.outputs.length,
+      persistedCacheLimit: PERSISTED_OUTPUT_CACHE_LIMIT,
+    })) {
+      this.libraryAutoSyncStarted = true;
+      window.setTimeout(() => void this.syncSwarmHistory(), 0);
     }
   }
 
@@ -3597,6 +3623,38 @@ export class StudioApp {
       </div>`;
   }
 
+  private hideClueTooltip(): void {
+    const tooltip = this.root.querySelector<HTMLElement>("#clue-tooltip");
+    if (!tooltip) return;
+    tooltip.hidden = true;
+    tooltip.textContent = "";
+  }
+
+  private showClueTooltip(clue: HTMLElement): void {
+    if (window.matchMedia("(max-width: 760px)").matches) return;
+    const tooltip = this.root.querySelector<HTMLElement>("#clue-tooltip");
+    const text = String(clue.dataset.clue ?? "").trim();
+    if (!tooltip || !text) return;
+    tooltip.textContent = text;
+    tooltip.hidden = false;
+    tooltip.style.left = "0px";
+    tooltip.style.top = "0px";
+    window.requestAnimationFrame(() => {
+      if (tooltip.hidden || !tooltip.isConnected || !clue.isConnected) return;
+      const clueRect = clue.getBoundingClientRect();
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const margin = 10;
+      let left = clueRect.left;
+      let top = clueRect.bottom + 7;
+      if (left + tooltipRect.width > window.innerWidth - margin) left = window.innerWidth - tooltipRect.width - margin;
+      if (left < margin) left = margin;
+      if (top + tooltipRect.height > window.innerHeight - margin) top = clueRect.top - tooltipRect.height - 7;
+      if (top < margin) top = margin;
+      tooltip.style.left = `${Math.round(left)}px`;
+      tooltip.style.top = `${Math.round(top)}px`;
+    });
+  }
+
   private bindGlobalEvents(): void {
     this.root.querySelector<HTMLElement>("[data-action='hide-generation-mini']")?.addEventListener("click", () => { this.generationMiniEnabled = false; try { localStorage.setItem("swarm-studio-generation-mini", "false"); } catch {} this.root.querySelector<HTMLElement>("[data-generation-mini]")?.remove(); });
     const mini = this.root.querySelector<HTMLElement>("[data-generation-mini]");
@@ -4293,11 +4351,18 @@ export class StudioApp {
     const details = this.root.querySelector<HTMLDetailsElement>(".advanced-panel");
     details?.addEventListener("toggle", () => this.store.updateUi({ advancedOpen: details.open }));
     this.root.querySelectorAll<HTMLElement>("[data-stop-toggle]").forEach((element) => element.addEventListener("click", (event) => event.stopPropagation()));
-    this.root.querySelectorAll<HTMLElement>(".clue-tip[data-clue]").forEach((clue) => clue.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (window.matchMedia("(max-width: 760px)").matches) this.notify(clue.dataset.clue || "No description available.", "info");
-    }));
+    this.root.querySelectorAll<HTMLElement>(".clue-tip[data-clue]").forEach((clue) => {
+      clue.addEventListener("mouseenter", () => this.showClueTooltip(clue));
+      clue.addEventListener("mouseleave", () => this.hideClueTooltip());
+      clue.addEventListener("focus", () => this.showClueTooltip(clue));
+      clue.addEventListener("blur", () => this.hideClueTooltip());
+      clue.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (window.matchMedia("(max-width: 760px)").matches) this.notify(clue.dataset.clue || "No description available.", "info");
+        else this.showClueTooltip(clue);
+      });
+    });
     this.root.querySelectorAll<HTMLInputElement>("[data-advanced-group-toggle]").forEach((input) => input.addEventListener("change", (event) => {
       event.stopPropagation();
       const key = input.dataset.advancedGroupToggle;

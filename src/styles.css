@@ -907,13 +907,11 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
   outline: none;
 }
 .clue-tip:hover,.clue-tip:focus-visible { color: var(--text); border-color: color-mix(in srgb,var(--accent) 38%,var(--line-strong)); }
-.clue-tip::after {
-  content: attr(data-clue);
-  position: absolute;
-  z-index: 80;
-  right: -5px;
-  top: calc(100% + 7px);
-  width: min(250px, calc(100vw - 64px));
+.clue-tooltip {
+  position: fixed;
+  z-index: 180;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 20px));
   padding: 8px 9px;
   border: 1px solid var(--line-strong);
   border-radius: var(--control-radius);
@@ -926,13 +924,9 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
-  opacity: 0;
-  visibility: hidden;
   pointer-events: none;
-  transform: translateY(-3px);
-  transition: opacity .12s ease, transform .12s ease, visibility .12s ease;
 }
-.clue-tip:hover::after,.clue-tip:focus-visible::after { opacity: 1; visibility: visible; transform: translateY(0); }
+.clue-tooltip[hidden] { display:none; }
 
 .preset-chip { min-height: 32px; padding: 4px 5px 4px 8px; overflow: visible; }
 .preset-chip-title { font-size: 8px; }
@@ -983,7 +977,6 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
   #view-host.mobile-enter-from-right { animation: studio-mobile-enter-right .20s cubic-bezier(.2,.8,.2,1) both; }
   #view-host.mobile-enter-from-left { animation: studio-mobile-enter-left .20s cubic-bezier(.2,.8,.2,1) both; }
   .advanced-param-group > summary { min-height: 34px; padding-block: 6px; gap: 6px; }
-  .clue-tip::after { display: none; }
   .preset-chip { min-height: 34px; align-items: center; }
 }
 
@@ -998,11 +991,10 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 
 
 /* v0.14: normalized advanced clues + stable mobile pane entry */
-.advanced-param-group > summary > .clue-tip { order: 0; margin: 0 1px 0 -1px; }
+.advanced-param-group > summary > .clue-tip { order:0; margin:0 1px 0 -1px; width:18px; min-width:18px; height:18px; flex:0 0 18px; display:inline-grid; place-items:center; gap:0; }
 .advanced-param-group > summary > .advanced-group-title { order: 1; }
 .advanced-param-group > summary > .advanced-group-switch { order: 2; }
 .advanced-param-group > summary > em { order: 3; }
-.clue-tip::after { max-width: min(300px, calc(100vw - 40px)); }
 @media (max-width:760px) {
   .advanced-param-group > summary > .clue-tip { margin-left: 0; }
   .studio-workspace.mobile-pane-output { scroll-margin-top: 58px; }

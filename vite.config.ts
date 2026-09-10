@@ -1,5 +1,8 @@
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
+import { DEFAULT_SWARM_RELAY_TARGET, resolveStudioSwarmRelayRequest } from "./src/runtime/relay";
+
+const swarmRelayFallbackTarget = process.env.SWARM_STUDIO_RELAY_TARGET || DEFAULT_SWARM_RELAY_TARGET;
 
 export default defineConfig({
   clearScreen: false,
@@ -10,10 +13,20 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       "/__swarm": {
-        target: process.env.SWARM_STUDIO_RELAY_TARGET || "http://127.0.0.1:7801",
+        target: swarmRelayFallbackTarget,
         changeOrigin: true,
         ws: true,
-        rewrite: (path) => path.replace(/^\/__swarm/, ""),
+        configure(_proxy, options) {
+          // The PWA can be configured for Swarm on any local port (7801, 8801, ...). Carry only
+          // that numeric port through the same-origin relay and retarget the existing proxy per
+          // request. The relay host itself stays fixed by SWARM_STUDIO_RELAY_TARGET, so a browser
+          // cannot turn Studio into an arbitrary-network SSRF proxy.
+          options.rewrite = (path) => {
+            const resolved = resolveStudioSwarmRelayRequest(path, swarmRelayFallbackTarget);
+            options.target = resolved.target;
+            return resolved.path.replace(/^\/__swarm/, "");
+          };
+        },
       },
     },
   },

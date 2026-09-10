@@ -1,4 +1,5 @@
 import { runtime } from "../runtime";
+import { studioSwarmRelayUrl } from "../runtime/relay";
 import type {
   SwarmApiErrorShape,
   SwarmGenerationEvent,
@@ -74,17 +75,14 @@ export class SwarmClient {
     const safePath = String(path ?? "");
     if (!safePath) return "";
     if (/^(data:|blob:)/i.test(safePath)) return safePath;
-    if (runtime.kind === "browser" && typeof window !== "undefined" && /^\/?__swarm\//i.test(safePath)) {
-      return `${window.location.origin}/${safePath.replace(/^\/+/, "")}`;
-    }
-    const direct = /^(https?:)/i.test(safePath) ? safePath : `${this.baseUrl}/${safePath.replace(/^\/+/, "")}`;
+    const direct = /^(https?:)/i.test(safePath)
+      ? safePath
+      : /^\/?__swarm\//i.test(safePath) && typeof window !== "undefined"
+        ? `${window.location.origin}/${safePath.replace(/^\/+/, "")}`
+        : `${this.baseUrl}/${safePath.replace(/^\/+/, "")}`;
     if (runtime.kind === "browser" && typeof window !== "undefined") {
       try {
-        const parsed = new URL(direct, window.location.origin);
-        // The PWA talks to Swarm through Studio itself. Do not key this off :1420: a Tailscale
-        // Serve / HTTPS wrapper can expose the exact same Studio host on 443 or an empty port.
-        if (parsed.origin === window.location.origin && parsed.pathname.startsWith("/__swarm/")) return parsed.href;
-        return `${window.location.origin}/__swarm${parsed.pathname}${parsed.search}`;
+        return studioSwarmRelayUrl(direct, window.location.origin, this.baseUrl);
       } catch { /* return direct URL */ }
     }
     return direct;

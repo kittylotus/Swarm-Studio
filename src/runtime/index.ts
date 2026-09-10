@@ -1,5 +1,6 @@
 import { isCivitaiHost } from "../civitai/urls";
 import { createId } from "../id";
+import { studioSwarmRelayUrl } from "./relay";
 import type { ConnectionSettings } from "../types";
 
 export interface RuntimeLogEvent {
@@ -90,19 +91,17 @@ function browserRelayUrl(url: string): string {
   if (typeof window === "undefined") return url;
   try {
     const parsed = new URL(url, window.location.origin);
-    // Never relay an already-relayed Studio URL a second time. Output -> Init used to turn
-    // /__swarm/View/... into /__swarm/__swarm/View/... on mobile, producing an HTML/404 blob
-    // that looked like a broken image after Studio encoded it as a data URL.
-    if (parsed.origin === window.location.origin && (parsed.pathname.startsWith("/__swarm/") || parsed.pathname.startsWith("/__studio/"))) {
-      return parsed.href;
-    }
-    // Browser/PWA mode always uses Studio's same-origin relays. The visible browser port is
-    // not reliable: Tailscale Serve / reverse proxies commonly expose Studio on 443 while the
-    // Vite host still owns Swarm on 127.0.0.1:7801 behind /__swarm.
+    // External metadata gets its own allowlisted relay. Swarm traffic instead carries only the
+    // configured Swarm *port* to the Studio host; the host remains fixed by vite.config so this
+    // cannot become an arbitrary LAN proxy.
+    if (parsed.origin === window.location.origin && parsed.pathname.startsWith("/__studio/")) return parsed.href;
     if (isExternalMetadataHost(parsed.hostname)) {
       return `${window.location.origin}/__studio/fetch-text?url=${encodeURIComponent(parsed.href)}`;
     }
-    return `${window.location.origin}/__swarm${parsed.pathname}${parsed.search}`;
+    // Preserve the actual configured Swarm port through the same-origin relay. Previously the
+    // browser always landed on the runner's default :7801 target, so a perfectly valid :8801
+    // Swarm worked in native Studio but the PWA quietly talked to the wrong socket.
+    return studioSwarmRelayUrl(parsed.href, window.location.origin);
   } catch {
     return url;
   }

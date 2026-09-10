@@ -16,6 +16,7 @@ import type {
 
 const STORAGE_KEY = "swarm-studio-state-v8";
 const DRAFT_STORAGE_KEY = "swarm-studio-draft-v1";
+export const PERSISTED_OUTPUT_CACHE_LIMIT = 220;
 const LEGACY_STORAGE_KEYS = ["swarm-studio-state-v7", "swarm-studio-state-v6", "swarm-studio-state-v5", "swarm-studio-state-v4", "swarm-studio-state-v3", "swarm-studio-state-v2", "swarm-studio-state-v1"];
 const UNFILED_ID = "folder-unfiled";
 const FAVORITES_ID = "folder-favorites";
@@ -266,7 +267,7 @@ function persistableDraft(draftState: GenerationDraft): GenerationDraft {
   return draft;
 }
 
-function persistableState(state: PersistedStudioState, outputLimit = 220): PersistedStudioState {
+function persistableState(state: PersistedStudioState, outputLimit = PERSISTED_OUTPUT_CACHE_LIMIT): PersistedStudioState {
   const draft = persistableDraft(state.draft);
 
   const outputs = state.outputs.slice(0, outputLimit).map((output) => ({
@@ -318,7 +319,7 @@ export class StudioStore {
 
   save(): void {
     this.persistenceWarning = "";
-    const attempts = [220, 100, 35];
+    const attempts = [PERSISTED_OUTPUT_CACHE_LIMIT, 100, 35];
     for (const limit of attempts) {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(persistableState(this.state, limit)));

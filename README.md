@@ -14,6 +14,8 @@ The launcher installs JavaScript dependencies when needed, creates/refreshes the
 
 If Windows Firewall genuinely blocks phone/LAN access to port 1420, run `.\start.ps1 -SetupFirewall` once from the project folder. That optional setup may request elevation; subsequent normal launches stay unelevated. For browser/PWA development, use `npm run dev`. The normal PowerShell runner keeps Tauri/Vite/Cargo output compact and records captured dev/backend output in `.swarm-studio-runner.log`; launch `.\start.ps1 -VerboseRunner` when you want the raw dev firehose live.
 
+Browser/PWA Swarm traffic is relayed through Studio on port 1420. The relay now preserves the **configured local Swarm port**, so installations running on non-default ports such as `8801` no longer get silently redirected to `7801`; the relay still keeps its host fixed to the runner-configured backend host rather than accepting arbitrary browser-selected hosts.
+
 If a Studio-owned Swarm/Comfy process tree starts crash-looping, use the **Swarm Studio - Emergency Stop** desktop shortcut or run `.\start.ps1 -EmergencyStop`. The panic path only acts on the PID recorded by Studio's managed launcher and refuses to kill a recycled PID that no longer looks like Swarm.
 
 ## Current workflow
@@ -34,7 +36,7 @@ The same panel uses Swarm's backend controls to restart, disable/re-enable, or r
 
 ## Persistence and metadata
 
-Studio keeps its own lightweight UI/library state locally while Swarm remains authoritative for model files and generated output history. History sync can rebuild Studio's index from Swarm. Dropped images are inspected transiently and are not automatically added to the Library.
+Studio keeps its own lightweight UI/library state locally while Swarm remains authoritative for model files and generated output history. The persisted browser cache intentionally keeps only the newest 220 output records; on the first connected **Library** visit of a session, Studio automatically rehydrates that compact cache from Swarm history so large libraries do not appear truncated after restart. Manual **Sync Swarm History** remains available for an explicit refresh. Dropped images are inspected transiently and are not automatically added to the Library.
 
 Swarm PNG `parameters` metadata and supported JPEG `UserComment` metadata are parsed locally. When available, Swarm timing fields such as `prep_time` and `generation_time` are surfaced in Inspect.
 
