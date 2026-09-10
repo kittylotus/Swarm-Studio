@@ -33,6 +33,23 @@ export interface RuntimeRepoStatus {
   refs: RuntimeRepoRef[];
 }
 
+export interface StudioUpdateStatus {
+  supported: boolean;
+  available: boolean;
+  canApply: boolean;
+  dirty: boolean;
+  repoPath: string;
+  currentVersion: string;
+  latestVersion: string;
+  currentCommit: string;
+  latestCommit: string;
+  commitsBehind: number;
+  branch: string;
+  origin: string;
+  message: string;
+  highlights: string[];
+}
+
 export interface RuntimeBridge {
   readonly kind: "browser" | "tauri";
   postJson<T>(url: string, body: Record<string, unknown>, authToken?: string): Promise<T>;
@@ -48,6 +65,8 @@ export interface RuntimeBridge {
   switchRepoVersion(kind: "swarm" | "comfy", pathHint: string | undefined, target: string): Promise<RuntimeRepoStatus>;
   updateRepoLatest(kind: "swarm" | "comfy", pathHint?: string): Promise<RuntimeRepoStatus>;
   setSwarmLaunchAutoPull(pathHint: string | undefined, enabled: boolean): Promise<RuntimeRepoStatus>;
+  checkStudioUpdate(): Promise<StudioUpdateStatus>;
+  applyStudioUpdate(): Promise<string>;
   subscribeLogs(listener: (event: RuntimeLogEvent) => void): void;
 }
 
@@ -243,6 +262,27 @@ const browserRuntime: RuntimeBridge = {
   async setSwarmLaunchAutoPull() {
     throw new Error("Swarm launch policy controls are only available in the desktop app.");
   },
+  async checkStudioUpdate() {
+    return {
+      supported: false,
+      available: false,
+      canApply: false,
+      dirty: false,
+      repoPath: "",
+      currentVersion: "PWA",
+      latestVersion: "",
+      currentCommit: "",
+      latestCommit: "",
+      commitsBehind: 0,
+      branch: "",
+      origin: "",
+      message: "Source updates are only available in desktop Studio Git checkouts.",
+      highlights: [],
+    };
+  },
+  async applyStudioUpdate() {
+    throw new Error("Source updates are only available in desktop Studio Git checkouts.");
+  },
   subscribeLogs() {
     // Browser mode has no child process to subscribe to.
   },
@@ -321,6 +361,12 @@ const tauriRuntime: RuntimeBridge = {
   },
   async setSwarmLaunchAutoPull(pathHint, enabled) {
     return tauriInvoke<RuntimeRepoStatus>("swarm_repo_set_launch_auto_pull", { pathHint: pathHint || null, enabled });
+  },
+  async checkStudioUpdate() {
+    return tauriInvoke<StudioUpdateStatus>("studio_update_check");
+  },
+  async applyStudioUpdate() {
+    return tauriInvoke<string>("studio_update_apply");
   },
   subscribeLogs(listener) {
     void import("@tauri-apps/api/event").then(async ({ listen }) => {

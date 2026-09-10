@@ -5,7 +5,7 @@ import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
 import { importLumiSwarmStack } from "./lora/import";
 import { loraRequestValue, resolveLoraModelName } from "./lora/request";
 import { CIVITAI_FALLBACK_ORIGIN, CIVITAI_ORIGIN, isCivitaiHost, routeCivitaiUrl } from "./civitai/urls";
-import { runtime, type RuntimeProcessStatus, type RuntimeRepoStatus } from "./runtime";
+import { runtime, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
 import { normalizeGenerationRequest, normalizeParamKey } from "./swarm/request";
@@ -328,6 +328,11 @@ export class StudioApp {
   private backendControlLoading = false;
   private backendControlBusy = "";
   private backendControlError = "";
+  private studioUpdateStatus: StudioUpdateStatus | null = null;
+  private studioUpdateChecking = false;
+  private studioUpdateApplying = false;
+  private studioUpdatePopupOpen = false;
+  private studioUpdateDismissed = false;
   private parameterHydrationEpoch = 0;
   private backendList: SwarmBackendInfo[] = [];
   private swarmRepoStatus: RuntimeRepoStatus | null = null;
@@ -798,6 +803,9 @@ export class StudioApp {
       this.notify(persistenceWarning, "info");
     }
     void this.refreshProcessStatus(false);
+    if (runtime.kind === "tauri") {
+      window.setTimeout(() => void this.checkStudioUpdate(false), 2600);
+    }
     if (this.store.state.connection.autoStart && runtime.kind === "tauri") {
       void this.connect(true);
     } else {
@@ -878,6 +886,127 @@ export class StudioApp {
     host.innerHTML = this.toast
       ? `<div class="toast toast--${this.toast.kind}">${escapeHtml(this.toast.text)}</div>`
       : "";
+  }
+
+  private studioUpdateTargetLabel(status = this.studioUpdateStatus): string {
+    if (!status) return "latest";
+    return status.latestVersion ? `v${status.latestVersion}` : status.latestCommit || "latest";
+  }
+
+  private studioUpdateHasPendingWork(): boolean {
+    return this.generating || this.inpaintAwaitingResult || this.pendingGenerationApprovals.length > 0 || Boolean(this.inpaintPendingResultRecord);
+  }
+
+  private renderStudioUpdatePopup(): string {
+    const status = this.studioUpdateStatus;
+    if (!this.studioUpdatePopupOpen || !status?.available || runtime.kind !== "tauri") return "";
+    const target = this.studioUpdateTargetLabel(status);
+    const highlights = status.highlights.slice(0, 3);
+    const pendingWork = this.studioUpdateHasPendingWork();
+    return `
+      <aside class="studio-update-popup" role="status" aria-live="polite">
+        <header><span class="studio-update-glyph">↑</span><div><span class="panel-kicker">SWARM STUDIO UPDATE</span><h3>${escapeHtml(target)} is ready</h3></div></header>
+        <p>${escapeHtml(status.message)}</p>
+        ${highlights.length ? `<ul>${highlights.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+        <div class="studio-update-meta"><span>${escapeHtml(status.currentVersion ? `v${status.currentVersion}` : status.currentCommit)}</span><b>→</b><span>${escapeHtml(target)}</span></div>
+        <div class="form-actions">
+          <button type="button" class="ghost-button" data-action="dismiss-studio-update" ${this.studioUpdateApplying ? "disabled" : ""}>Later</button>
+          <button type="button" class="primary-button" data-action="apply-studio-update" ${status.canApply && !this.studioUpdateApplying && !pendingWork ? "" : "disabled"}>${this.studioUpdateApplying ? "Updating…" : pendingWork ? "Finish current work" : status.canApply ? "Update & restart" : "Update blocked"}</button>
+        </div>
+      </aside>`;
+  }
+
+  private renderStudioUpdateSettingsCard(): string {
+    if (runtime.kind !== "tauri") return "";
+    const status = this.studioUpdateStatus;
+    const pendingWork = this.studioUpdateHasPendingWork();
+    const state = this.studioUpdateChecking ? "checking" : status?.available ? (status.canApply ? "available" : "blocked") : status?.supported === false ? "unavailable" : status ? "current" : "unknown";
+    const label = this.studioUpdateChecking
+      ? "Checking origin…"
+      : status?.message || "Studio can check its own Git checkout and fast-forward it without opening a terminal.";
+    const version = status ? `v${escapeHtml(status.currentVersion)}` : "Current build";
+    return `
+      <section class="studio-update-settings-card">
+        <div class="studio-update-settings-copy"><span class="panel-kicker">STUDIO SOURCE</span><div><h3>${version}</h3><span class="backend-state studio-update-state studio-update-state--${state}">${state}</span></div><p>${escapeHtml(label)}</p>${status?.supported && status.repoPath ? `<small>${escapeHtml(status.repoPath)}</small>` : ""}</div>
+        <div class="backend-button-row">
+          <button type="button" class="ghost-button" data-action="check-studio-update" ${this.studioUpdateChecking || this.studioUpdateApplying ? "disabled" : ""}>${this.studioUpdateChecking ? "Checking…" : "Check for updates"}</button>
+          <button type="button" class="primary-button" data-action="apply-studio-update" ${status?.canApply && !this.studioUpdateApplying && !pendingWork ? "" : "disabled"}>${this.studioUpdateApplying ? "Updating…" : pendingWork && status?.available ? "Finish current work" : status?.available ? "Update & restart" : "Up to date"}</button>
+        </div>
+      </section>`;
+  }
+
+  private renderStudioUpdateHost(): void {
+    const host = this.root.querySelector<HTMLElement>("#studio-update-host");
+    if (!host) return;
+    host.innerHTML = this.renderStudioUpdatePopup();
+    this.bindStudioUpdateEvents(host);
+  }
+
+  private async checkStudioUpdate(userInitiated = false): Promise<void> {
+    if (runtime.kind !== "tauri" || this.studioUpdateChecking || this.studioUpdateApplying) return;
+    this.studioUpdateChecking = true;
+    if (userInitiated && this.view === "settings") this.render();
+    try {
+      const status = await runtime.checkStudioUpdate();
+      this.studioUpdateStatus = status;
+      if (status.available && !this.studioUpdateDismissed) this.studioUpdatePopupOpen = true;
+      if (userInitiated) {
+        if (status.available && status.canApply) this.notify(`${this.studioUpdateTargetLabel(status)} is ready to install.`, "success");
+        else this.notify(status.message, status.available ? "info" : "success");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addLog(`Studio update check failed: ${message}`, userInitiated ? "warn" : "info", "studio");
+      if (userInitiated) this.notify(message, "error");
+    } finally {
+      this.studioUpdateChecking = false;
+      if (userInitiated && this.view === "settings") this.render();
+      else this.renderStudioUpdateHost();
+    }
+  }
+
+  private async applyStudioUpdate(): Promise<void> {
+    const status = this.studioUpdateStatus;
+    if (this.studioUpdateHasPendingWork()) {
+      this.notify("Finish, save, or discard the current generation/review before updating Studio.", "info");
+      return;
+    }
+    if (!status?.canApply || this.studioUpdateApplying) {
+      if (status?.message) this.notify(status.message, "info");
+      return;
+    }
+    this.studioUpdateApplying = true;
+    this.renderStudioUpdateHost();
+    if (this.view === "settings") this.render();
+    try {
+      const processStatus = await runtime.processStatus().catch(() => this.processStatus);
+      if (processStatus.owned && processStatus.running) {
+        this.addLog("Stopping Studio-owned Swarm before self-update so the launcher/log pipes restart cleanly.", "info", "studio");
+        await runtime.stopLocalSwarm();
+        this.connected = false;
+        this.session = null;
+      }
+      const message = await runtime.applyStudioUpdate();
+      this.notify(message, "success");
+      this.addLog(message, "info", "studio");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.studioUpdateApplying = false;
+      this.addLog(`Studio update failed: ${message}`, "error", "studio");
+      this.notify(message, "error");
+      if (this.view === "settings") this.render();
+      else this.renderStudioUpdateHost();
+    }
+  }
+
+  private bindStudioUpdateEvents(scope: ParentNode = this.root): void {
+    scope.querySelectorAll<HTMLElement>("[data-action='check-studio-update']").forEach((button) => button.addEventListener("click", () => void this.checkStudioUpdate(true)));
+    scope.querySelectorAll<HTMLElement>("[data-action='apply-studio-update']").forEach((button) => button.addEventListener("click", () => void this.applyStudioUpdate()));
+    scope.querySelectorAll<HTMLElement>("[data-action='dismiss-studio-update']").forEach((button) => button.addEventListener("click", () => {
+      this.studioUpdatePopupOpen = false;
+      this.studioUpdateDismissed = true;
+      this.renderStudioUpdateHost();
+    }));
   }
 
   private async refreshProcessStatus(rerender = true): Promise<void> {
@@ -1329,6 +1458,7 @@ export class StudioApp {
         </main>
       </div>
       <div id="toast-host" class="toast-host"></div>
+      <div id="studio-update-host">${this.renderStudioUpdatePopup()}</div>
       <div id="clue-tooltip" class="clue-tooltip" role="tooltip" hidden></div>
       <div class="external-image-drop-overlay" data-external-image-drop hidden><div><span>⇩</span><b>Drop a Swarm image to inspect</b><small>PNG parameters and JPEG UserComment metadata are read locally.</small></div></div>
       <nav class="mobile-tabbar mobile-tabbar--context" aria-label="Mobile context navigation">
@@ -3457,6 +3587,7 @@ export class StudioApp {
         <div class="section-minihead backend-control-head"><div><b>Backend control room</b><span>Versions, restart policy, and the emergency levers.</span></div><button type="button" class="ghost-button" data-action="refresh-backend-control" ${disabled}>${loading ? "Loading…" : "Refresh"}</button></div>
         ${this.backendControlBusy ? `<div class="backend-control-progress"><span></span><b>${escapeHtml(this.backendControlBusy)}</b><small>Do not close Studio while a checkout is being changed.</small></div>` : ""}
         ${this.backendControlError ? `<div class="api-diagnostic"><b>Backend API unavailable</b><code>${escapeHtml(this.backendControlError)}</code></div>` : ""}
+        ${this.renderStudioUpdateSettingsCard()}
         <div class="backend-control-grid">
           <article class="backend-control-card">
             <header><div><span class="panel-kicker">SWARMUI</span><h3>${escapeHtml(this.session?.version ?? "Unknown server version")}</h3></div><span class="backend-state ${this.connected ? "is-running" : ""}">${this.connected ? "online" : "offline"}</span></header>
@@ -3656,6 +3787,7 @@ export class StudioApp {
   }
 
   private bindGlobalEvents(): void {
+    this.bindStudioUpdateEvents();
     this.root.querySelector<HTMLElement>("[data-action='hide-generation-mini']")?.addEventListener("click", () => { this.generationMiniEnabled = false; try { localStorage.setItem("swarm-studio-generation-mini", "false"); } catch {} this.root.querySelector<HTMLElement>("[data-generation-mini]")?.remove(); });
     const mini = this.root.querySelector<HTMLElement>("[data-generation-mini]");
     const drag = this.root.querySelector<HTMLElement>("[data-generation-mini-drag]");

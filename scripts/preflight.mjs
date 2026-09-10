@@ -139,6 +139,14 @@ assert(runner.includes("[switch]$EmergencyStop") && runner.includes("Stop-Studio
 assert(runner.includes("Swarm Studio - Emergency Stop.lnk"), "Emergency Stop desktop shortcut is missing");
 assert(runner.includes("Get-CimInstance Win32_Process") && runner.includes("taskkill.exe /PID $PidValue /T /F"), "Emergency Stop process identity guard/tree kill is incomplete");
 assert(runner.includes("SWARM_STUDIO_SWARM_PID_FILE") && runner.includes("SWARM_STUDIO_RUNNER_LOG"), "Runner/native forensic environment handoff is missing");
+assert(runtime.includes("checkStudioUpdate") && runtime.includes("applyStudioUpdate"), "Desktop Studio updater runtime bridge is missing");
+assert(app.includes("renderStudioUpdatePopup()") && app.includes("Update & restart") && app.includes("checkStudioUpdate(false)"), "Automatic Studio update popup/check is missing");
+assert(app.includes("studioUpdateHasPendingWork") && app.includes("Stopping Studio-owned Swarm before self-update"), "Studio updater must protect active generation/review work and owned backend pipes");
+assert(rust.includes("studio_update_check") && rust.includes("studio_update_apply") && rust.includes('"merge", "--ff-only"'), "Native Studio source updater is incomplete");
+assert(rust.includes('"merge-base", "--is-ancestor"') && rust.includes("GIT_TERMINAL_PROMPT"), "Studio updater must refuse divergent checkouts and noninteractive Git prompts");
+assert(rust.includes("ensure_studio_repo_clean") && rust.includes('"--untracked-files=normal"'), "Studio self-update must refuse untracked user files instead of risking merge collisions");
+assert(runner.includes("SWARM_STUDIO_ROOT") && runner.includes("[switch]$RefreshDependencies"), "Runner updater handoff/dependency refresh support is missing");
+assert(gitignore.includes(".swarm-studio-*.log"), "Studio update log must remain ignored by Git");
 
 if (failures.length) {
   console.error("Preflight failed:\n" + failures.map((item) => `  - ${item}`).join("\n"));

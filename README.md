@@ -18,6 +18,14 @@ Browser/PWA Swarm traffic is relayed through Studio on port 1420. The relay now 
 
 If a Studio-owned Swarm/Comfy process tree starts crash-looping, use the **Swarm Studio - Emergency Stop** desktop shortcut or run `.\start.ps1 -EmergencyStop`. The panic path only acts on the PID recorded by Studio's managed launcher and refuses to kill a recycled PID that no longer looks like Swarm.
 
+## Studio updates
+
+Desktop Studio can update its own source checkout after the repository has been cloned once. A bounded startup check fetches the checkout's `origin` and shows a small **Update available** card only when the remote default branch is ahead. **Update & restart** refuses local edits, untracked files, or divergent history, fast-forwards with `git merge --ff-only`, then restarts through `start.ps1`; it never runs `git reset --hard` or `git clean`.
+
+The same status and a manual **Check for updates** button live under **Settings → Backends**. If Studio owns the running Swarm process, it stops that process tree before the update so the old log pipes are not orphaned, then normal startup reconnects or relaunches it. ZIP-only copies without a `.git` checkout simply report that source updating is unavailable rather than attempting to overwrite themselves.
+
+If a future release changes JavaScript dependencies, the detached updater asks the restarted runner to refresh them. Update diagnostics are written to `.swarm-studio-update.log`, which is intentionally ignored by Git.
+
 ## Current workflow
 
 - **Create:** checkpoint/LoRA controls, presets, prompt editing, advanced Swarm parameters, live generation progress, and optional Review Before Save with a compact approve/regenerate/discard strip.

@@ -3,12 +3,14 @@
     [switch]$NoShortcut,
     [switch]$SetupFirewall,
     [switch]$VerboseRunner,
-    [switch]$EmergencyStop
+    [switch]$EmergencyStop,
+    [switch]$RefreshDependencies
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
+$env:SWARM_STUDIO_ROOT = $Root
 $RunnerLog = Join-Path $Root ".swarm-studio-runner.log"
 $SwarmPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-owned-swarm.pid"
 $env:SWARM_STUDIO_SWARM_PID_FILE = $SwarmPidFile
@@ -314,7 +316,7 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     throw "npm was not found. Install Node.js 20+ and reopen PowerShell."
 }
 
-if (-not (Test-Path (Join-Path $Root "node_modules\@tauri-apps\api"))) {
+if ($RefreshDependencies -or -not (Test-Path (Join-Path $Root "node_modules\@tauri-apps\api"))) {
     Write-Status "DEPS" "Installing JavaScript dependencies..." Yellow
     npm install
     if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE." }
