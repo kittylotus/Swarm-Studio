@@ -1,6 +1,6 @@
 {
   "name": "swarm-studio-standalone",
-  "version": "0.63.17",
+  "version": "0.63.18",
   "private": true,
   "type": "module",
   "description": "A standalone PWA and Tauri creative client for SwarmUI.",

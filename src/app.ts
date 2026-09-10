@@ -48,6 +48,18 @@ const asNumber = (value: string, fallback: number) => Number.isFinite(Number(val
 const ratioChoices = ["1:1", "2:3", "3:4", "4:5", "9:16"];
 const seedToggleSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10a5 5 0 0 1 5 5v1"/><path d="m16 10 3 3 3-3"/><path d="M20 17H10a5 5 0 0 1-5-5v-1"/><path d="m8 14-3-3-3 3"/></svg>`;
 const syntaxSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4 4 12l4 8"/><path d="m16 4 4 8-4 8"/><path d="m14 3-4 18"/></svg>`;
+const plusSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;
+const saveSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21h14"/><path d="M19 21V7.8a1 1 0 0 0-.3-.7l-2.8-2.8a1 1 0 0 0-.7-.3H7a2 2 0 0 0-2 2v15"/><path d="M9 21v-6h6v6"/><path d="M9 4v5h5"/></svg>`;
+const importSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`;
+const exportSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>`;
+const settingsRowsSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9"/><path d="M17 6h3"/><circle cx="15" cy="6" r="2"/><path d="M4 12h3"/><path d="M11 12h9"/><circle cx="9" cy="12" r="2"/><path d="M4 18h11"/><path d="M19 18h1"/><circle cx="17" cy="18" r="2"/></svg>`;
+const trashSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 13h8l1-13"/></svg>`;
+const gripSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>`;
+const eyeSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const eyeOffSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 10.7A3 3 0 0 0 12 15a3 3 0 0 0 2.3-5.3"/><path d="M9.9 5.1A10.7 10.7 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3.2 4"/><path d="M6.4 6.5C4.1 8 2.5 12 2.5 12a17 17 0 0 0 6.2 5.4"/></svg>`;
+const linkedSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>`;
+const unlinkedSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 15 5 19"/><path d="M15 9 19 5"/><path d="M7.5 7.5a5 5 0 0 1 7.1 0l1.4 1.4"/><path d="m15.1 15.1-1.4 1.4a5 5 0 0 1-7.1 0"/></svg>`;
+const swapSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5"/><path d="m4 20 17-17"/><path d="M8 21H3v-5"/></svg>`;
 const batchSelectSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m7.5 12 3 3 6-7"/></svg>`;
 const folderTreeSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10h18"/></svg>`;
 const externalLinkSvg = `<svg class="external-link-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M10 14 20 4"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>`;
@@ -390,6 +402,9 @@ export class StudioApp {
   private loraDownloadResolved: PreparedLoraDownload | null = null;
   private loraDownloadResolving = false;
   private loraDownloadResolveTimer = 0;
+  private presetReorderModalOpen = false;
+  private loraReorderModalOpen = false;
+  private stackReorderDrag: { kind: "preset" | "lora"; from: number; } | null = null;
   private serverSettings: Record<string, SwarmServerSetting> = {};
   private serverSettingsError = "";
   private connectionError = "";
@@ -1473,6 +1488,8 @@ export class StudioApp {
       ${this.renderModelMetadataViewer()}
       ${this.renderLoraMoveModal()}
       ${this.renderLoraDeleteModal()}
+      ${this.renderStackReorderModal("preset")}
+      ${this.renderStackReorderModal("lora")}
       ${this.renderPresetEditorModal()}
       ${this.renderLibraryFiltersModal()}
       ${this.renderLibraryMoveModal()}
@@ -2137,9 +2154,9 @@ export class StudioApp {
 
           <section class="rail-section">
             <div class="section-minihead"><b>Preset stack</b><span>${draft.activePresets.length} selected</span></div>
-            <div class="preset-picker"><select id="preset-select">${this.presetOptions("")}</select><button class="secondary-button" data-action="add-preset" ${this.presets.length ? "" : "disabled"}>Add</button><button class="icon-button preset-edit-selected" data-action="edit-selected-preset" title="Edit selected Swarm preset" ${this.presets.length ? "" : "disabled"}>⚙</button></div>
+            <div class="preset-picker preset-picker--streamlined"><select id="preset-select">${this.presetOptions("")}</select><button class="icon-button" data-action="new-preset" title="Save current settings as a new preset" aria-label="Save current settings as a new preset">${saveSvg}</button></div>
             ${this.presetStackMarkup()}
-            <div class="preset-stack-tools"><button class="ghost-button" data-action="new-preset">Save current</button></div>
+            <div class="preset-stack-tools"><button class="ghost-button" data-action="open-preset-reorder" ${draft.activePresets.length > 1 ? "" : "disabled"}>Reorder</button><button class="ghost-button" data-action="new-preset">Save current</button></div>
           </section>
 
           <section class="rail-section">
@@ -2226,24 +2243,16 @@ export class StudioApp {
       <aside class="panel ${className} shared-composer">
         <div class="rail-heading"><div><span class="panel-kicker">COMPOSER</span><h2>Model & stack</h2></div></div>
         <label class="field"><span>Checkpoint</span><select id="model">${this.modelOptions(draft.model)}</select></label>
-        <div class="checkpoint-pill"><span>Selected checkpoint</span><b>${escapeHtml(checkpoint?.title || prettyName(draft.model) || "None")}</b><small>${escapeHtml(checkpointClass)}</small></div>
+        <div class="checkpoint-meta"><b>${escapeHtml(checkpoint?.title || prettyName(draft.model) || "None")}</b><small>${escapeHtml(checkpointClass)}</small></div>
 
-        ${includeResolution ? `<section class="rail-section resolution-section">
-          <div class="section-minihead"><b>Resolution</b><span>${draft.width} × ${draft.height}</span></div>
-          <div class="dimension-link-row">
-            ${this.numberField("width", "Width", draft.width, 64, 4096, 64)}
-            <button class="link-dimensions ${draft.lockRatio ? "is-active" : ""}" data-action="toggle-ratio-lock" title="Link width and height" aria-label="Link width and height"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg></button>
-            ${this.numberField("height", "Height", draft.height, 64, 4096, 64)}
-          </div>
-          <label class="range-field"><span>Scale <b id="resolution-value">${Math.max(draft.width, draft.height)}px</b></span><input id="resolution-scale" type="range" min="256" max="2048" step="64" value="${clamp(Math.max(draft.width, draft.height), 256, 2048)}" /></label>
-          <div class="ratio-controls"><div class="ratio-row">${ratioChoices.map((ratio) => `<button class="${draft.ratio === ratio ? "is-active" : ""}" data-ratio="${ratio}">${ratio}</button>`).join("")}</div><button class="icon-button ratio-reverse ${draft.ratioReversed ? "is-active" : ""}" data-action="reverse-ratio" title="Reverse ratio" ${draft.ratio === "1:1" ? "disabled" : ""}>↔</button></div>
-        </section>` : ""}
+        ${includeResolution ? this.resolutionSectionMarkup() : ""}
 
         <section class="rail-section lora-section">
-          <div class="section-minihead"><b>LoRA stack</b><span>${draft.loras.filter((item) => item.enabled).length} enabled · ${draft.loras.length} stacked</span></div>
+          <div class="section-minihead stack-section-head"><span><b>LoRA stack</b><small>${draft.loras.filter((item) => item.enabled).length} enabled · ${draft.loras.length} stacked</small></span><div class="section-icon-actions"><label class="icon-button file-button" title="Import LoRA stack" aria-label="Import LoRA stack">${importSvg}<input id="lora-import" type="file" accept="application/json,.json" hidden /></label><button class="icon-button" data-action="export-lora-stack" title="Export LoRA stack" aria-label="Export LoRA stack" ${draft.loras.length ? "" : "disabled"}>${exportSvg}</button><button class="icon-button" data-action="save-lora-profile" title="Save current LoRA stack" aria-label="Save current LoRA stack" ${draft.loras.length ? "" : "disabled"}>${saveSvg}</button></div></div>
           <div class="lora-picker"><select id="lora-add-select"><option value="">${available.length ? "Choose a matching LoRA…" : "No matching LoRAs"}</option>${available.map((lora) => this.loraOption(lora)).join("")}</select><button class="secondary-button" data-action="add-lora" ${available.length ? "" : "disabled"}>Add</button></div>
           ${draft.loras.length ? `<div class="lora-stack">${draft.loras.map((item, index) => this.loraStackRow(item, index)).join("")}</div>` : `<div class="stack-empty">No LoRAs in this stack.</div>`}
-          <div class="stack-tools"><label class="secondary-button file-button">Import<input id="lora-import" type="file" accept="application/json,.json" hidden /></label><button class="secondary-button" data-action="export-lora-stack" ${draft.loras.length ? "" : "disabled"}>Export</button><button class="secondary-button" data-action="save-lora-profile" ${draft.loras.length ? "" : "disabled"}>Save</button><select id="lora-profile-select"><option value="">Saved stacks…</option>${this.store.state.loraProfiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</select><button class="ghost-button" data-action="load-lora-profile" ${this.store.state.loraProfiles.length ? "" : "disabled"}>Load</button><button class="ghost-button" data-action="clear-loras" ${draft.loras.length ? "" : "disabled"}>Clear</button></div>
+          <div class="stack-tools stack-tools--saved"><select id="lora-profile-select"><option value="">Saved stacks…</option>${this.store.state.loraProfiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</select><button class="ghost-button" data-action="load-lora-profile" ${this.store.state.loraProfiles.length ? "" : "disabled"}>Load</button></div>
+          <div class="stack-tools stack-tools--footer"><button class="ghost-button" data-action="open-lora-reorder" ${draft.loras.length > 1 ? "" : "disabled"}>Reorder</button><button class="ghost-button" data-action="clear-loras" ${draft.loras.length ? "" : "disabled"}>Clear</button></div>
         </section>
       </aside>`;
   }
@@ -2257,16 +2266,27 @@ export class StudioApp {
       return `<div class="preset-chip" data-preset-index="${index}" data-preset-title="${escapeHtml(title)}"${description}>
         <span class="preset-chip-title">&lt;preset:${escapeHtml(title)}&gt;</span>
         <div class="preset-chip-actions">
-          <button class="preset-apply preset-icon-action" data-preset-apply="${index}" title="Apply preset to workspace" aria-label="Apply preset">▶</button>
-          <details class="preset-more"><summary title="Preset actions" aria-label="Preset actions">•••</summary><div class="preset-more-menu">
-            <button data-preset-edit="${index}">Edit</button>
-            <button data-preset-up="${index}" ${index === 0 ? "disabled" : ""}>Move up</button>
-            <button data-preset-down="${index}" ${index === active.length - 1 ? "disabled" : ""}>Move down</button>
-            <button class="danger-text" data-preset-remove="${index}">Remove</button>
-          </div></details>
+          <button class="icon-button preset-icon-action" data-preset-edit="${index}" title="Edit preset" aria-label="Edit preset">${settingsRowsSvg}</button>
+          <button class="icon-button preset-icon-action" data-preset-remove="${index}" title="Remove preset from stack" aria-label="Remove preset from stack">${trashSvg}</button>
         </div>
       </div>`;
     }).join("")}</div>`;
+  }
+
+  private resolutionSectionMarkup(): string {
+    const draft = this.store.state.draft;
+    const sliderMax = clamp(Math.max(draft.width, draft.height), 256, 2048);
+    return `<section class="rail-section resolution-section">
+      <div class="section-minihead"><span><b>Resolution</b><small>${draft.width} × ${draft.height}</small></span><button class="link-dimensions ${draft.lockRatio ? "is-active" : ""}" data-action="toggle-ratio-lock" title="${draft.lockRatio ? "Linked: keep the current aspect ratio" : "Unlocked: width and height move independently"}" aria-label="${draft.lockRatio ? "Linked: keep the current aspect ratio" : "Unlocked: width and height move independently"}">${draft.lockRatio ? linkedSvg : unlinkedSvg}</button></div>
+      <div class="dimension-link-row">
+        ${this.numberField("width", "Width", draft.width, 64, 4096, 64)}
+        ${this.numberField("height", "Height", draft.height, 64, 4096, 64)}
+      </div>
+      ${draft.lockRatio
+        ? `<label class="range-field"><span>Size <b id="resolution-value">${Math.max(draft.width, draft.height)}px</b></span><input id="resolution-scale" type="range" min="256" max="2048" step="64" value="${sliderMax}" /></label>`
+        : `<div class="resolution-split-sliders"><label class="range-field"><span>Width <b id="resolution-width-value">${draft.width}px</b></span><input id="resolution-width" type="range" min="256" max="2048" step="64" value="${clamp(draft.width, 256, 2048)}" /></label><label class="range-field"><span>Height <b id="resolution-height-value">${draft.height}px</b></span><input id="resolution-height" type="range" min="256" max="2048" step="64" value="${clamp(draft.height, 256, 2048)}" /></label></div>`}
+      <div class="ratio-controls"><div class="ratio-row">${ratioChoices.map((ratio) => `<button class="${draft.ratio === ratio ? "is-active" : ""}" data-ratio="${ratio}">${ratio}</button>`).join("")}</div><button class="icon-button ratio-reverse ${draft.ratioReversed ? "is-active" : ""}" data-action="reverse-ratio" title="Reverse ratio" aria-label="Reverse ratio" ${draft.ratio === "1:1" ? "disabled" : ""}>${swapSvg}</button></div>
+    </section>`;
   }
 
   private syntaxMenuMarkup(): string {
@@ -2714,19 +2734,19 @@ export class StudioApp {
     return `<option value="${escapeHtml(lora.name)}">${escapeHtml(lora.title || prettyName(lora.name))}</option>`;
   }
 
-  private loraStackRow(item: LoraStackItem, index: number): string {
+  private loraStackRow(item: LoraStackItem, _index: number): string {
     const model = this.resolveLora(item);
     const missing = !model && this.connected;
     const preview = model?.preview_image ? this.client.imageUrl(model.preview_image) : "";
     const meta = [model?.author, modelFamily(model), model?.trigger_phrase ? "trigger available" : ""].filter(Boolean);
     return `
       <div class="lora-stack-row ${item.enabled ? "" : "is-disabled"}" data-lora-row="${escapeHtml(item.id)}">
-        <input type="checkbox" data-lora-enabled="${escapeHtml(item.id)}" ${item.enabled ? "checked" : ""} aria-label="Enable LoRA" />
+        <span class="stack-grip" title="Reorder in the modal">${gripSvg}</span>
         <button class="lora-thumb lora-metadata-open" type="button" data-view-model-metadata="${escapeHtml(model?.name || item.name)}" title="View LoRA metadata" aria-label="View metadata for ${escapeHtml(item.title || prettyName(item.name))}">${preview ? `<img ${this.swarmImageAttributes(preview)} alt="" loading="lazy" />` : `<span>◇</span>`}</button>
         <div class="lora-stack-copy"><b>${escapeHtml(item.title || prettyName(item.name))}</b><span>${escapeHtml(item.name)}</span><small>${missing ? "Missing on server" : escapeHtml(meta.join(" · ") || "Matches selected checkpoint")}</small></div>
         <label class="weight-field"><span>Weight</span><input type="number" data-lora-weight="${escapeHtml(item.id)}" value="${item.weight}" min="-4" max="4" step="0.05" /></label>
         <label class="trigger-toggle" title="Append this LoRA's Swarm trigger phrase"><input type="checkbox" data-lora-trigger="${escapeHtml(item.id)}" ${item.useTrigger ? "checked" : ""}/><span>Trigger</span></label>
-        <div class="stack-row-actions"><button class="icon-button" data-lora-up="${escapeHtml(item.id)}" ${index === 0 ? "disabled" : ""}>↑</button><button class="icon-button" data-lora-down="${escapeHtml(item.id)}" ${index === this.store.state.draft.loras.length - 1 ? "disabled" : ""}>↓</button><button class="icon-button" data-lora-remove="${escapeHtml(item.id)}">×</button></div>
+        <div class="stack-row-actions"><button class="icon-button" data-lora-toggle="${escapeHtml(item.id)}" title="${item.enabled ? "Disable this LoRA" : "Enable this LoRA"}" aria-label="${item.enabled ? "Disable this LoRA" : "Enable this LoRA"}">${item.enabled ? eyeSvg : eyeOffSvg}</button><button class="icon-button" data-lora-remove="${escapeHtml(item.id)}" title="Remove this LoRA from the stack" aria-label="Remove this LoRA from the stack">${trashSvg}</button></div>
       </div>`;
   }
 
@@ -3066,6 +3086,36 @@ export class StudioApp {
           <div class="lora-move-preview lora-delete-preview"><span>Deleting</span><b>${selected.length} LoRA${selected.length === 1 ? "" : "s"}</b><small>${selected.slice(0, 5).map((name) => escapeHtml(prettyName(name))).join(" · ")}${selected.length > 5 ? ` · +${selected.length - 5} more` : ""}</small></div>
         </div>
         <div class="form-actions"><button type="button" class="ghost-button" data-action="close-lora-delete">Cancel</button><button type="button" class="danger-soft lora-delete-confirm" data-action="confirm-lora-delete" ${this.loraDeleteBusy || !selected.length ? "disabled" : ""}>${this.loraDeleteBusy ? "Deleting…" : "Delete files"}</button></div>
+      </section>
+    </div>`;
+  }
+
+  private renderStackReorderModal(kind: "preset" | "lora"): string {
+    const isPreset = kind === "preset";
+    const open = isPreset ? this.presetReorderModalOpen : this.loraReorderModalOpen;
+    if (!open) return "";
+    const presetItems = this.store.state.draft.activePresets.map((title, index) => ({
+      id: String(index),
+      title,
+      subtitle: this.presets.find((item) => item.title === title)?.description || "Preset token will be sent in this order during generation.",
+      meta: "preset",
+    }));
+    const loraItems = this.store.state.draft.loras.map((item) => ({
+      id: item.id,
+      title: item.title || prettyName(item.name),
+      subtitle: item.name,
+      meta: `${item.enabled ? "enabled" : "disabled"} · weight ${item.weight.toFixed(2)}${item.useTrigger ? " · trigger" : ""}`,
+    }));
+    const items = isPreset ? presetItems : loraItems;
+    const title = isPreset ? "Reorder preset stack" : "Reorder LoRA stack";
+    const kicker = isPreset ? "PRESETS" : "LORAS";
+    const closeAction = isPreset ? "close-preset-reorder" : "close-lora-reorder";
+    return `<div class="download-backdrop stack-reorder-backdrop" data-action="${closeAction}">
+      <section class="download-modal stack-reorder-modal" role="dialog" aria-modal="true" aria-labelledby="stack-reorder-title-${kind}" data-stack-reorder-dialog>
+        <header><div><span class="panel-kicker">${kicker}</span><h2 id="stack-reorder-title-${kind}">${title}</h2></div><button class="icon-button" data-action="${closeAction}" aria-label="Close">×</button></header>
+        <p class="helper-copy">Drag the rows into whatever order sparks joy. The stack updates the moment you drop.</p>
+        <div class="stack-reorder-list" data-stack-reorder-list="${kind}">${items.map((item, index) => `<div class="stack-reorder-item" draggable="true" data-stack-item="${kind}" data-stack-index="${index}" data-stack-id="${escapeHtml(item.id)}"><span class="stack-grip stack-grip--large">${gripSvg}</span><div class="stack-reorder-copy"><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.subtitle)}</small></div><em>${escapeHtml(item.meta)}</em></div>`).join("") || `<div class="stack-empty stack-empty--compact">Nothing to reorder.</div>`}</div>
+        <div class="form-actions"><button type="button" class="ghost-button" data-action="${closeAction}">Done</button></div>
       </section>
     </div>`;
   }
@@ -4361,32 +4411,7 @@ export class StudioApp {
       this.render();
     });
 
-    this.root.querySelector<HTMLElement>("[data-action='add-preset']")?.addEventListener("click", () => {
-      const select = this.root.querySelector<HTMLSelectElement>("#preset-select");
-      if (!select?.value) return;
-      this.store.updateDraft({ activePresets: [...this.store.state.draft.activePresets, select.value] });
-      this.render();
-    });
-    this.root.querySelector<HTMLElement>("[data-action='new-preset']")?.addEventListener("click", () => this.openPresetEditor());
-    this.root.querySelector<HTMLElement>("[data-action='edit-selected-preset']")?.addEventListener("click", () => {
-      const select = this.root.querySelector<HTMLSelectElement>("#preset-select");
-      if (select?.value) this.openPresetEditor(select.value);
-    });
-    this.root.querySelectorAll<HTMLElement>("[data-preset-apply]").forEach((button) => button.addEventListener("click", () => {
-      void this.applyPresetFromStack(Number(button.dataset.presetApply));
-    }));
-    this.root.querySelectorAll<HTMLElement>("[data-preset-edit]").forEach((button) => button.addEventListener("click", () => {
-      const index = Number(button.dataset.presetEdit);
-      const title = this.store.state.draft.activePresets[index];
-      if (title) this.openPresetEditor(title);
-    }));
-    this.root.querySelectorAll<HTMLElement>("[data-preset-up]").forEach((button) => button.addEventListener("click", () => this.movePreset(Number(button.dataset.presetUp), -1)));
-    this.root.querySelectorAll<HTMLElement>("[data-preset-down]").forEach((button) => button.addEventListener("click", () => this.movePreset(Number(button.dataset.presetDown), 1)));
-    this.root.querySelectorAll<HTMLElement>("[data-preset-remove]").forEach((button) => button.addEventListener("click", () => {
-      const index = Number(button.dataset.presetRemove);
-      this.store.updateDraft({ activePresets: this.store.state.draft.activePresets.filter((_, itemIndex) => itemIndex !== index) });
-      this.render();
-    }));
+    this.bindPresetStackControls();
 
     this.root.querySelector<HTMLElement>("[data-action='toggle-syntax']")?.addEventListener("click", () => {
       this.syntaxMenuOpen = !this.syntaxMenuOpen;
@@ -4398,21 +4423,7 @@ export class StudioApp {
     });
     this.root.querySelectorAll<HTMLElement>("[data-syntax]").forEach((button) => button.addEventListener("click", () => this.insertSyntax(button.dataset.syntax ?? "")));
 
-    const widthInput = this.root.querySelector<HTMLInputElement>("#width");
-    const heightInput = this.root.querySelector<HTMLInputElement>("#height");
-    widthInput?.addEventListener("input", () => this.handleDimensionInput("width"));
-    heightInput?.addEventListener("input", () => this.handleDimensionInput("height"));
-    widthInput?.addEventListener("change", () => this.handleDimensionInput("width"));
-    heightInput?.addEventListener("change", () => this.handleDimensionInput("height"));
-    this.root.querySelector<HTMLElement>("[data-action='toggle-ratio-lock']")?.addEventListener("click", () => {
-      this.store.updateDraft({ lockRatio: !this.store.state.draft.lockRatio });
-      this.render();
-    });
-    this.root.querySelector<HTMLInputElement>("#resolution-scale")?.addEventListener("input", (event) => this.handleResolutionSlider((event.currentTarget as HTMLInputElement).valueAsNumber));
-    this.root.querySelector<HTMLInputElement>("#resolution-scale")?.addEventListener("change", (event) => {
-      this.handleResolutionSlider((event.currentTarget as HTMLInputElement).valueAsNumber);
-      this.render();
-    });
+    this.bindResolutionControls();
 
     this.root.querySelectorAll<HTMLElement>("[data-action='toggle-seed']").forEach((button) => button.addEventListener("click", () => void this.toggleSeedMode()));
     this.root.querySelector<HTMLElement>("[data-action='clear-draft']")?.addEventListener("click", () => {
@@ -4510,26 +4521,103 @@ export class StudioApp {
       element.addEventListener("change", persist);
     });
 
+    this.bindLoraStackControls();
+    this.bindStackReorderModalEvents();
+  }
+
+  private bindPresetStackControls(): void {
+    this.root.querySelector<HTMLSelectElement>("#preset-select")?.addEventListener("change", (event) => {
+      const select = event.currentTarget as HTMLSelectElement;
+      if (!select.value) return;
+      this.store.updateDraft({ activePresets: [...this.store.state.draft.activePresets, select.value] });
+      this.render();
+    });
+    this.root.querySelector<HTMLElement>("[data-action='new-preset']")?.addEventListener("click", () => this.openPresetEditor());
+    this.root.querySelector<HTMLElement>("[data-action='open-preset-reorder']")?.addEventListener("click", () => {
+      this.presetReorderModalOpen = true;
+      this.render();
+    });
+    this.root.querySelectorAll<HTMLElement>("[data-preset-edit]").forEach((button) => button.addEventListener("click", () => {
+      const index = Number(button.dataset.presetEdit);
+      const title = this.store.state.draft.activePresets[index];
+      if (title) this.openPresetEditor(title);
+    }));
+    this.root.querySelectorAll<HTMLElement>("[data-preset-remove]").forEach((button) => button.addEventListener("click", () => {
+      const index = Number(button.dataset.presetRemove);
+      this.store.updateDraft({ activePresets: this.store.state.draft.activePresets.filter((_, itemIndex) => itemIndex !== index) });
+      this.render();
+    }));
+  }
+
+  private bindResolutionControls(): void {
+    const widthInput = this.root.querySelector<HTMLInputElement>("#width");
+    const heightInput = this.root.querySelector<HTMLInputElement>("#height");
+    widthInput?.addEventListener("input", () => this.handleDimensionInput("width"));
+    heightInput?.addEventListener("input", () => this.handleDimensionInput("height"));
+    widthInput?.addEventListener("change", () => this.handleDimensionInput("width"));
+    heightInput?.addEventListener("change", () => this.handleDimensionInput("height"));
+    this.root.querySelector<HTMLElement>("[data-action='toggle-ratio-lock']")?.addEventListener("click", () => {
+      const next = !this.store.state.draft.lockRatio;
+      this.store.updateDraft({ lockRatio: next });
+      if (next) this.handleResolutionSlider(Math.max(this.store.state.draft.width, this.store.state.draft.height));
+      this.render();
+    });
+    this.root.querySelector<HTMLInputElement>("#resolution-scale")?.addEventListener("input", (event) => this.handleResolutionSlider((event.currentTarget as HTMLInputElement).valueAsNumber));
+    this.root.querySelector<HTMLInputElement>("#resolution-scale")?.addEventListener("change", (event) => {
+      this.handleResolutionSlider((event.currentTarget as HTMLInputElement).valueAsNumber);
+      this.render();
+    });
+    this.root.querySelector<HTMLInputElement>("#resolution-width")?.addEventListener("input", (event) => this.handleResolutionAxisSlider("width", (event.currentTarget as HTMLInputElement).valueAsNumber));
+    this.root.querySelector<HTMLInputElement>("#resolution-height")?.addEventListener("input", (event) => this.handleResolutionAxisSlider("height", (event.currentTarget as HTMLInputElement).valueAsNumber));
+    this.root.querySelector<HTMLInputElement>("#resolution-width")?.addEventListener("change", (event) => {
+      this.handleResolutionAxisSlider("width", (event.currentTarget as HTMLInputElement).valueAsNumber);
+      this.render();
+    });
+    this.root.querySelector<HTMLInputElement>("#resolution-height")?.addEventListener("change", (event) => {
+      this.handleResolutionAxisSlider("height", (event.currentTarget as HTMLInputElement).valueAsNumber);
+      this.render();
+    });
+    this.root.querySelectorAll<HTMLElement>("[data-ratio]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const ratio = button.dataset.ratio ?? "1:1";
+        this.applyRatioToInputs(ratio, false);
+        this.render();
+      });
+    });
+    this.root.querySelector<HTMLElement>("[data-action='reverse-ratio']")?.addEventListener("click", () => {
+      const draft = this.store.state.draft;
+      if (draft.ratio === "1:1") return;
+      this.applyRatioToInputs(draft.ratio, !draft.ratioReversed);
+      this.render();
+    });
+  }
+
+  private bindLoraStackControls(): void {
     this.root.querySelector<HTMLElement>("[data-action='add-lora']")?.addEventListener("click", () => {
       const select = this.root.querySelector<HTMLSelectElement>("#lora-add-select");
       if (select?.value) this.addLoraToStack(select.value);
     });
-    this.root.querySelectorAll<HTMLInputElement>("[data-lora-enabled]").forEach((input) => input.addEventListener("change", () => {
-      this.patchLora(input.dataset.loraEnabled ?? "", { enabled: input.checked });
-      input.closest(".lora-stack-row")?.classList.toggle("is-disabled", !input.checked);
-    }));
     this.root.querySelectorAll<HTMLInputElement>("[data-lora-weight]").forEach((input) => input.addEventListener("input", () => {
       this.patchLora(input.dataset.loraWeight ?? "", { weight: asNumber(input.value, 1) });
     }));
     this.root.querySelectorAll<HTMLInputElement>("[data-lora-trigger]").forEach((input) => input.addEventListener("change", () => {
       this.patchLora(input.dataset.loraTrigger ?? "", { useTrigger: input.checked });
     }));
+    this.root.querySelectorAll<HTMLElement>("[data-lora-toggle]").forEach((button) => button.addEventListener("click", () => {
+      const id = button.dataset.loraToggle ?? "";
+      const item = this.store.state.draft.loras.find((entry) => entry.id === id);
+      if (!item) return;
+      this.patchLora(id, { enabled: !item.enabled });
+      this.render();
+    }));
     this.root.querySelectorAll<HTMLElement>("[data-lora-remove]").forEach((button) => button.addEventListener("click", () => {
       this.store.updateDraft({ loras: this.store.state.draft.loras.filter((item) => item.id !== button.dataset.loraRemove) });
       this.render();
     }));
-    this.root.querySelectorAll<HTMLElement>("[data-lora-up]").forEach((button) => button.addEventListener("click", () => this.moveLora(button.dataset.loraUp ?? "", -1)));
-    this.root.querySelectorAll<HTMLElement>("[data-lora-down]").forEach((button) => button.addEventListener("click", () => this.moveLora(button.dataset.loraDown ?? "", 1)));
+    this.root.querySelector<HTMLElement>("[data-action='open-lora-reorder']")?.addEventListener("click", () => {
+      this.loraReorderModalOpen = true;
+      this.render();
+    });
     this.root.querySelector<HTMLElement>("[data-action='clear-loras']")?.addEventListener("click", () => {
       this.store.updateDraft({ loras: [] });
       this.render();
@@ -4550,6 +4638,52 @@ export class StudioApp {
       this.store.updateDraft({ loras: cloneStack(profile.items) });
       this.notify(`${profile.name} loaded.`, "success");
       this.render();
+    });
+  }
+
+  private bindStackReorderModalEvents(): void {
+    this.root.querySelectorAll<HTMLElement>("[data-action='close-preset-reorder']").forEach((element) => element.addEventListener("click", (event) => {
+      const host = event.currentTarget as HTMLElement;
+      if (host.classList.contains("stack-reorder-backdrop") && host !== event.target && (event.target as HTMLElement).closest("[data-stack-reorder-dialog]")) return;
+      this.presetReorderModalOpen = false;
+      this.stackReorderDrag = null;
+      this.render();
+    }));
+    this.root.querySelectorAll<HTMLElement>("[data-action='close-lora-reorder']").forEach((element) => element.addEventListener("click", (event) => {
+      const host = event.currentTarget as HTMLElement;
+      if (host.classList.contains("stack-reorder-backdrop") && host !== event.target && (event.target as HTMLElement).closest("[data-stack-reorder-dialog]")) return;
+      this.loraReorderModalOpen = false;
+      this.stackReorderDrag = null;
+      this.render();
+    }));
+    this.root.querySelectorAll<HTMLElement>("[data-stack-item]").forEach((row) => {
+      row.addEventListener("dragstart", (event) => {
+        const index = Number(row.dataset.stackIndex);
+        const kind = row.dataset.stackItem as "preset" | "lora";
+        this.stackReorderDrag = Number.isInteger(index) ? { kind, from: index } : null;
+        row.classList.add("is-dragging");
+        event.dataTransfer?.setData("text/plain", String(index));
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      });
+      row.addEventListener("dragend", () => {
+        row.classList.remove("is-dragging");
+        this.root.querySelectorAll<HTMLElement>("[data-stack-item]").forEach((item) => item.classList.remove("is-drop-target"));
+        this.stackReorderDrag = null;
+      });
+      row.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        if (this.stackReorderDrag && row.dataset.stackItem === this.stackReorderDrag.kind) row.classList.add("is-drop-target");
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("is-drop-target"));
+      row.addEventListener("drop", (event) => {
+        event.preventDefault();
+        row.classList.remove("is-drop-target");
+        const target = Number(row.dataset.stackIndex);
+        const drag = this.stackReorderDrag;
+        if (!drag || !Number.isInteger(target) || row.dataset.stackItem !== drag.kind) return;
+        if (drag.kind === "preset") this.reorderPreset(drag.from, target);
+        else this.reorderLora(drag.from, target);
+      });
     });
   }
 
@@ -4884,6 +5018,10 @@ export class StudioApp {
     this.persistDraftFromForm();
     const display = this.root.querySelector<HTMLElement>("#resolution-value");
     if (display) display.textContent = `${Math.max(asNumber(widthInput.value, draft.width), asNumber(heightInput.value, draft.height))}px`;
+    const widthDisplay = this.root.querySelector<HTMLElement>("#resolution-width-value");
+    const heightDisplay = this.root.querySelector<HTMLElement>("#resolution-height-value");
+    if (widthDisplay) widthDisplay.textContent = `${asNumber(widthInput.value, draft.width)}px`;
+    if (heightDisplay) heightDisplay.textContent = `${asNumber(heightInput.value, draft.height)}px`;
   }
 
   private handleResolutionSlider(size: number): void {
@@ -4904,6 +5042,20 @@ export class StudioApp {
     if (heightInput) heightInput.value = String(height);
     const display = this.root.querySelector<HTMLElement>("#resolution-value");
     if (display) display.textContent = `${Math.max(width, height)}px`;
+    const widthDisplay = this.root.querySelector<HTMLElement>("#resolution-width-value");
+    const heightDisplay = this.root.querySelector<HTMLElement>("#resolution-height-value");
+    if (widthDisplay) widthDisplay.textContent = `${width}px`;
+    if (heightDisplay) heightDisplay.textContent = `${height}px`;
+  }
+
+  private handleResolutionAxisSlider(changed: "width" | "height", size: number): void {
+    const value = round64(size);
+    const patch = changed === "width" ? { width: value } : { height: value };
+    this.store.updateDraft(patch);
+    const input = this.root.querySelector<HTMLInputElement>(changed === "width" ? "#width" : "#height");
+    if (input) input.value = String(value);
+    const display = this.root.querySelector<HTMLElement>(changed === "width" ? "#resolution-width-value" : "#resolution-height-value");
+    if (display) display.textContent = `${value}px`;
   }
 
   private applyRatioToInputs(ratio: string, reversed: boolean): void {
@@ -5104,15 +5256,6 @@ export class StudioApp {
     this.render();
   }
 
-  private movePreset(index: number, direction: -1 | 1): void {
-    const items = [...this.store.state.draft.activePresets];
-    const target = index + direction;
-    if (!Number.isInteger(index) || index < 0 || target < 0 || target >= items.length) return;
-    [items[index], items[target]] = [items[target]!, items[index]!];
-    this.store.updateDraft({ activePresets: items });
-    this.render();
-  }
-
   private insertSyntax(syntax: string): void {
     const textarea = this.root.querySelector<HTMLTextAreaElement>("#prompt");
     if (!textarea || !syntax) return;
@@ -5159,14 +5302,12 @@ export class StudioApp {
     });
   }
 
-  private moveLora(id: string, direction: -1 | 1): void {
+  private reorderLora(from: number, to: number): void {
     const items = [...this.store.state.draft.loras];
-    const index = items.findIndex((item) => item.id === id);
-    const target = index + direction;
-    if (index < 0 || target < 0 || target >= items.length) return;
-    const current = items[index]!;
-    items[index] = items[target]!;
-    items[target] = current;
+    if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < 0 || from >= items.length || to >= items.length || from === to) return;
+    const [moved] = items.splice(from, 1);
+    if (!moved) return;
+    items.splice(to, 0, moved);
     this.store.updateDraft({ loras: items });
     this.render();
   }
@@ -8539,47 +8680,8 @@ export class StudioApp {
       this.store.updateDraft({ model: (event.currentTarget as HTMLSelectElement).value });
       this.render();
     });
-    this.root.querySelector<HTMLElement>("[data-action='add-lora']")?.addEventListener("click", () => {
-      const select = this.root.querySelector<HTMLSelectElement>("#lora-add-select");
-      if (select?.value) this.addLoraToStack(select.value);
-    });
-    this.root.querySelectorAll<HTMLInputElement>("[data-lora-enabled]").forEach((input) => input.addEventListener("change", () => {
-      this.patchLora(input.dataset.loraEnabled ?? "", { enabled: input.checked });
-      input.closest(".lora-stack-row")?.classList.toggle("is-disabled", !input.checked);
-    }));
-    this.root.querySelectorAll<HTMLInputElement>("[data-lora-weight]").forEach((input) => input.addEventListener("input", () => {
-      this.patchLora(input.dataset.loraWeight ?? "", { weight: asNumber(input.value, 1) });
-    }));
-    this.root.querySelectorAll<HTMLInputElement>("[data-lora-trigger]").forEach((input) => input.addEventListener("change", () => {
-      this.patchLora(input.dataset.loraTrigger ?? "", { useTrigger: input.checked });
-    }));
-    this.root.querySelectorAll<HTMLElement>("[data-lora-remove]").forEach((button) => button.addEventListener("click", () => {
-      this.store.updateDraft({ loras: this.store.state.draft.loras.filter((item) => item.id !== button.dataset.loraRemove) });
-      this.render();
-    }));
-    this.root.querySelectorAll<HTMLElement>("[data-lora-up]").forEach((button) => button.addEventListener("click", () => this.moveLora(button.dataset.loraUp ?? "", -1)));
-    this.root.querySelectorAll<HTMLElement>("[data-lora-down]").forEach((button) => button.addEventListener("click", () => this.moveLora(button.dataset.loraDown ?? "", 1)));
-    this.root.querySelector<HTMLElement>("[data-action='clear-loras']")?.addEventListener("click", () => {
-      this.store.updateDraft({ loras: [] });
-      this.render();
-    });
-    this.root.querySelector<HTMLInputElement>("#lora-import")?.addEventListener("change", (event) => void this.importLoraFile(event.currentTarget as HTMLInputElement));
-    this.root.querySelector<HTMLElement>("[data-action='export-lora-stack']")?.addEventListener("click", () => this.exportLoraStack());
-    this.root.querySelector<HTMLElement>("[data-action='save-lora-profile']")?.addEventListener("click", () => {
-      const name = window.prompt("Stack name?", "LoRA stack");
-      if (!name?.trim()) return;
-      this.store.saveLoraProfile(name, this.store.state.draft.loras, "studio");
-      this.notify("LoRA stack saved.", "success");
-      this.render();
-    });
-    this.root.querySelector<HTMLElement>("[data-action='load-lora-profile']")?.addEventListener("click", () => {
-      const id = this.root.querySelector<HTMLSelectElement>("#lora-profile-select")?.value;
-      const profile = this.store.state.loraProfiles.find((item) => item.id === id);
-      if (!profile) return;
-      this.store.updateDraft({ loras: cloneStack(profile.items) });
-      this.notify(`${profile.name} loaded.`, "success");
-      this.render();
-    });
+    this.bindLoraStackControls();
+    this.bindStackReorderModalEvents();
   }
 
   private bindLogEvents(): void {
