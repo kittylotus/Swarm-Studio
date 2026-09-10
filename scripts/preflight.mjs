@@ -1,0 +1,132 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+
+const root = process.cwd();
+const read = (path) => readFileSync(join(root, path), "utf8");
+const pkg = JSON.parse(read("package.json"));
+const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
+const cargo = read("src-tauri/Cargo.toml");
+const app = read("src/app.ts");
+const styles = read("src/styles.css");
+const vendor = read("src/vendor.d.ts");
+const runner = read("start.ps1");
+const runtime = read("src/runtime/index.ts");
+const swarmClient = read("src/swarm/client.ts");
+const rust = read("src-tauri/src/lib.rs");
+const gitignore = read(".gitignore");
+const gitattributes = read(".gitattributes");
+const version = pkg.version;
+const failures = [];
+const assert = (ok, message) => { if (!ok) failures.push(message); };
+
+function walk(dir, found = []) {
+  for (const name of readdirSync(dir)) {
+    if (["node_modules", ".git", ".wrench-backups", ".pre-v1-backup", "dist", "coverage", ".vite", ".vite-temp", "target"].includes(name)) continue;
+    const abs = join(dir, name);
+    if (statSync(abs).isDirectory()) walk(abs, found);
+    else found.push(abs);
+  }
+  return found;
+}
+
+const changelogs = walk(root)
+  .map((path) => relative(root, path).replaceAll("\\", "/"))
+  .filter((path) => /(^|\/)CHANGELOG-v[^/]+\.md$/i.test(path));
+
+assert(tauri.version === version, `Tauri version ${tauri.version} != package version ${version}`);
+assert(new RegExp(`^version = "${version.replaceAll(".", "\\.")}"$`, "m").test(cargo), "Cargo package version does not match package.json");
+assert(changelogs.length === 1, `Expected exactly one release changelog, found ${changelogs.length}: ${changelogs.join(", ")}`);
+assert(changelogs[0] === `CHANGELOG-v${version}.md`, `Expected CHANGELOG-v${version}.md, found ${changelogs[0] ?? "none"}`);
+assert(gitignore.includes(".wrench-backups/") && gitignore.includes(".swarm-studio-runner.log") && gitignore.includes("src-tauri/target/") && gitignore.includes("node_modules/"), "Git ignore rules are missing critical local/build artifacts");
+assert(!gitignore.includes("package-lock.json") && !gitignore.includes("Cargo.lock") && !gitignore.includes("bun.lock"), "Source lockfiles must remain trackable");
+assert(gitattributes.includes("*.ps1  text eol=lf") && gitattributes.includes("*.ts   text eol=lf") && gitattributes.includes("*.rs   text eol=lf"), "Git attributes must pin the editable source surface to LF");
+assert(tauri.app?.windows?.[0]?.dragDropEnabled === false, "Tauri dragDropEnabled must be false so frontend HTML5 file drops receive payloads");
+assert(app.includes('this.view !== "library" || !this.libraryFiltersOpen || this.store.state.ui.selectedOutputId'), "Browse must be scoped to Library and suppressed during Inspect");
+assert(app.includes("libraryBrowseDockActive()"), "Library dock ownership helper is missing");
+assert(app.includes("generation-review-strip"), "Compact generation review strip is missing");
+assert(!app.includes("generation-approval-card"), "Retired generation approval card markup still exists");
+assert(!styles.includes("generation-approval-card"), "Retired generation approval card CSS still exists");
+assert(!vendor.includes('declare module "sortablejs"'), "Retired SortableJS type shim still exists");
+assert(!app.includes("https://civitai.com"), "Direct civitai.com literal escaped the centralized URL helper");
+assert(read("src/civitai/urls.ts").includes('CIVITAI_ORIGIN = "https://civitai.red"'), "CivitAI canonical origin is not civitai.red");
+assert(app.includes("nativeImageCacheLimit = 48"), "Native image cache must remain bounded");
+assert(app.includes("memoryDiagnosticsMarkup()"), "Logs memory diagnostics UI is missing");
+assert(app.includes("memoryPeakTrackedBlobBytes"), "Memory diagnostics peak tracking is missing");
+assert(app.includes('loraRequestValue(item.name, this.loras.map'), "Generation must resolve LoRAs from the live ListModels inventory");
+assert(!app.includes("parameterModelValues(") && !app.includes("paramModels"), "ListT2IParams model catalog must not become a second LoRA wire authority");
+assert(read("src/lora/request.ts").includes("matches.length === 1") && read("src/lora/request.ts").includes("return resolveLoraModelName"), "Live LoRA request resolver must repair only unique leaf matches");
+assert(read("src/lora/request.ts").includes("filename extension") && read("src/lora/request.ts").includes("live model name is the wire authority"), "LoRA request helper must preserve the live Swarm filename/path contract");
+assert(app.includes("generationLoraSelection(draft)"), "Shared canonical LoRA generation selection helper is missing");
+assert(app.includes("loras: loraSelection.values") && app.includes("loraweights: loraSelection.weights"), "Generation/inpaint must serialize canonical LoRA option values and aligned weights");
+assert(app.includes("if (!param) continue;"), "Retired metadata parameters must not be replayed to Swarm");
+assert(app.includes('new Set(["wildcardseed", "swarmversion"])'), "swarm_version must remain transient during output reuse");
+assert(read("src/swarm/request.ts").includes('TRANSIENT_REQUEST_KEYS = new Set(["swarmversion"])'), "Final generation wire boundary must strip swarm_version");
+assert(read("src/swarm/request.ts").includes("listWireValue") && read("src/swarm/request.ts").includes("CORE_LIST_REQUEST_KEYS"), "Generation wire must preserve Swarm 0.9.7 LIST compatibility");
+assert(!read("src/swarm/request.ts").includes("VALUE_ALIASES"), "Final request normalization must not rewrite extension-owned enum values through hard-coded aliases");
+assert(!read("src/swarm/request.ts").includes("retired value") && !read("src/swarm/request.ts").includes("canonicalDefault"), "Final request normalization must not replace unknown extension values with server defaults");
+assert(app.includes("wireGenerationRequest("), "Generation requests must pass through final wire normalization");
+assert(app.includes("schedulePostConnectParameterHydration()"), "Connect must schedule bounded backend capability hydration");
+assert(app.includes("ensureGenerationParameterHydration(draft)"), "Generation must catch up stale backend-provided sampler/scheduler metadata on demand");
+assert(app.includes("sampler: this.inpaintConfigSampler || draft.sampler") && app.includes("scheduler: this.inpaintConfigScheduler || draft.scheduler"), "Inpaint capability hydration must use the effective Inpaint sampler/scheduler overrides");
+assert(app.includes("attempt < 16") && app.includes("attempt < 10"), "Parameter hydration must remain bounded rather than becoming a permanent connection poll");
+assert(app.includes('client.parameterData(false)'), "Dynamic capability hydration must use weak ListT2IParams refreshes rather than repeated strong model rescans");
+assert(app.includes("sampler: draft.sampler || undefined") && app.includes("scheduler: draft.scheduler || undefined"), "Create requests must use Create sampler/scheduler state rather than stale Inpaint config");
+assert(app.includes("sampler: this.inpaintConfigSampler || draft.sampler || undefined") && app.includes("scheduler: this.inpaintConfigScheduler || draft.scheduler || undefined"), "Inpaint requests must honor the Inpaint generation settings");
+assert(app.includes("const renamed = new Map<string, string>()") && app.includes("this.store.updateDraft({ loras: nextStack })"), "LoRA organizer moves must update active stack paths");
+assert(app.includes("trackedBlobUrls"), "Memory diagnostics blob tracking is missing");
+assert(styles.includes(".memory-diagnostics-grid"), "Memory diagnostics styling is missing");
+assert(app.includes("URL.createObjectURL") && app.includes("URL.revokeObjectURL"), "Native image bridge must use revocable Blob object URLs");
+assert(app.includes("this.nativeImageObserver?.disconnect();"), "Native image observer must disconnect before full rerenders");
+assert(!app.includes("this.nativeImageCache.set(source, dataUrl)"), "Unbounded base64 native image caching has regressed");
+assert(runner.includes("[switch]$SetupFirewall"), "Runner must keep firewall setup explicit and opt-in");
+assert(runner.includes("if ($SetupFirewall) {\n    Install-StudioFirewallRule\n}"), "Runner must not configure Windows Firewall during normal startup");
+assert(!runner.includes("Ensure-StudioFirewallRule"), "Retired every-launch firewall refresh has returned");
+assert(runner.includes("Swarm Studio // Runner"), "Branded PowerShell runner title is missing");
+assert(runner.includes("[switch]$VerboseRunner"), "Runner verbose escape hatch is missing");
+assert(runner.includes(".swarm-studio-runner.log"), "Runner raw log sink is missing");
+assert(runner.includes("Invoke-StudioProcess"), "Runner compact dev-output wrapper is missing");
+assert(runner.includes("Pretty mode only surfaces the curated operational summaries above"), "Pretty runner must suppress raw Swarm/Comfy warning floods");
+assert(runner.includes('Backend update build failed; previous source is being restored'), "Pretty runner backend build-failure summary is missing");
+assert(runner.includes("Write-StudioGradientLine"), "Runner truecolor gradient writer is missing");
+assert(runner.includes("Get-StudioGradientColor"), "Runner gradient color interpolation is missing");
+assert(runner.includes("255, 77, 184") && runner.includes("168, 85, 247") && runner.includes("125, 211, 252"), "Runner pink-purple-baby-blue palette has drifted");
+assert(runner.includes("▄▀▀▀▀▀█") && runner.includes("▒▀▀▀▀▀▄"), "Runner block-glyph Swarm Studio banner is missing");
+assert(app.includes("renderBackendControlRoom()"), "Settings backend control room is missing");
+assert(app.includes('data-settings-pane="backend"') && !app.includes('data-settings-pane="remote"'), "Settings sidebar must expose Backends and retire Remote Access");
+assert(app.includes('pane === "backend" ? backendPane : appearancePane'), "Backend control room must render in the dedicated Backends pane");
+assert(app.includes('String(parsed.ui?.settingsPane) === "remote"') || read("src/library/store.ts").includes('String(parsed.ui?.settingsPane) === "remote"'), "Legacy Remote Access pane state must migrate safely");
+assert(app.includes('this.view === "settings") && !this.resetMobileScrollAfterRender'), "Settings rerenders must preserve visual scroll");
+assert(!styles.includes(".remote-guide") && !styles.includes(".relay-diagram"), "Retired Remote Access guide CSS still exists");
+assert(app.includes('data-action="toggle-comfy-backend"') && app.includes('data-action="restart-comfy-backend"'), "Comfy stop/restart controls are missing");
+assert(app.includes("comfyAutoUpdate") && app.includes("comfyAutoRestart") && app.includes("comfyExtraArgs"), "Comfy backend policy controls are incomplete");
+assert(app.includes("comfyCudaDevice") && app.includes("comfyDisablePinnedMemory") && app.includes("comfyDisableAsyncOffload") && app.includes("apply-comfy-runtime-preset"), "Managed Comfy runtime controls are incomplete");
+assert(app.includes("scheduleProcessStatusRefresh()"), "Swarm log process-status refresh throttling is missing");
+assert(app.includes('else if (source !== "swarm") console.info'), "Routine Swarm logs should not be duplicated into Chromium console info");
+assert(swarmClient.includes('"ListBackends"') && swarmClient.includes('"ToggleBackend"') && swarmClient.includes('"RestartBackends"') && swarmClient.includes('"FreeBackendMemory"') && swarmClient.includes('"EditBackend"'), "Swarm backend API bridge is incomplete");
+assert(!swarmClient.includes("raw_inp:"), "EditBackend must not explicitly send raw_inp; Swarm's generic API binder builds it from top-level dynamic fields");
+assert(swarmClient.includes("const current = (await this.listBackends()).find") && swarmClient.includes("settings,"), "EditBackend must refresh the backend and send a complete top-level settings object");
+assert(app.includes('this.client.editBackend(disabledBackend, { AutoUpdate: "false" })'), "Comfy pinning must patch AutoUpdate through the backend settings merge path");
+assert(runtime.includes("backend_repo_status") && runtime.includes("backend_repo_switch") && runtime.includes("backend_repo_latest"), "Desktop repo version bridge is incomplete");
+assert(runtime.includes("swarm_repo_set_launch_auto_pull") && runtime.includes("setSwarmLaunchAutoPull"), "Swarm launch auto-pull runtime bridge is missing");
+assert(rust.includes("backend_repo_status") && rust.includes("ensure_repo_clean") && rust.includes('"merge", "--ff-only"'), "Safe native repo switching commands are incomplete");
+assert(rust.includes("swarm_launch_auto_pull_marker") && rust.includes('join("always_pull")'), "Swarm launch auto-pull marker handling is missing");
+assert(rust.includes("set_swarm_launch_auto_pull(&root, false)") && rust.includes("swarm_repo_set_launch_auto_pull"), "Swarm pins must disable launch auto-pull and expose a policy command");
+assert(app.includes('id="swarm-launch-autopull"') && app.includes("setSwarmLaunchAutoPull(input.checked)"), "Swarm launch auto-pull control is missing from Settings");
+assert(app.includes('this.client.editBackend(disabledBackend, { AutoUpdate: "false" })'), "Comfy pinning must disable AutoUpdate when it would undo the selected version");
+const comfyDisableIndex = app.indexOf("await this.client.toggleBackend(backend.id, false)");
+const comfyPolicyIndex = app.indexOf('this.client.editBackend(disabledBackend, { AutoUpdate: "false" })');
+const comfySwitchIndex = app.indexOf('await runtime.switchRepoVersion("comfy"');
+assert(comfyDisableIndex >= 0 && comfyDisableIndex < comfyPolicyIndex && comfyPolicyIndex < comfySwitchIndex, "Comfy pin safety order must be disable backend -> disable AutoUpdate -> switch checkout");
+assert(!rust.includes('reset --hard') && !rust.includes('Command::new("git").args(["clean"'), "Destructive git cleanup must not be part of version controls");
+assert(rust.includes("SWARM_STUDIO_SWARM_PID_FILE") && rust.includes("write_swarm_pid") && rust.includes("clear_swarm_pid"), "Studio-owned Swarm PID handoff is missing");
+assert(rust.includes("SWARM_STUDIO_RUNNER_LOG") && rust.includes("append_runner_log"), "Native backend log sink is missing");
+assert(runner.includes("[switch]$EmergencyStop") && runner.includes("Stop-StudioOwnedBackendTree"), "Runner emergency stop mode is missing");
+assert(runner.includes("Swarm Studio - Emergency Stop.lnk"), "Emergency Stop desktop shortcut is missing");
+assert(runner.includes("Get-CimInstance Win32_Process") && runner.includes("taskkill.exe /PID $PidValue /T /F"), "Emergency Stop process identity guard/tree kill is incomplete");
+assert(runner.includes("SWARM_STUDIO_SWARM_PID_FILE") && runner.includes("SWARM_STUDIO_RUNNER_LOG"), "Runner/native forensic environment handoff is missing");
+
+if (failures.length) {
+  console.error("Preflight failed:\n" + failures.map((item) => `  - ${item}`).join("\n"));
+  process.exit(1);
+}
+console.log(`Preflight OK for v${version} (${changelogs[0]}).`);

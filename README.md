@@ -1,0 +1,67 @@
+# Swarm Studio standalone
+
+Swarm Studio is a standalone PWA and Tauri creative client for SwarmUI. It provides a focused generation workspace, local library and inspector, LoRA management, CivitAI discovery/install tools, identity/preset workflows, inpainting, and runtime diagnostics without replacing SwarmUI as the generation backend.
+
+## Start on Windows
+
+Run:
+
+```powershell
+.\start.ps1
+```
+
+The launcher installs JavaScript dependencies when needed, creates/refreshes the desktop shortcut plus a separate **Swarm Studio - Emergency Stop** shortcut, and starts the Tauri desktop app in one PowerShell window. Normal launches do not modify Windows Firewall or open an elevated secondary shell.
+
+If Windows Firewall genuinely blocks phone/LAN access to port 1420, run `.\start.ps1 -SetupFirewall` once from the project folder. That optional setup may request elevation; subsequent normal launches stay unelevated. For browser/PWA development, use `npm run dev`. The normal PowerShell runner keeps Tauri/Vite/Cargo output compact and records captured dev/backend output in `.swarm-studio-runner.log`; launch `.\start.ps1 -VerboseRunner` when you want the raw dev firehose live.
+
+If a Studio-owned Swarm/Comfy process tree starts crash-looping, use the **Swarm Studio - Emergency Stop** desktop shortcut or run `.\start.ps1 -EmergencyStop`. The panic path only acts on the PID recorded by Studio's managed launcher and refuses to kill a recycled PID that no longer looks like Swarm.
+
+## Current workflow
+
+- **Create:** checkpoint/LoRA controls, presets, prompt editing, advanced Swarm parameters, live generation progress, and optional Review Before Save with a compact approve/regenerate/discard strip.
+- **Library:** locally indexed Swarm outputs, search/filtering, Studio folders, Swarm date folders, batch actions, favorites, history sync, and a desktop right-docked Browse panel.
+- **Inspect:** prompt/model/seed/LoRA metadata, historical Swarm prep/generation timing when present, reuse/init/inpaint actions, and transient inspection of dropped Swarm PNG/JPEG files.
+- **Models / LoRAs:** compatibility browsing, folder navigation, batch move/delete, metadata editing, hash-assisted CivitAI recovery, LoRA stack import/export, and saved stacks.
+- **CivitAI:** search/detail/pagination and direct install through the `civitai.red` route, while still accepting copied `civitai.com` URLs as input.
+- **Inpaint:** mask editing and Swarm-backed edit generation.
+- **Logs / Settings:** runtime and memory diagnostics, relay/origin configuration, appearance, desktop process controls, and a backend control room for Swarm/Comfy restart, disable, memory release, update policy, and local Git ref selection.
+
+## Backend control room
+
+On desktop Studio, **Settings → Backends** can inspect the local SwarmUI and ComfyUI Git checkouts, fetch tags/recent commits, pin a tag/commit/remote branch, or return a repo to the latest fast-forward state of its origin default branch. Tracked local modifications block version changes; Studio does not run destructive `git reset --hard` or `git clean` operations. Pinning Swarm automatically disables its `src/bin/always_pull` launch marker, and the panel exposes that launch auto-pull policy directly so a pinned checkout cannot silently update itself on restart.
+
+The same panel uses Swarm's backend controls to restart, disable/re-enable, or request RAM cleanup from the self-starting Comfy backend. **ExtraArgs**, **AutoUpdate**, and **AutoRestart** are editable there as well, and Studio now surfaces the runtime knobs that keep being relevant during Comfy archaeology: a structured **CUDA device override**, toggles for **disable dynamic VRAM**, **disable pinned memory**, and **disable async offload**, plus quick-fill presets like **Known-good: CUDA 0**. Studio preserves unrelated CLI args while owning those managed flags so you can stop retyping them by hand. Pinning Comfy automatically changes **AutoUpdate** to **Don't update** when needed so Swarm cannot undo the selected checkout during backend initialization. Source checkout changes are host-local and therefore disabled in the browser/PWA, while Swarm API backend controls can still work remotely when the account has permission.
+
+## Persistence and metadata
+
+Studio keeps its own lightweight UI/library state locally while Swarm remains authoritative for model files and generated output history. History sync can rebuild Studio's index from Swarm. Dropped images are inspected transiently and are not automatically added to the Library.
+
+Swarm PNG `parameters` metadata and supported JPEG `UserComment` metadata are parsed locally. When available, Swarm timing fields such as `prep_time` and `generation_time` are surfaced in Inspect.
+
+## CivitAI routing
+
+Studio canonicalizes CivitAI model/API navigation through `https://civitai.red`. Existing `.com` URLs remain valid input and are normalized internally. Asset/CDN URLs returned by the service are left untouched.
+
+## Development
+
+```bash
+npm install
+npm run check
+npm run preflight
+npm run build
+```
+
+Desktop development/build commands:
+
+```bash
+npm run tauri:dev
+npm run tauri:build
+```
+
+`npm run preflight` checks release/version invariants, changelog hygiene, the Tauri HTML5 drag/drop setting, CivitAI routing ownership, and retired pre-v1 UI paths.
+
+## Repository hygiene
+
+Generated builds, dependency folders, runtime logs, local recovery backups, editor state, and Tauri target output are ignored by Git. Source lockfiles are intentionally **not** ignored: after the first normal `npm install`, commit `package-lock.json`; after Cargo/Tauri resolves the Rust application, commit `src-tauri/Cargo.lock` as well. Those files make a known-good desktop build substantially easier to reproduce.
+
+The repository enforces LF line endings for source files (including `start.ps1`) through `.gitattributes`, so Windows checkouts do not silently rewrite the editable tree to CRLF.
