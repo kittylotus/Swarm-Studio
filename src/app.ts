@@ -9,6 +9,7 @@ import { runtime, type RuntimeProcessStatus, type RuntimeRepoStatus, type Studio
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
 import { normalizeGenerationRequest, normalizeParamKey } from "./swarm/request";
+import { normalizeSwarmImageViewPath } from "./swarm/history";
 import type {
   SwarmGenerationEvent,
   SwarmGenerationImage,
@@ -2237,21 +2238,20 @@ export class StudioApp {
   private modelStackComposerMarkup(includeResolution: boolean, className: string): string {
     const draft = this.store.state.draft;
     const checkpoint = this.currentCheckpoint();
-    const checkpointClass = checkpoint?.compat_class || checkpoint?.architecture || checkpoint?.class || "Compatibility metadata unavailable";
+    const checkpointFamily = modelFamily(checkpoint) || String(checkpoint?.architecture || checkpoint?.class || "model").trim();
     const available = this.compatibleLoras().filter((lora) => !draft.loras.some((item) => serverModelKey(item.name) === serverModelKey(lora.name)));
     return `
       <aside class="panel ${className} shared-composer">
         <div class="rail-heading"><div><span class="panel-kicker">COMPOSER</span><h2>Model & stack</h2></div></div>
-        <label class="field"><span>Checkpoint</span><select id="model">${this.modelOptions(draft.model)}</select></label>
-        <div class="checkpoint-meta"><b>${escapeHtml(checkpoint?.title || prettyName(draft.model) || "None")}</b><small>${escapeHtml(checkpointClass)}</small></div>
+        <label class="field checkpoint-field"><span class="checkpoint-field-label"><span>Checkpoint</span>${checkpointFamily ? `<em>${escapeHtml(checkpointFamily)}</em>` : ""}</span><select id="model">${this.modelOptions(draft.model)}</select></label>
 
         ${includeResolution ? this.resolutionSectionMarkup() : ""}
 
         <section class="rail-section lora-section">
           <div class="section-minihead stack-section-head"><span><b>LoRA stack</b><small>${draft.loras.filter((item) => item.enabled).length} enabled · ${draft.loras.length} stacked</small></span><div class="section-icon-actions"><label class="icon-button file-button" title="Import LoRA stack" aria-label="Import LoRA stack">${importSvg}<input id="lora-import" type="file" accept="application/json,.json" hidden /></label><button class="icon-button" data-action="export-lora-stack" title="Export LoRA stack" aria-label="Export LoRA stack" ${draft.loras.length ? "" : "disabled"}>${exportSvg}</button><button class="icon-button" data-action="save-lora-profile" title="Save current LoRA stack" aria-label="Save current LoRA stack" ${draft.loras.length ? "" : "disabled"}>${saveSvg}</button></div></div>
-          <div class="lora-picker"><select id="lora-add-select"><option value="">${available.length ? "Choose a matching LoRA…" : "No matching LoRAs"}</option>${available.map((lora) => this.loraOption(lora)).join("")}</select><button class="secondary-button" data-action="add-lora" ${available.length ? "" : "disabled"}>Add</button></div>
-          ${draft.loras.length ? `<div class="lora-stack">${draft.loras.map((item, index) => this.loraStackRow(item, index)).join("")}</div>` : `<div class="stack-empty">No LoRAs in this stack.</div>`}
-          <div class="stack-tools stack-tools--saved"><select id="lora-profile-select"><option value="">Saved stacks…</option>${this.store.state.loraProfiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</select><button class="ghost-button" data-action="load-lora-profile" ${this.store.state.loraProfiles.length ? "" : "disabled"}>Load</button></div>
+          <label class="stack-profile-picker"><span>Stack</span><select id="lora-profile-select"><option value="">Current stack · choose a saved stack…</option>${this.store.state.loraProfiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</select></label>
+          ${draft.loras.length ? `<div class="lora-stack">${draft.loras.map((item, index) => this.loraStackRow(item, index)).join("")}</div>` : `<div class="stack-empty">No LoRAs in this stack yet.</div>`}
+          <details class="lora-add-card"><summary>${plusSvg}<span><b>Add LoRA</b><small>${available.length ? "Choose a matching LoRA" : "No matching LoRAs available"}</small></span></summary><div class="lora-picker"><select id="lora-add-select" ${available.length ? "" : "disabled"}><option value="">${available.length ? "Choose a matching LoRA…" : "No matching LoRAs"}</option>${available.map((lora) => this.loraOption(lora)).join("")}</select><button class="secondary-button" data-action="add-lora" ${available.length ? "" : "disabled"}>Add</button></div></details>
           <div class="stack-tools stack-tools--footer"><button class="ghost-button" data-action="open-lora-reorder" ${draft.loras.length > 1 ? "" : "disabled"}>Reorder</button><button class="ghost-button" data-action="clear-loras" ${draft.loras.length ? "" : "disabled"}>Clear</button></div>
         </section>
       </aside>`;
@@ -2277,15 +2277,17 @@ export class StudioApp {
     const draft = this.store.state.draft;
     const sliderMax = clamp(Math.max(draft.width, draft.height), 256, 2048);
     return `<section class="rail-section resolution-section">
-      <div class="section-minihead"><span><b>Resolution</b><small>${draft.width} × ${draft.height}</small></span><button class="link-dimensions ${draft.lockRatio ? "is-active" : ""}" data-action="toggle-ratio-lock" title="${draft.lockRatio ? "Linked: keep the current aspect ratio" : "Unlocked: width and height move independently"}" aria-label="${draft.lockRatio ? "Linked: keep the current aspect ratio" : "Unlocked: width and height move independently"}">${draft.lockRatio ? linkedSvg : unlinkedSvg}</button></div>
-      <div class="dimension-link-row">
-        ${this.numberField("width", "Width", draft.width, 64, 4096, 64)}
-        ${this.numberField("height", "Height", draft.height, 64, 4096, 64)}
+      <div class="resolution-card">
+        <div class="section-minihead"><span><b>Resolution</b><small>${draft.width} × ${draft.height}</small></span><button class="link-dimensions ${draft.lockRatio ? "is-active" : ""}" data-action="toggle-ratio-lock" title="${draft.lockRatio ? "Linked: keep the current aspect ratio" : "Unlocked: width and height move independently"}" aria-label="${draft.lockRatio ? "Linked: keep the current aspect ratio" : "Unlocked: width and height move independently"}">${draft.lockRatio ? linkedSvg : unlinkedSvg}</button></div>
+        <div class="dimension-link-row">
+          ${this.numberField("width", "Width", draft.width, 64, 4096, 64)}
+          ${this.numberField("height", "Height", draft.height, 64, 4096, 64)}
+        </div>
+        ${draft.lockRatio
+          ? `<label class="range-field"><span>Size <b id="resolution-value">${Math.max(draft.width, draft.height)}px</b></span><input id="resolution-scale" type="range" min="256" max="2048" step="64" value="${sliderMax}" /></label>`
+          : `<div class="resolution-split-sliders"><label class="range-field"><span>Width <b id="resolution-width-value">${draft.width}px</b></span><input id="resolution-width" type="range" min="256" max="2048" step="64" value="${clamp(draft.width, 256, 2048)}" /></label><label class="range-field"><span>Height <b id="resolution-height-value">${draft.height}px</b></span><input id="resolution-height" type="range" min="256" max="2048" step="64" value="${clamp(draft.height, 256, 2048)}" /></label></div>`}
+        <div class="ratio-controls"><div class="ratio-row">${ratioChoices.map((ratio) => `<button class="${draft.ratio === ratio ? "is-active" : ""}" data-ratio="${ratio}">${ratio}</button>`).join("")}</div><button class="icon-button ratio-reverse ${draft.ratioReversed ? "is-active" : ""}" data-action="reverse-ratio" title="Reverse ratio" aria-label="Reverse ratio" ${draft.ratio === "1:1" ? "disabled" : ""}>${swapSvg}</button></div>
       </div>
-      ${draft.lockRatio
-        ? `<label class="range-field"><span>Size <b id="resolution-value">${Math.max(draft.width, draft.height)}px</b></span><input id="resolution-scale" type="range" min="256" max="2048" step="64" value="${sliderMax}" /></label>`
-        : `<div class="resolution-split-sliders"><label class="range-field"><span>Width <b id="resolution-width-value">${draft.width}px</b></span><input id="resolution-width" type="range" min="256" max="2048" step="64" value="${clamp(draft.width, 256, 2048)}" /></label><label class="range-field"><span>Height <b id="resolution-height-value">${draft.height}px</b></span><input id="resolution-height" type="range" min="256" max="2048" step="64" value="${clamp(draft.height, 256, 2048)}" /></label></div>`}
-      <div class="ratio-controls"><div class="ratio-row">${ratioChoices.map((ratio) => `<button class="${draft.ratio === ratio ? "is-active" : ""}" data-ratio="${ratio}">${ratio}</button>`).join("")}</div><button class="icon-button ratio-reverse ${draft.ratioReversed ? "is-active" : ""}" data-action="reverse-ratio" title="Reverse ratio" aria-label="Reverse ratio" ${draft.ratio === "1:1" ? "disabled" : ""}>${swapSvg}</button></div>
     </section>`;
   }
 
@@ -2738,14 +2740,13 @@ export class StudioApp {
     const model = this.resolveLora(item);
     const missing = !model && this.connected;
     const preview = model?.preview_image ? this.client.imageUrl(model.preview_image) : "";
-    const meta = [model?.author, modelFamily(model), model?.trigger_phrase ? "trigger available" : ""].filter(Boolean);
+    const meta = [model?.author, modelFamily(model)].filter(Boolean).join(" · ") || "Matching LoRA";
     return `
       <div class="lora-stack-row ${item.enabled ? "" : "is-disabled"}" data-lora-row="${escapeHtml(item.id)}">
-        <span class="stack-grip" title="Reorder in the modal">${gripSvg}</span>
         <button class="lora-thumb lora-metadata-open" type="button" data-view-model-metadata="${escapeHtml(model?.name || item.name)}" title="View LoRA metadata" aria-label="View metadata for ${escapeHtml(item.title || prettyName(item.name))}">${preview ? `<img ${this.swarmImageAttributes(preview)} alt="" loading="lazy" />` : `<span>◇</span>`}</button>
-        <div class="lora-stack-copy"><b>${escapeHtml(item.title || prettyName(item.name))}</b><span>${escapeHtml(item.name)}</span><small>${missing ? "Missing on server" : escapeHtml(meta.join(" · ") || "Matches selected checkpoint")}</small></div>
-        <label class="weight-field"><span>Weight</span><input type="number" data-lora-weight="${escapeHtml(item.id)}" value="${item.weight}" min="-4" max="4" step="0.05" /></label>
+        <div class="lora-stack-copy"><b>${escapeHtml(item.title || prettyName(item.name))}</b><small>${missing ? "Missing on server" : escapeHtml(meta)}</small></div>
         <label class="trigger-toggle" title="Append this LoRA's Swarm trigger phrase"><input type="checkbox" data-lora-trigger="${escapeHtml(item.id)}" ${item.useTrigger ? "checked" : ""}/><span>Trigger</span></label>
+        <label class="weight-field"><span>Weight</span><input type="number" data-lora-weight="${escapeHtml(item.id)}" value="${item.weight}" min="-4" max="4" step="0.05" /></label>
         <div class="stack-row-actions"><button class="icon-button" data-lora-toggle="${escapeHtml(item.id)}" title="${item.enabled ? "Disable this LoRA" : "Enable this LoRA"}" aria-label="${item.enabled ? "Disable this LoRA" : "Enable this LoRA"}">${item.enabled ? eyeSvg : eyeOffSvg}</button><button class="icon-button" data-lora-remove="${escapeHtml(item.id)}" title="Remove this LoRA from the stack" aria-label="Remove this LoRA from the stack">${trashSvg}</button></div>
       </div>`;
   }
@@ -4631,8 +4632,9 @@ export class StudioApp {
       this.notify("LoRA stack saved.", "success");
       this.render();
     });
-    this.root.querySelector<HTMLElement>("[data-action='load-lora-profile']")?.addEventListener("click", () => {
-      const id = this.root.querySelector<HTMLSelectElement>("#lora-profile-select")?.value;
+    this.root.querySelector<HTMLSelectElement>("#lora-profile-select")?.addEventListener("change", (event) => {
+      const id = (event.currentTarget as HTMLSelectElement).value;
+      if (!id) return;
       const profile = this.store.state.loraProfiles.find((item) => item.id === id);
       if (!profile) return;
       this.store.updateDraft({ loras: cloneStack(profile.items) });
@@ -6887,19 +6889,7 @@ export class StudioApp {
   }
 
   private normalizeSwarmPath(path: unknown): string {
-    let normalized = String(path ?? "")
-      .trim()
-      .replace(/^https?:\/\/[^/]+/i, "")
-      .replace(/^\/+/, "")
-      .replace(/^__swarm\//i, "")
-      .split(/[?#]/, 1)[0] ?? "";
-    // Fetch/display paths use Swarm's View/local route. History mutation APIs do not: they
-    // expect an output-root-relative path such as raw/2026-08-11/file.png. Keep those forms
-    // separate instead of normalizing one string for both jobs.
-    if (/^raw\//i.test(normalized)) normalized = `View/local/${normalized}`;
-    else if (/^local\/raw\//i.test(normalized)) normalized = `View/${normalized}`;
-    else if (/^View\/raw\//i.test(normalized)) normalized = normalized.replace(/^View\/raw\//i, "View/local/raw/");
-    return normalized;
+    return normalizeSwarmImageViewPath(path);
   }
 
   private swarmMutationPath(path: unknown): string {

@@ -1,6 +1,6 @@
 [package]
 name = "swarm-studio"
-version = "0.63.18"
+version = "0.63.20"
 description = "Standalone creative client for SwarmUI"
 authors = ["kittyafterdark and contributors"]
 edition = "2021"
