@@ -54,6 +54,29 @@ export interface LoraStackProfile {
   updatedAt: number;
 }
 
+export type RegionLayoutPreset = "left-right" | "top-bottom" | "three-columns" | "three-rows" | "grid-2x2";
+
+export interface RegionalPromptRegion {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  strength: number;
+  prompt: string;
+  enabled: boolean;
+}
+
+export interface RegionalPromptDraft {
+  layout: RegionLayoutPreset | "";
+  spacing: number;
+  customGeometry: boolean;
+  regions: RegionalPromptRegion[];
+  backgroundEnabled: boolean;
+  backgroundPrompt: string;
+}
+
 export interface GenerationDraft {
   prompt: string;
   negativePrompt: string;
@@ -74,6 +97,7 @@ export interface GenerationDraft {
   images: number;
   loras: LoraStackItem[];
   activePresets: string[];
+  regionalPrompt: RegionalPromptDraft;
   initImage: string;
   initImageName: string;
   initImageEnabled: boolean;

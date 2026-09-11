@@ -1,4 +1,5 @@
 import { createId } from "../id";
+import { emptyRegionalPromptDraft, normalizeRegionalPromptDraft } from "../regions";
 import type {
   ConnectionSettings,
   FolderRecord,
@@ -54,6 +55,7 @@ const defaultDraft: GenerationDraft = {
   images: 1,
   loras: [],
   activePresets: [],
+  regionalPrompt: emptyRegionalPromptDraft(),
   initImage: "",
   initImageName: "",
   initImageEnabled: false,
@@ -147,6 +149,7 @@ function safeParse(value: string | null): PersistedStudioState {
         ...draft,
         loras: cloneLoraStack(draft.loras),
         activePresets: Array.isArray(draft.activePresets) ? draft.activePresets.map(String) : typeof (draft as GenerationDraft & { activePreset?: string }).activePreset === "string" && (draft as GenerationDraft & { activePreset?: string }).activePreset ? [(draft as GenerationDraft & { activePreset?: string }).activePreset!] : [],
+        regionalPrompt: normalizeRegionalPromptDraft(draft.regionalPrompt),
         variationSeedEnabled: draft.variationSeedEnabled === true,
         variationSeed: Number.isFinite(Number(draft.variationSeed)) ? Number(draft.variationSeed) : -1,
         variationSeedStrength: Number.isFinite(Number(draft.variationSeedStrength)) ? Number(draft.variationSeedStrength) : 0.1,

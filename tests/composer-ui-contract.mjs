@@ -12,6 +12,9 @@ function assert(condition, message) {
 
 assert(app.includes('checkpoint-field-label'), 'Checkpoint composer must use the compact family-pill label.');
 assert(!app.includes('<div class="checkpoint-meta"><b>'), 'Checkpoint title must not be duplicated below the dropdown.');
+assert(app.includes('data-preset-apply="${index}"'), 'Preset stack rows must expose the apply-to-workspace action.');
+assert(app.includes('Apply preset to prompt &amp; controls'), 'Preset apply icon must explain that it expands the preset into prompt and controls.');
+assert(app.includes('[data-preset-apply]') && app.includes('void this.applyPresetFromStack(index);'), 'Preset apply action must call the existing workspace expansion path.');
 assert(app.includes('Current stack · choose a saved stack…'), 'Saved LoRA stacks must be selected at stack scope.');
 assert(app.includes('id="lora-profile-select"') && app.includes('addEventListener("change"'), 'Saved LoRA stack selection must load directly on change.');
 assert(app.includes('class="lora-add-card"'), 'Add LoRA must live in the placeholder card after the stack.');

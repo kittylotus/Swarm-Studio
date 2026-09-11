@@ -4,6 +4,19 @@ import { normalizeLibraryFolderSelection, shouldAutoSyncLibraryHistory } from ".
 import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
 import { importLumiSwarmStack } from "./lora/import";
 import { loraRequestValue, resolveLoraModelName } from "./lora/request";
+import {
+  REGION_LAYOUT_PRESETS,
+  applyRegionLayoutPreset,
+  applyRegionPresetSpacing,
+  cloneRegionalPromptDraft,
+  compileRegionalPrompt,
+  emptyRegionalPromptDraft,
+  hasRegionalPromptContent,
+  moveRegionGeometry,
+  regionOverlapAreas,
+  resizeRegionGeometry,
+  type RegionResizeHandle,
+} from "./regions";
 import { CIVITAI_FALLBACK_ORIGIN, CIVITAI_ORIGIN, isCivitaiHost, routeCivitaiUrl } from "./civitai/urls";
 import { runtime, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
@@ -31,6 +44,8 @@ import type {
   LogEntry,
   LoraStackItem,
   OutputRecord,
+  RegionLayoutPreset,
+  RegionalPromptDraft,
   StudioTheme,
   StudioUiState,
   StudioView,
@@ -49,11 +64,13 @@ const asNumber = (value: string, fallback: number) => Number.isFinite(Number(val
 const ratioChoices = ["1:1", "2:3", "3:4", "4:5", "9:16"];
 const seedToggleSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10a5 5 0 0 1 5 5v1"/><path d="m16 10 3 3 3-3"/><path d="M20 17H10a5 5 0 0 1-5-5v-1"/><path d="m8 14-3-3-3 3"/></svg>`;
 const syntaxSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4 4 12l4 8"/><path d="m16 4 4 8-4 8"/><path d="m14 3-4 18"/></svg>`;
+const regionsSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="8" height="16" rx="1.5"/><rect x="13" y="4" width="8" height="16" rx="1.5"/></svg>`;
 const plusSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;
 const saveSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21h14"/><path d="M19 21V7.8a1 1 0 0 0-.3-.7l-2.8-2.8a1 1 0 0 0-.7-.3H7a2 2 0 0 0-2 2v15"/><path d="M9 21v-6h6v6"/><path d="M9 4v5h5"/></svg>`;
 const importSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`;
 const exportSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>`;
 const settingsRowsSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9"/><path d="M17 6h3"/><circle cx="15" cy="6" r="2"/><path d="M4 12h3"/><path d="M11 12h9"/><circle cx="9" cy="12" r="2"/><path d="M4 18h11"/><path d="M19 18h1"/><circle cx="17" cy="18" r="2"/></svg>`;
+const applyPresetSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 10-5 5 5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>`;
 const trashSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 13h8l1-13"/></svg>`;
 const gripSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>`;
 const eyeSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="3"/></svg>`;
@@ -413,6 +430,8 @@ export class StudioApp {
   private presetEditorTitle = "";
   private presetEditorDescription = "";
   private presetEditorEditing = "";
+  private regionEditorOpen = false;
+  private regionEditorSelectedIndex = 0;
   private mobileEnterDirection: -1 | 0 | 1 = 0;
   private mobileSwipeBusy = false;
   private quickNavOpen = false;
@@ -1492,6 +1511,7 @@ export class StudioApp {
       ${this.renderStackReorderModal("preset")}
       ${this.renderStackReorderModal("lora")}
       ${this.renderPresetEditorModal()}
+      ${this.renderRegionPresetEditorModal()}
       ${this.renderLibraryFiltersModal()}
       ${this.renderLibraryMoveModal()}
       ${this.renderLibrarySelectionRail()}
@@ -1815,6 +1835,51 @@ export class StudioApp {
           <div class="preset-editor-groups">${[...grouped.entries()].map(([group, items]) => `<section class="preset-editor-group"><h3>${escapeHtml(group)}</h3><div class="preset-editor-grid">${items.map((item) => `<label class="preset-save-option"><input type="checkbox" name="preset-param" value="${escapeHtml(item.key)}" ${item.checked ? "checked" : ""}/><span><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.preview)}</small></span></label>`).join("")}</div></section>`).join("")}</div>
           <div class="form-actions"><button type="button" class="ghost-button" data-action="close-preset-editor">Cancel</button>${this.presetEditorEditing ? `<button type="button" class="danger-soft" data-action="delete-preset" data-preset-title="${escapeHtml(this.presetEditorEditing)}">Delete</button>` : ""}<button type="submit" class="primary-button">${this.presetEditorEditing ? "Save changes" : "Save preset"}</button></div>
         </form>
+      </section>
+    </div>`;
+  }
+
+  private renderRegionPresetEditorModal(): string {
+    if (!this.regionEditorOpen) return "";
+    const draft = this.store.state.draft;
+    const regional = draft.regionalPrompt;
+    const layout = REGION_LAYOUT_PRESETS.find((item) => item.id === regional.layout);
+    const syntax = this.promptWithTriggers(draft);
+    const spacingPercent = Math.round(regional.spacing * 100);
+    const spacingLabel = spacingPercent < 0 ? `Overlap ${Math.abs(spacingPercent)}%` : spacingPercent > 0 ? `Gap ${spacingPercent}%` : "Touching";
+    const overlaps = regionOverlapAreas(regional.regions);
+    const preview = regional.regions.length
+      ? `<div class="region-preview-stage" data-region-stage style="aspect-ratio:${Math.max(1, draft.width)} / ${Math.max(1, draft.height)}">${regional.regions.map((region, index) => `<div class="region-preview-box ${region.enabled ? "" : "is-disabled"} ${index === this.regionEditorSelectedIndex ? "is-selected" : ""}" data-region-preview="${index}" data-region-drag="${index}" tabindex="0" role="group" aria-label="${escapeHtml(region.name || `Region ${index + 1}`)} region" style="left:${region.x * 100}%;top:${region.y * 100}%;width:${region.width * 100}%;height:${region.height * 100}%"><span>${escapeHtml(region.name || `Region ${index + 1}`)}</span>${["nw", "n", "ne", "e", "se", "s", "sw", "w"].map((handle) => `<i class="region-resize-handle region-resize-${handle}" data-region-resize="${index}:${handle}" aria-hidden="true"></i>`).join("")}</div>`).join("")}${overlaps.map((overlap) => `<i class="region-preview-overlap" data-region-overlap style="left:${overlap.x * 100}%;top:${overlap.y * 100}%;width:${overlap.width * 100}%;height:${overlap.height * 100}%" aria-hidden="true"></i>`).join("")}</div>`
+      : `<div class="region-preview-empty"><b>Choose a layout preset.</b><span>Studio will translate the regions into Swarm syntax at generation time.</span></div>`;
+    const geometryBadge = regional.regions.length ? `${regional.customGeometry ? "Custom · " : ""}${regional.regions.length} region${regional.regions.length === 1 ? "" : "s"}` : "No layout";
+    return `<div class="region-editor-backdrop" data-action="close-region-editor">
+      <section class="region-editor-modal" role="dialog" aria-modal="true" aria-label="Regional prompting" data-region-editor-panel>
+        <header><div><span class="panel-kicker">REGIONAL PROMPTING</span><h2>Region editor</h2></div><button class="icon-button" data-action="close-region-editor" aria-label="Close regional prompting">×</button></header>
+        <div class="region-editor-body">
+          <section class="region-layout-panel">
+            <div class="region-editor-heading"><div><b>Layout presets</b><small>${layout ? escapeHtml(layout.description) : "Choose a preset, then drag or resize any region."}</small></div><span data-region-geometry-mode>${escapeHtml(geometryBadge)}</span></div>
+            <div class="region-layout-presets">${REGION_LAYOUT_PRESETS.map((preset) => `<button type="button" class="region-layout-preset ${regional.layout === preset.id ? "is-active" : ""} ${regional.layout === preset.id && regional.customGeometry ? "is-custom" : ""}" data-region-layout="${preset.id}"><span class="region-layout-mini">${preset.regions.map((region) => `<i style="left:${region.x * 100}%;top:${region.y * 100}%;width:${region.width * 100}%;height:${region.height * 100}%"></i>`).join("")}</span><b>${escapeHtml(preset.label)}</b><small>${escapeHtml(preset.shortLabel)}</small></button>`).join("")}</div>
+            <div class="region-spacing-control ${regional.layout ? "" : "is-disabled"}">
+              <div><b>Region spacing</b><small>Overlap for shared action · gap for stronger separation. Changing this reapplies the preset geometry.</small></div>
+              <label><span class="region-spacing-end">Overlap</span><input type="range" min="-20" max="20" step="1" value="${spacingPercent}" data-region-spacing aria-label="Region spacing percent" ${regional.layout ? "" : "disabled"}/><span class="region-spacing-end">Gap</span><output data-region-spacing-output>${escapeHtml(spacingLabel)}</output></label>
+            </div>
+            <div class="region-preview-shell">${preview}</div>
+            <div class="region-preview-legend"><span><i class="legend-region"></i> Region</span><span><i class="legend-overlap"></i> Overlap</span><span><i class="legend-unclaimed"></i> Unclaimed</span></div>
+            <details class="region-syntax-preview"><summary>Swarm syntax preview</summary><pre data-region-syntax-preview>${escapeHtml(syntax || "Choose a layout and add a regional prompt to preview syntax.")}</pre></details>
+          </section>
+          <section class="region-prompt-panel">
+            <div class="region-editor-heading"><div><b>Regional prompts</b><small>The global positive stays in the main composer. These prompts only apply inside their regions.</small></div></div>
+            ${regional.regions.length ? `<div class="region-prompt-list">${regional.regions.map((region, index) => `<article class="region-prompt-card ${region.enabled ? "" : "is-disabled"} ${index === this.regionEditorSelectedIndex ? "is-selected" : ""}" data-region-card="${index}">
+              <div class="region-card-head"><label class="region-enabled"><input type="checkbox" data-region-enabled="${index}" ${region.enabled ? "checked" : ""}/><span>Use</span></label><input class="region-name-input" data-region-name="${index}" value="${escapeHtml(region.name)}" aria-label="Region ${index + 1} name" /><label class="region-strength"><span>Strength</span><input type="number" min="0" step="0.05" value="${region.strength}" data-region-strength="${index}" /></label></div>
+              <textarea rows="3" data-region-prompt="${index}" placeholder="What belongs in ${escapeHtml(region.name.toLowerCase() || `region ${index + 1}`)}?">${escapeHtml(region.prompt)}</textarea>
+            </article>`).join("")}</div>` : `<div class="region-prompt-empty">Choose a layout preset to create regional prompt slots.</div>`}
+            <article class="region-background-card ${regional.backgroundEnabled ? "is-enabled" : ""}">
+              <div class="region-card-head"><label class="region-enabled"><input type="checkbox" data-region-background-enabled ${regional.backgroundEnabled ? "checked" : ""}/><span>Background</span></label><small>Only areas not claimed by an explicit region.</small></div>
+              <textarea rows="3" data-region-background-prompt placeholder="Background-only prompt…" ${regional.backgroundEnabled ? "" : "disabled"}>${escapeHtml(regional.backgroundPrompt)}</textarea>
+            </article>
+          </section>
+        </div>
+        <div class="form-actions region-editor-actions"><button type="button" class="danger-soft" data-action="clear-regions" ${regional.regions.length || regional.backgroundPrompt ? "" : "disabled"}>Clear regions</button><button type="button" class="primary-button" data-action="close-region-editor">Done</button></div>
       </section>
     </div>`;
   }
@@ -2220,7 +2285,7 @@ export class StudioApp {
           <div class="output-stage" id="output-stage">${this.outputStageMarkup()}</div>
           <div class="prompt-dock">
             <div id="generation-review-strip-host">${this.generationApprovalStripMarkup()}</div>
-            <div class="prompt-tabs"><span>Prompt</span><button class="ghost-button syntax-toggle" data-action="toggle-syntax" title="Prompt syntax">${syntaxSvg}<em>Syntax</em></button><button class="ghost-button" data-action="clear-draft">Clear</button></div>
+            <div class="prompt-tabs"><span>Prompt</span><button class="ghost-button region-toggle ${hasRegionalPromptContent(draft.regionalPrompt) ? "is-active" : ""}" data-action="open-region-editor" title="Regional prompting">${regionsSvg}<em>Regions${draft.regionalPrompt.regions.length ? ` · ${draft.regionalPrompt.regions.length}` : ""}</em></button><button class="ghost-button syntax-toggle" data-action="toggle-syntax" title="Prompt syntax">${syntaxSvg}<em>Syntax</em></button><button class="ghost-button" data-action="clear-draft">Clear</button></div>
             ${this.syntaxMenuMarkup()}
             <label class="field prompt-positive"><textarea id="prompt" placeholder="Describe the image…">${escapeHtml(draft.prompt)}</textarea></label>
             <label class="field prompt-negative"><span>Negative</span><textarea id="negative-prompt" rows="2" placeholder="Things to avoid…">${escapeHtml(draft.negativePrompt)}</textarea></label>
@@ -2266,6 +2331,7 @@ export class StudioApp {
       return `<div class="preset-chip" data-preset-index="${index}" data-preset-title="${escapeHtml(title)}"${description}>
         <span class="preset-chip-title">&lt;preset:${escapeHtml(title)}&gt;</span>
         <div class="preset-chip-actions">
+          <button class="icon-button preset-icon-action" data-preset-apply="${index}" title="Apply preset to prompt &amp; controls" aria-label="Apply preset to prompt and controls">${applyPresetSvg}</button>
           <button class="icon-button preset-icon-action" data-preset-edit="${index}" title="Edit preset" aria-label="Edit preset">${settingsRowsSvg}</button>
           <button class="icon-button preset-icon-action" data-preset-remove="${index}" title="Remove preset from stack" aria-label="Remove preset from stack">${trashSvg}</button>
         </div>
@@ -2555,6 +2621,7 @@ export class StudioApp {
       ...draft,
       loras: cloneStack(draft.loras),
       activePresets: [...draft.activePresets],
+      regionalPrompt: cloneRegionalPromptDraft(draft.regionalPrompt),
       advancedEnabledGroups: [...draft.advancedEnabledGroups],
       extraParams: { ...draft.extraParams },
     };
@@ -4413,6 +4480,7 @@ export class StudioApp {
     });
 
     this.bindPresetStackControls();
+    this.bindRegionEditorControls();
 
     this.root.querySelector<HTMLElement>("[data-action='toggle-syntax']")?.addEventListener("click", () => {
       this.syntaxMenuOpen = !this.syntaxMenuOpen;
@@ -4428,7 +4496,7 @@ export class StudioApp {
 
     this.root.querySelectorAll<HTMLElement>("[data-action='toggle-seed']").forEach((button) => button.addEventListener("click", () => void this.toggleSeedMode()));
     this.root.querySelector<HTMLElement>("[data-action='clear-draft']")?.addEventListener("click", () => {
-      this.store.updateDraft({ prompt: "", negativePrompt: "" });
+      this.store.updateDraft({ prompt: "", negativePrompt: "", regionalPrompt: emptyRegionalPromptDraft() });
       this.render();
     });
     this.root.querySelectorAll<HTMLElement>("[data-ratio]").forEach((button) => {
@@ -4526,6 +4594,228 @@ export class StudioApp {
     this.bindStackReorderModalEvents();
   }
 
+  private bindRegionEditorControls(): void {
+    this.root.querySelector<HTMLElement>("[data-action='open-region-editor']")?.addEventListener("click", () => {
+      this.persistDraftFromForm(true);
+      this.regionEditorSelectedIndex = 0;
+      this.regionEditorOpen = true;
+      this.render();
+    });
+
+    if (!this.regionEditorOpen) return;
+
+    const syncSyntaxPreview = () => {
+      const preview = this.root.querySelector<HTMLElement>("[data-region-syntax-preview]");
+      if (preview) preview.textContent = this.promptWithTriggers(this.store.state.draft) || "Choose a layout and add a regional prompt to preview syntax.";
+    };
+    const syncOverlapPreview = (regional: RegionalPromptDraft) => {
+      const stage = this.root.querySelector<HTMLElement>("[data-region-stage]");
+      if (!stage) return;
+      stage.querySelectorAll("[data-region-overlap]").forEach((element) => element.remove());
+      for (const overlap of regionOverlapAreas(regional.regions)) {
+        const area = document.createElement("i");
+        area.className = "region-preview-overlap";
+        area.dataset.regionOverlap = "";
+        area.style.left = `${overlap.x * 100}%`;
+        area.style.top = `${overlap.y * 100}%`;
+        area.style.width = `${overlap.width * 100}%`;
+        area.style.height = `${overlap.height * 100}%`;
+        area.setAttribute("aria-hidden", "true");
+        stage.append(area);
+      }
+    };
+    const syncGeometryMode = (regional: RegionalPromptDraft) => {
+      const badge = this.root.querySelector<HTMLElement>("[data-region-geometry-mode]");
+      if (badge) badge.textContent = regional.regions.length ? `${regional.customGeometry ? "Custom · " : ""}${regional.regions.length} region${regional.regions.length === 1 ? "" : "s"}` : "No layout";
+      this.root.querySelectorAll<HTMLElement>("[data-region-layout]").forEach((button) => {
+        button.classList.toggle("is-custom", Boolean(regional.customGeometry && button.dataset.regionLayout === regional.layout));
+      });
+    };
+    const syncRegionGeometryPreview = (regional: RegionalPromptDraft) => {
+      regional.regions.forEach((region, index) => {
+        const box = this.root.querySelector<HTMLElement>(`[data-region-preview="${index}"]`);
+        if (!box) return;
+        box.style.left = `${region.x * 100}%`;
+        box.style.top = `${region.y * 100}%`;
+        box.style.width = `${region.width * 100}%`;
+        box.style.height = `${region.height * 100}%`;
+      });
+      syncOverlapPreview(regional);
+      syncGeometryMode(regional);
+    };
+    const selectRegion = (index: number) => {
+      this.regionEditorSelectedIndex = index;
+      this.root.querySelectorAll<HTMLElement>("[data-region-preview]").forEach((box) => box.classList.toggle("is-selected", Number(box.dataset.regionPreview) === index));
+      this.root.querySelectorAll<HTMLElement>("[data-region-card]").forEach((card) => card.classList.toggle("is-selected", Number(card.dataset.regionCard) === index));
+    };
+    const updateRegional = (mutate: (regional: RegionalPromptDraft) => void, persist = false) => {
+      const regional = cloneRegionalPromptDraft(this.store.state.draft.regionalPrompt);
+      mutate(regional);
+      this.store.updateDraft({ regionalPrompt: regional }, false);
+      if (persist) this.store.saveDraft();
+      syncSyntaxPreview();
+      return regional;
+    };
+
+    this.root.querySelectorAll<HTMLElement>("[data-action='close-region-editor']").forEach((element) => element.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest("[data-region-editor-panel]") && !(event.target as HTMLElement).closest("[data-action='close-region-editor']")) return;
+      this.regionEditorOpen = false;
+      this.store.saveDraft();
+      this.render();
+    }));
+    this.root.querySelector<HTMLElement>("[data-region-editor-panel]")?.addEventListener("click", (event) => event.stopPropagation());
+
+    this.root.querySelectorAll<HTMLElement>("[data-region-layout]").forEach((button) => button.addEventListener("click", () => {
+      const preset = button.dataset.regionLayout as RegionLayoutPreset;
+      const definition = REGION_LAYOUT_PRESETS.find((item) => item.id === preset);
+      if (!definition) return;
+      const current = this.store.state.draft.regionalPrompt;
+      const discarded = current.regions.slice(definition.regions.length).some((region) => Boolean(region.prompt.trim()));
+      if (discarded && !window.confirm("This layout has fewer regions. Prompts in the removed regions will be discarded. Continue?")) return;
+      this.regionEditorSelectedIndex = 0;
+      this.store.updateDraft({ regionalPrompt: applyRegionLayoutPreset(current, preset) });
+      this.render();
+    }));
+
+    this.root.querySelector<HTMLInputElement>("[data-region-spacing]")?.addEventListener("input", (event) => {
+      const input = event.currentTarget as HTMLInputElement;
+      const spacing = input.valueAsNumber / 100;
+      const regional = applyRegionPresetSpacing(this.store.state.draft.regionalPrompt, spacing);
+      this.store.updateDraft({ regionalPrompt: regional }, false);
+      const output = this.root.querySelector<HTMLOutputElement>("[data-region-spacing-output]");
+      const percent = Math.round(regional.spacing * 100);
+      if (output) output.value = percent < 0 ? `Overlap ${Math.abs(percent)}%` : percent > 0 ? `Gap ${percent}%` : "Touching";
+      syncRegionGeometryPreview(regional);
+      syncSyntaxPreview();
+    });
+    this.root.querySelector<HTMLInputElement>("[data-region-spacing]")?.addEventListener("change", () => this.store.saveDraft());
+
+    const stage = this.root.querySelector<HTMLElement>("[data-region-stage]");
+    let activePointer: {
+      id: number;
+      index: number;
+      handle: RegionResizeHandle | null;
+      startX: number;
+      startY: number;
+      startRegion: RegionalPromptDraft["regions"][number];
+      stageRect: DOMRect;
+    } | null = null;
+    const finishPointer = (event: PointerEvent) => {
+      if (!activePointer || event.pointerId !== activePointer.id) return;
+      if (stage?.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
+      activePointer = null;
+      this.store.saveDraft();
+    };
+    stage?.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const target = event.target as HTMLElement;
+      const resizeTarget = target.closest<HTMLElement>("[data-region-resize]");
+      const dragTarget = target.closest<HTMLElement>("[data-region-drag]");
+      if (!resizeTarget && !dragTarget) return;
+      const resizeParts = resizeTarget?.dataset.regionResize?.split(":") ?? [];
+      const index = Number(resizeTarget ? resizeParts[0] : dragTarget?.dataset.regionDrag);
+      const handle = resizeTarget ? resizeParts[1] as RegionResizeHandle : null;
+      const region = this.store.state.draft.regionalPrompt.regions[index];
+      if (!region || !Number.isFinite(index)) return;
+      selectRegion(index);
+      event.preventDefault();
+      stage.setPointerCapture(event.pointerId);
+      activePointer = {
+        id: event.pointerId,
+        index,
+        handle,
+        startX: event.clientX,
+        startY: event.clientY,
+        startRegion: { ...region },
+        stageRect: stage.getBoundingClientRect(),
+      };
+    });
+    stage?.addEventListener("pointermove", (event) => {
+      if (!activePointer || event.pointerId !== activePointer.id) return;
+      event.preventDefault();
+      const dx = (event.clientX - activePointer.startX) / Math.max(1, activePointer.stageRect.width);
+      const dy = (event.clientY - activePointer.startY) / Math.max(1, activePointer.stageRect.height);
+      const nextRegion = activePointer.handle
+        ? resizeRegionGeometry(activePointer.startRegion, activePointer.handle, dx, dy)
+        : moveRegionGeometry(activePointer.startRegion, dx, dy);
+      const regional = updateRegional((next) => {
+        next.customGeometry = true;
+        next.regions[activePointer!.index] = nextRegion;
+      });
+      syncRegionGeometryPreview(regional);
+    });
+    stage?.addEventListener("pointerup", finishPointer);
+    stage?.addEventListener("pointercancel", finishPointer);
+    stage?.addEventListener("lostpointercapture", () => {
+      if (activePointer) {
+        activePointer = null;
+        this.store.saveDraft();
+      }
+    });
+    this.root.querySelectorAll<HTMLElement>("[data-region-preview]").forEach((box) => box.addEventListener("focus", () => selectRegion(Number(box.dataset.regionPreview))));
+    this.root.querySelectorAll<HTMLElement>("[data-region-card]").forEach((card) => card.addEventListener("focusin", () => selectRegion(Number(card.dataset.regionCard))));
+
+    this.root.querySelector<HTMLElement>("[data-action='clear-regions']")?.addEventListener("click", () => {
+      this.regionEditorSelectedIndex = 0;
+      this.store.updateDraft({ regionalPrompt: emptyRegionalPromptDraft() });
+      this.render();
+    });
+
+    this.root.querySelectorAll<HTMLInputElement>("[data-region-name]").forEach((input) => input.addEventListener("input", () => {
+      const index = Number(input.dataset.regionName);
+      updateRegional((regional) => {
+        const region = regional.regions[index];
+        if (region) region.name = input.value;
+      });
+      const label = this.root.querySelector<HTMLElement>(`[data-region-preview="${index}"] span`);
+      if (label) label.textContent = input.value.trim() || `Region ${index + 1}`;
+    }));
+
+    this.root.querySelectorAll<HTMLTextAreaElement>("[data-region-prompt]").forEach((textarea) => textarea.addEventListener("input", () => {
+      const index = Number(textarea.dataset.regionPrompt);
+      updateRegional((regional) => {
+        const region = regional.regions[index];
+        if (region) region.prompt = textarea.value;
+      });
+    }));
+
+    this.root.querySelectorAll<HTMLInputElement>("[data-region-strength]").forEach((input) => {
+      const commit = () => {
+        const index = Number(input.dataset.regionStrength);
+        const value = Number.isFinite(input.valueAsNumber) ? Math.max(0, input.valueAsNumber) : 1;
+        updateRegional((regional) => {
+          const region = regional.regions[index];
+          if (region) region.strength = value;
+        });
+      };
+      input.addEventListener("input", commit);
+      input.addEventListener("change", () => {
+        commit();
+        this.store.saveDraft();
+      });
+    });
+
+    this.root.querySelectorAll<HTMLInputElement>("[data-region-enabled]").forEach((input) => input.addEventListener("change", () => {
+      const index = Number(input.dataset.regionEnabled);
+      updateRegional((regional) => {
+        const region = regional.regions[index];
+        if (region) region.enabled = input.checked;
+      }, true);
+      this.render();
+    }));
+
+    this.root.querySelector<HTMLInputElement>("[data-region-background-enabled]")?.addEventListener("change", (event) => {
+      const checked = (event.currentTarget as HTMLInputElement).checked;
+      updateRegional((regional) => { regional.backgroundEnabled = checked; }, true);
+      this.render();
+    });
+
+    this.root.querySelector<HTMLTextAreaElement>("[data-region-background-prompt]")?.addEventListener("input", (event) => {
+      const value = (event.currentTarget as HTMLTextAreaElement).value;
+      updateRegional((regional) => { regional.backgroundPrompt = value; });
+    });
+  }
+
   private bindPresetStackControls(): void {
     this.root.querySelector<HTMLSelectElement>("#preset-select")?.addEventListener("change", (event) => {
       const select = event.currentTarget as HTMLSelectElement;
@@ -4538,6 +4828,10 @@ export class StudioApp {
       this.presetReorderModalOpen = true;
       this.render();
     });
+    this.root.querySelectorAll<HTMLElement>("[data-preset-apply]").forEach((button) => button.addEventListener("click", () => {
+      const index = Number(button.dataset.presetApply);
+      void this.applyPresetFromStack(index);
+    }));
     this.root.querySelectorAll<HTMLElement>("[data-preset-edit]").forEach((button) => button.addEventListener("click", () => {
       const index = Number(button.dataset.presetEdit);
       const title = this.store.state.draft.activePresets[index];
@@ -5447,7 +5741,7 @@ export class StudioApp {
     const hasVariation = variationSeedRaw != null && variationSeed >= -1;
     const source: Record<string, unknown> = Object.keys(params).length ? params : request;
     const normalize = (key: string) => key.toLowerCase().replace(/[^a-z0-9]+/g, "");
-    const core = new Set(["prompt", "negativeprompt", "model", "width", "height", "steps", "cfgscale", "seed", "variationseed", "variationseedstrength", "sampler", "scheduler", "scheduletype", "images", "loras", "loraweights", "initimage", "initimagecreativity"]);
+    const core = new Set(["prompt", "negativeprompt", "model", "width", "height", "steps", "cfgscale", "seed", "variationseed", "variationseedstrength", "sampler", "scheduler", "scheduletype", "images", "loras", "loraweights", "initimage", "initimagecreativity", "studioregionalprompt"]);
     // Wildcard Seed is a resolved/transient prompt-randomization seed. Copying it out of final
     // image metadata into persistent advanced params makes every later <random:...> / wildcard
     // expansion repeat identically even while the main generation seed changes. The resolved
@@ -5524,7 +5818,8 @@ export class StudioApp {
       .filter((item) => item.enabled && item.useTrigger)
       .map((item) => String(this.resolveLora(item)?.trigger_phrase ?? "").replaceAll(";", ",").trim())
       .filter(Boolean);
-    return [presets.join(", "), triggers.join(", "), draft.prompt].filter(Boolean).join(", ");
+    const basePrompt = [presets.join(", "), triggers.join(", "), draft.prompt].filter(Boolean).join(", ");
+    return compileRegionalPrompt(basePrompt, draft.regionalPrompt);
   }
 
   private wireGenerationRequest(request: SwarmGenerationRequest): SwarmGenerationRequest {
@@ -5650,6 +5945,7 @@ export class StudioApp {
   private requestSnapshot(request: SwarmGenerationRequest, draft: GenerationDraft): Record<string, unknown> {
     return {
       ...request,
+      studioRegionalPrompt: cloneRegionalPromptDraft(draft.regionalPrompt),
       initimage: request.initimage ? `[init image: ${draft.initImageName || "embedded image"}]` : undefined,
     };
   }
@@ -5662,8 +5958,8 @@ export class StudioApp {
     }
     const draft = draftOverride ? this.cloneDraftForApproval(draftOverride) : this.readDraftFromForm();
     this.store.updateDraft(draft);
-    if (!draft.prompt.trim() && !draft.activePresets.length) {
-      this.notify("Give Swarm a prompt or preset first, bestie.", "error");
+    if (!draft.prompt.trim() && !draft.activePresets.length && !hasRegionalPromptContent(draft.regionalPrompt)) {
+      this.notify("Give Swarm a global prompt, preset, or regional prompt first, bestie.", "error");
       return;
     }
     if (!draft.model) {
@@ -5887,7 +6183,7 @@ export class StudioApp {
       "loras", "loraweights", "initimage", "initimagecreativity", "maskimage", "maskbehavior",
       "maskshrinkgrow", "maskblur", "maskgrow", "maskcompositeunthresholded",
       "initimagerecompositemask", "useinpaintingencode", "nointernalspecialhandling",
-      "forwardswarmdata", "forwardrawbackenddata", "wildcardseed"
+      "forwardswarmdata", "forwardrawbackenddata", "wildcardseed", "studioregionalprompt"
     ]);
     const source = Object.keys(params).length ? params : request;
     const extraParams = Object.fromEntries(Object.entries(source).filter(([key]) => {
