@@ -13,14 +13,23 @@ export interface ConnectionSettings {
   authToken: string;
 }
 
+export type StudioThemeFont = "system" | "serif" | "rounded" | "mono" | "comic";
+
 export interface StudioTheme {
   accent: string;
   accentAlt: string;
   background: string;
   panel: string;
+  surfaceAlt: string;
   text: string;
   muted: string;
   outline: string;
+  success: string;
+  warning: string;
+  danger: string;
+  dangerSurface: string;
+  titleFont: StudioThemeFont;
+  subtitleFont: StudioThemeFont;
   radius: number;
   controlRadius: number;
   borderStrength: number;

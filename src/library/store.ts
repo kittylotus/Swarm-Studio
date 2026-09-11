@@ -1,5 +1,6 @@
 import { createId } from "../id";
 import { emptyRegionalPromptDraft, normalizeRegionalPromptDraft } from "../regions";
+import { defaultTheme, normalizeStudioTheme } from "../theme";
 import type {
   ConnectionSettings,
   FolderRecord,
@@ -80,19 +81,7 @@ const defaultUi: StudioUiState = {
   settingsPane: "connection",
 };
 
-const defaultTheme: StudioTheme = {
-  accent: "#c3a5ff",
-  accentAlt: "#ffb5df",
-  background: "#100d15",
-  panel: "#1b1622",
-  text: "#f4eef8",
-  muted: "#aaa0b4",
-  outline: "#e8dfff",
-  radius: 14,
-  controlRadius: 10,
-  borderStrength: 0.14,
-  surfaceOpacity: 0.92,
-};
+
 
 function cloneLoraStack(items: LoraStackItem[] | undefined): LoraStackItem[] {
   if (!Array.isArray(items)) return [];
@@ -198,21 +187,14 @@ function safeParse(value: string | null): PersistedStudioState {
             ? parsed.ui?.settingsPane as StudioUiState["settingsPane"]
             : "connection",
       },
-      theme: {
-        ...defaultTheme,
-        ...(parsed.theme ?? {}),
-        radius: Number.isFinite(Number(parsed.theme?.radius)) ? Number(parsed.theme?.radius) : defaultTheme.radius,
-        controlRadius: Number.isFinite(Number(parsed.theme?.controlRadius)) ? Number(parsed.theme?.controlRadius) : defaultTheme.controlRadius,
-        borderStrength: Number.isFinite(Number(parsed.theme?.borderStrength)) ? Number(parsed.theme?.borderStrength) : defaultTheme.borderStrength,
-        surfaceOpacity: Number.isFinite(Number(parsed.theme?.surfaceOpacity)) ? Number(parsed.theme?.surfaceOpacity) : defaultTheme.surfaceOpacity,
-      },
+      theme: normalizeStudioTheme(parsed.theme),
       themeProfiles: Array.isArray(parsed.themeProfiles) ? parsed.themeProfiles.flatMap((profile) => {
         if (!profile || typeof profile.name !== "string") return [];
         const raw = profile as ThemeProfile;
         return [{
           id: typeof raw.id === "string" && raw.id ? raw.id : createId(),
           name: raw.name,
-          theme: { ...defaultTheme, ...(raw.theme ?? {}) },
+          theme: normalizeStudioTheme(raw.theme),
           createdAt: Number(raw.createdAt) || Date.now(),
           updatedAt: Number(raw.updatedAt) || Date.now(),
         }];
@@ -384,7 +366,7 @@ export class StudioStore {
   }
 
   updateTheme(patch: Partial<StudioTheme>): void {
-    this.state.theme = { ...this.state.theme, ...patch };
+    this.state.theme = normalizeStudioTheme({ ...this.state.theme, ...patch });
     this.save();
   }
 

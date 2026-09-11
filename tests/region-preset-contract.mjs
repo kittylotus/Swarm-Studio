@@ -153,6 +153,10 @@ assert(app.includes('regionOverlapAreas(regional.regions)'), 'Region editor must
 assert(app.includes('compileRegionalPrompt(basePrompt, draft.regionalPrompt)'), 'Create generation must compile structured regional state at request time.');
 assert(app.includes('studioRegionalPrompt: cloneRegionalPromptDraft(draft.regionalPrompt)'), 'Output request snapshots must preserve structured regional state.');
 assert(!app.includes('Split the prompt, not your patience.'), 'Partypooper pass must remove the regional editor snark tagline.');
+const promptPanelIndex = app.indexOf('<section class="region-prompt-panel">');
+const backgroundCardIndex = app.indexOf('<article class="region-background-card');
+const syntaxPreviewIndex = app.indexOf('<details class="region-syntax-preview region-syntax-preview--prompts">');
+assert(promptPanelIndex >= 0 && backgroundCardIndex > promptPanelIndex && syntaxPreviewIndex > backgroundCardIndex, 'Swarm syntax preview must live under Regional prompts, after Background.');
 assert(css.includes('regional prompting: preset geometry, signed spacing, and freeform editing'), 'Regional freeform editor styles are missing.');
 assert(css.includes('.region-spacing-control') && css.includes('.region-resize-handle') && css.includes('.region-preview-overlap') && css.includes('.region-prompt-card.is-selected'), 'Regional signed-spacing/freeform UI contract is incomplete.');
 assert(css.includes('display:block;\n    overflow-x:hidden;\n    overflow-y:auto;'), 'Mobile region editor must use normal block flow so preset content cannot paint over the prompt panel.');

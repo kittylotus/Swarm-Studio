@@ -1,4 +1,5 @@
 import { createId } from "./id";
+import { builtInThemes, isLightTheme, themeFontOptions, themeFontStack } from "./theme";
 import { StudioStore, folderIds, PERSISTED_OUTPUT_CACHE_LIMIT } from "./library/store";
 import { normalizeLibraryFolderSelection, shouldAutoSyncLibraryHistory } from "./library/session";
 import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
@@ -64,7 +65,27 @@ const asNumber = (value: string, fallback: number) => Number.isFinite(Number(val
 const ratioChoices = ["1:1", "2:3", "3:4", "4:5", "9:16"];
 const seedToggleSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10a5 5 0 0 1 5 5v1"/><path d="m16 10 3 3 3-3"/><path d="M20 17H10a5 5 0 0 1-5-5v-1"/><path d="m8 14-3-3-3 3"/></svg>`;
 const syntaxSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4 4 12l4 8"/><path d="m16 4 4 8-4 8"/><path d="m14 3-4 18"/></svg>`;
-const regionsSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="8" height="16" rx="1.5"/><rect x="13" y="4" width="8" height="16" rx="1.5"/></svg>`;
+const regionsSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>`;
+const clearPromptSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 21-4-4L15.5 4.5a2.1 2.1 0 0 1 3 0l1 1a2.1 2.1 0 0 1 0 3L7 21Z"/><path d="m11 9 5 5"/><path d="M7 21h13"/></svg>`;
+const tabCreateSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.4 4.2a2 2 0 0 1-1.3 1.3L5 10l4.3 1.5a2 2 0 0 1 1.3 1.3L12 17l1.4-4.2a2 2 0 0 1 1.3-1.3L19 10l-4.3-1.5a2 2 0 0 1-1.3-1.3Z"/><path d="M5 3v3M3.5 4.5h3M19 17v4M17 19h4"/></svg>`;
+const tabLibrarySvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>`;
+const tabIdentitiesSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>`;
+const tabModelsSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4.5-8 4.5-8-4.5Z"/><path d="m4 12 8 4.5 8-4.5"/><path d="m4 16.5 8 4.5 8-4.5"/></svg>`;
+const tabLogsSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="m7 9 2 2-2 2"/><path d="M12 14h5"/></svg>`;
+const tabSettingsSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="16" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>`;
+const tabVisualsSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 15-4-4L5 20"/></svg>`;
+const tabGenerationSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5L8 21l-5-5Z"/><path d="m13 6 5 5"/><path d="M6 3v3M4.5 4.5h3M20 16v4M18 18h4"/></svg>`;
+const tabOutputSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m3 15 5-5 4 4 3-3 6 6"/></svg>`;
+const tabTuneSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M4 12h4M12 12h8"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/><circle cx="10" cy="12" r="2"/></svg>`;
+const tabSearchSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>`;
+const tabConnectionSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.6a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1"/></svg>`;
+const tabBackendSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01"/></svg>`;
+const tabAppearanceSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const tabJumpSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>`;
+const reuseSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
+const initImageSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m3 16 5-5 4 4 3-3 6 6"/><path d="M18 2v6M15 5h6"/></svg>`;
+const folderSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>`;
+const heartSvg = `<svg class="action-svg heart-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8Z"/></svg>`;
 const plusSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;
 const saveSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21h14"/><path d="M19 21V7.8a1 1 0 0 0-.3-.7l-2.8-2.8a1 1 0 0 0-.7-.3H7a2 2 0 0 0-2 2v15"/><path d="M9 21v-6h6v6"/><path d="M9 4v5h5"/></svg>`;
 const importSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`;
@@ -112,12 +133,7 @@ function round64(value: number): number {
   return clamp(Math.max(64, Math.round(value / 64) * 64), 64, 4096);
 }
 
-const builtInThemes = [
-  { id: "studio", name: "Studio", theme: { accent: "#c3a5ff", accentAlt: "#ffb5df", background: "#100d15", panel: "#1b1622", text: "#f4eef8", muted: "#aaa0b4", outline: "#e8dfff", radius: 14, controlRadius: 10, borderStrength: .14, surfaceOpacity: .92 } },
-  { id: "mint", name: "Mint terminal", theme: { accent: "#86e6b1", accentAlt: "#99bfff", background: "#0b100e", panel: "#111a16", text: "#ecfff5", muted: "#95aa9e", outline: "#b8f4d2", radius: 10, controlRadius: 8, borderStrength: .18, surfaceOpacity: .94 } },
-  { id: "bubblegum", name: "Bubbly McBubbles", theme: { accent: "#ff9ed8", accentAlt: "#bca2ff", background: "#17101a", panel: "#271a2c", text: "#fff1fa", muted: "#c7a9bc", outline: "#ffd4ee", radius: 25, controlRadius: 18, borderStrength: .2, surfaceOpacity: .9 } },
-  { id: "minimal", name: "Don't touch me", theme: { accent: "#d8d8dc", accentAlt: "#d8d8dc", background: "#09090b", panel: "#101012", text: "#f3f3f4", muted: "#8f8f95", outline: "#b8b8be", radius: 2, controlRadius: 2, borderStrength: .1, surfaceOpacity: .98 } },
-] as const;
+
 
 interface NativeImageCacheEntry {
   url: string;
@@ -851,19 +867,28 @@ export class StudioApp {
 
   private applyTheme(): void {
     const theme = this.store.state.theme;
-    const style = document.documentElement.style;
+    const root = document.documentElement;
+    const style = root.style;
     style.setProperty("--purple", theme.accent);
     style.setProperty("--pink", theme.accentAlt);
     style.setProperty("--bg", theme.background);
     style.setProperty("--panel-base", theme.panel);
+    style.setProperty("--surface-alt", theme.surfaceAlt);
     style.setProperty("--text", theme.text);
     style.setProperty("--muted", theme.muted);
     style.setProperty("--outline", theme.outline);
+    style.setProperty("--success", theme.success);
+    style.setProperty("--warning", theme.warning);
+    style.setProperty("--danger", theme.danger);
+    style.setProperty("--danger-surface", theme.dangerSurface);
+    style.setProperty("--font-title", themeFontStack(theme.titleFont));
+    style.setProperty("--font-subtitle", themeFontStack(theme.subtitleFont));
     style.setProperty("--theme-radius", `${clamp(theme.radius, 0, 32)}px`);
     style.setProperty("--control-radius", `${clamp(theme.controlRadius, 0, 24)}px`);
     style.setProperty("--border-strength", `${clamp(theme.borderStrength, 0, 0.5) * 100}%`);
     style.setProperty("--border-strength-strong", `${clamp(theme.borderStrength * 1.8, 0, 0.85) * 100}%`);
     style.setProperty("--surface-opacity", `${clamp(theme.surfaceOpacity, 0.45, 1) * 100}%`);
+    root.style.colorScheme = isLightTheme(theme.background) ? "light" : "dark";
   }
 
   private serverSettingKey(...needles: string[]): string | undefined {
@@ -1468,23 +1493,23 @@ export class StudioApp {
             <span><b>Swarm</b><small>STUDIO</small></span>
           </button>
           <nav class="utility-nav utility-nav--desktop" aria-label="Studio sections">
-            ${this.navButton("create", "Create", "✦")}
-            ${this.navButton("library", "Library", "▦")}
-            ${this.navButton("identities", "Identities", "♡")}
-            ${this.navButton("models", "Models", "◇")}
-            ${this.navButton("logs", "Logs", "⌁")}
+            ${this.navButton("create", "Create", tabCreateSvg)}
+            ${this.navButton("library", "Library", tabLibrarySvg)}
+            ${this.navButton("identities", "Identities", tabIdentitiesSvg)}
+            ${this.navButton("models", "Models", tabModelsSvg)}
+            ${this.navButton("logs", "Logs", tabLogsSvg)}
           </nav>
           <nav class="utility-nav utility-nav--mobile" aria-label="Studio areas">
-            ${this.mobileSectionButton("create", "Create", "✦")}
-            ${this.mobileSectionButton("visuals", "Visuals", "◇")}
-            ${this.mobileSectionButton("library", "Library", "▦")}
-            ${this.mobileSectionButton("settings", "Settings", "⚙")}
+            ${this.mobileSectionButton("create", "Create", tabCreateSvg)}
+            ${this.mobileSectionButton("visuals", "Visuals", tabVisualsSvg)}
+            ${this.mobileSectionButton("library", "Library", tabLibrarySvg)}
+            ${this.mobileSectionButton("settings", "Settings", tabSettingsSvg)}
           </nav>
           <div class="utility-spacer"></div>
           <div class="utility-readout" title="Current checkpoint">${escapeHtml(prettyName(this.store.state.draft.model) || "No checkpoint")}</div>
           <div class="utility-readout utility-readout--small">${this.store.state.outputs.length} images</div>
           <button class="status-chip" id="connection-status" data-action="connect"></button>
-          <button class="icon-button settings-desktop-button ${this.view === "settings" ? "is-active" : ""}" data-nav="settings" aria-label="Settings" title="Settings">⚙</button>
+          <button class="icon-button settings-desktop-button ${this.view === "settings" ? "is-active" : ""}" data-nav="settings" aria-label="Settings" title="Settings">${tabSettingsSvg}</button>
           <button class="icon-button mobile-nav" data-action="mobile-menu" aria-label="Open navigation">☰</button>
         </header>
         <main class="main-area ${this.libraryBrowseDockActive() ? "has-library-browse-dock" : ""}">
@@ -1587,35 +1612,35 @@ export class StudioApp {
     if (section === "create") {
       const pane = this.store.state.ui.mobileCreatePane;
       count = 3;
-      tabs = `<button class="${pane === "generation" ? "is-active" : ""}" data-mobile-pane="generation"><span>⌁</span>Generation</button>
-        <button class="${pane === "output" ? "is-active" : ""}" data-mobile-pane="output"><span>✦</span>Output</button>
-        <button class="${pane === "tune" ? "is-active" : ""}" data-mobile-pane="tune"><span>◇</span>Tune</button>`;
+      tabs = `<button class="${pane === "generation" ? "is-active" : ""}" data-mobile-pane="generation"><span>${tabGenerationSvg}</span>Generation</button>
+        <button class="${pane === "output" ? "is-active" : ""}" data-mobile-pane="output"><span>${tabOutputSvg}</span>Output</button>
+        <button class="${pane === "tune" ? "is-active" : ""}" data-mobile-pane="tune"><span>${tabTuneSvg}</span>Tune</button>`;
     } else if (section === "visuals") {
       count = 3;
-      tabs = `<button class="${this.view === "identities" ? "is-active" : ""}" data-nav="identities"><span>♡</span>Identities</button>
-        <button class="${this.view === "models" ? "is-active" : ""}" data-nav="models"><span>◇</span>Models</button>
-        <button class="${this.view === "civitai" ? "is-active" : ""}" data-nav="civitai"><span>⌕</span>CivitAI</button>`;
+      tabs = `<button class="${this.view === "identities" ? "is-active" : ""}" data-nav="identities"><span>${tabIdentitiesSvg}</span>Identities</button>
+        <button class="${this.view === "models" ? "is-active" : ""}" data-nav="models"><span>${tabModelsSvg}</span>Models</button>
+        <button class="${this.view === "civitai" ? "is-active" : ""}" data-nav="civitai"><span>${tabSearchSvg}</span>CivitAI</button>`;
     } else if (section === "library") {
-      tabs = `<button class="is-active" data-nav="library"><span>▦</span>Library</button>`;
+      tabs = `<button class="is-active" data-nav="library"><span>${tabLibrarySvg}</span>Library</button>`;
     } else {
       count = 4;
       const settingsPane = this.store.state.ui.settingsPane;
-      tabs = `<button class="${this.view === "logs" ? "is-active" : ""}" data-mobile-settings="logs"><span>⌁</span>Logs</button>
-        <button class="${this.view === "settings" && settingsPane === "connection" ? "is-active" : ""}" data-mobile-settings="connection"><span>●</span>Connection</button>
-        <button class="${this.view === "settings" && settingsPane === "backend" ? "is-active" : ""}" data-mobile-settings="backend"><span>⌘</span>Backends</button>
-        <button class="${this.view === "settings" && settingsPane === "appearance" ? "is-active" : ""}" data-mobile-settings="appearance"><span>✦</span>Appearance</button>`;
+      tabs = `<button class="${this.view === "logs" ? "is-active" : ""}" data-mobile-settings="logs"><span>${tabLogsSvg}</span>Logs</button>
+        <button class="${this.view === "settings" && settingsPane === "connection" ? "is-active" : ""}" data-mobile-settings="connection"><span>${tabConnectionSvg}</span>Connection</button>
+        <button class="${this.view === "settings" && settingsPane === "backend" ? "is-active" : ""}" data-mobile-settings="backend"><span>${tabBackendSvg}</span>Backends</button>
+        <button class="${this.view === "settings" && settingsPane === "appearance" ? "is-active" : ""}" data-mobile-settings="appearance"><span>${tabAppearanceSvg}</span>Appearance</button>`;
     }
     return `<div class="mobile-context-tabs mobile-context-tabs--${count}">${tabs}</div>
-      <button class="mobile-quicknav-trigger" type="button" data-action="quick-nav" aria-label="Quick navigation" aria-expanded="${this.quickNavOpen ? "true" : "false"}"><span>⌘</span><em>Jump</em></button>`;
+      <button class="mobile-quicknav-trigger" type="button" data-action="quick-nav" aria-label="Quick navigation" aria-expanded="${this.quickNavOpen ? "true" : "false"}"><span>${tabJumpSvg}</span><em>Jump</em></button>`;
   }
 
   private renderQuickNavOverlay(): string {
     const current = this.mobileSection();
     const items: Array<{ id: "create" | "visuals" | "library" | "settings"; label: string; icon: string; hint: string }> = [
-      { id: "create", label: "Create", icon: "✦", hint: "Generation · Output · Tune" },
-      { id: "visuals", label: "Visuals", icon: "◇", hint: "Identities · Models · CivitAI" },
-      { id: "library", label: "Library", icon: "▦", hint: "Outputs and folders" },
-      { id: "settings", label: "Settings", icon: "⚙", hint: "Logs · Connection · Backends · Appearance" },
+      { id: "create", label: "Create", icon: tabCreateSvg, hint: "Generation · Output · Tune" },
+      { id: "visuals", label: "Visuals", icon: tabVisualsSvg, hint: "Identities · Models · CivitAI" },
+      { id: "library", label: "Library", icon: tabLibrarySvg, hint: "Outputs and folders" },
+      { id: "settings", label: "Settings", icon: tabSettingsSvg, hint: "Logs · Connection · Backends · Appearance" },
     ];
     return `<div class="quicknav-overlay ${this.quickNavOpen ? "is-open" : ""}" data-quicknav-overlay ${this.quickNavOpen ? "" : "hidden"}>
       <div class="quicknav-copy"><b>Quick navigation</b><span>Slide to a destination and release</span></div>
@@ -1865,7 +1890,6 @@ export class StudioApp {
             </div>
             <div class="region-preview-shell">${preview}</div>
             <div class="region-preview-legend"><span><i class="legend-region"></i> Region</span><span><i class="legend-overlap"></i> Overlap</span><span><i class="legend-unclaimed"></i> Unclaimed</span></div>
-            <details class="region-syntax-preview"><summary>Swarm syntax preview</summary><pre data-region-syntax-preview>${escapeHtml(syntax || "Choose a layout and add a regional prompt to preview syntax.")}</pre></details>
           </section>
           <section class="region-prompt-panel">
             <div class="region-editor-heading"><div><b>Regional prompts</b><small>The global positive stays in the main composer. These prompts only apply inside their regions.</small></div></div>
@@ -1877,6 +1901,7 @@ export class StudioApp {
               <div class="region-card-head"><label class="region-enabled"><input type="checkbox" data-region-background-enabled ${regional.backgroundEnabled ? "checked" : ""}/><span>Background</span></label><small>Only areas not claimed by an explicit region.</small></div>
               <textarea rows="3" data-region-background-prompt placeholder="Background-only prompt…" ${regional.backgroundEnabled ? "" : "disabled"}>${escapeHtml(regional.backgroundPrompt)}</textarea>
             </article>
+            <details class="region-syntax-preview region-syntax-preview--prompts"><summary>Swarm syntax preview</summary><pre data-region-syntax-preview>${escapeHtml(syntax || "Choose a layout and add a regional prompt to preview syntax.")}</pre></details>
           </section>
         </div>
         <div class="form-actions region-editor-actions"><button type="button" class="danger-soft" data-action="clear-regions" ${regional.regions.length || regional.backgroundPrompt ? "" : "disabled"}>Clear regions</button><button type="button" class="primary-button" data-action="close-region-editor">Done</button></div>
@@ -2192,7 +2217,7 @@ export class StudioApp {
   }
 
   private renderLoraBatchRail(): string {
-    if (this.view !== "models" || !this.loraBatchMode) return "";
+    if (this.view !== "models" || !this.loraBatchMode || this.loraMoveModalOpen || this.loraDeleteModalOpen) return "";
     const selectedCount = this.loraBatchSelected.size;
     const search = this.loraSearch.trim().toLowerCase();
     const source = this.loraOrphanMode ? this.orphanedLoras() : (this.loraShowNonMatching ? this.loras : this.compatibleLoras());
@@ -2200,7 +2225,7 @@ export class StudioApp {
       .filter((model) => this.loraInCurrentFolder(model))
       .filter((model) => !search || [model.name, model.title, model.author, model.description, model.trigger_phrase, ...(model.tags ?? [])].filter(Boolean).join(" ").toLowerCase().includes(search))
       .length;
-    return `<div class="lora-batch-bar lora-batch-rail lora-batch-rail--root"><span><b>${selectedCount}</b> selected</span><div><button class="ghost-button" data-action="select-visible-loras" ${visibleCount ? "" : "disabled"}>Select visible</button><button class="ghost-button" data-action="clear-lora-selection" ${selectedCount ? "" : "disabled"}>Clear</button><button class="danger-soft" data-action="open-lora-delete" ${selectedCount ? "" : "disabled"}>Delete</button><button class="primary-button" data-action="open-lora-move" ${selectedCount ? "" : "disabled"}>Move to folder</button></div></div>`;
+    return `<div class="lora-batch-bar lora-batch-rail lora-batch-rail--root"><div class="lora-batch-rail-summary"><span><b>${selectedCount}</b> selected</span><button class="ghost-button lora-batch-done" data-action="finish-lora-batch">Done</button></div><div><button class="ghost-button" data-action="select-visible-loras" ${visibleCount ? "" : "disabled"}>Select visible</button><button class="ghost-button" data-action="clear-lora-selection" ${selectedCount ? "" : "disabled"}>Clear</button><button class="danger-soft" data-action="open-lora-delete" ${selectedCount ? "" : "disabled"}>Delete</button><button class="primary-button" data-action="open-lora-move" ${selectedCount ? "" : "disabled"}>Move to folder</button></div></div>`;
   }
 
   private renderCreate(): string {
@@ -2285,7 +2310,7 @@ export class StudioApp {
           <div class="output-stage" id="output-stage">${this.outputStageMarkup()}</div>
           <div class="prompt-dock">
             <div id="generation-review-strip-host">${this.generationApprovalStripMarkup()}</div>
-            <div class="prompt-tabs"><span>Prompt</span><button class="ghost-button region-toggle ${hasRegionalPromptContent(draft.regionalPrompt) ? "is-active" : ""}" data-action="open-region-editor" title="Regional prompting">${regionsSvg}<em>Regions${draft.regionalPrompt.regions.length ? ` · ${draft.regionalPrompt.regions.length}` : ""}</em></button><button class="ghost-button syntax-toggle" data-action="toggle-syntax" title="Prompt syntax">${syntaxSvg}<em>Syntax</em></button><button class="ghost-button" data-action="clear-draft">Clear</button></div>
+            <div class="prompt-tabs"><span>Prompt</span><button class="ghost-button region-toggle ${hasRegionalPromptContent(draft.regionalPrompt) ? "is-active" : ""}" data-action="open-region-editor" title="Regional prompting">${regionsSvg}<em>Regions${draft.regionalPrompt.regions.length ? ` · ${draft.regionalPrompt.regions.length}` : ""}</em></button><button class="ghost-button syntax-toggle" data-action="toggle-syntax" title="Prompt syntax">${syntaxSvg}<em>Syntax</em></button><button class="ghost-button prompt-clear" data-action="clear-draft" title="Clear prompt">${clearPromptSvg}<em>Clear</em></button></div>
             ${this.syntaxMenuMarkup()}
             <label class="field prompt-positive"><textarea id="prompt" placeholder="Describe the image…">${escapeHtml(draft.prompt)}</textarea></label>
             <label class="field prompt-negative"><span>Negative</span><textarea id="negative-prompt" rows="2" placeholder="Things to avoid…">${escapeHtml(draft.negativePrompt)}</textarea></label>
@@ -2529,7 +2554,7 @@ export class StudioApp {
     const genStep = clamp(this.generationStep, 0, genSteps);
     const stepPercent = genStep / genSteps;
     const caption = this.generating
-      ? `<div class="output-caption"><span>${escapeHtml(this.generationMessage || "Generating")}</span><span>${genStep ? `step ${genStep}/${genSteps}` : "starting"}</span></div>`
+      ? `<div class="output-caption"><span>${genStep ? `Step ${genStep} / ${genSteps}` : escapeHtml(this.generationMessage || "Starting…")}</span></div>`
       : pending
         ? `<div class="output-caption"><span>Unsaved result</span><span>${pending.draft.width}×${pending.draft.height}</span><span>seed ${pending.seed}</span></div>`
         : latest
@@ -3021,12 +3046,12 @@ export class StudioApp {
     return `
       <article class="image-card ${this.librarySelected.has(output.id) ? "is-selected" : ""}" data-output-card="${output.id}">
         ${this.librarySelectMode ? `<button class="output-select-check" data-select-output="${output.id}" aria-label="${this.librarySelected.has(output.id) ? "Deselect" : "Select"} output">${this.librarySelected.has(output.id) ? "✓" : ""}</button>` : ""}
-        <div class="image-card-media-wrap"><button class="image-card-media" ${this.librarySelectMode ? `data-select-output="${output.id}"` : `data-inspect-output="${output.id}"`}><img ${this.swarmImageAttributes(this.outputImageUrl(output))} alt="${escapeHtml(output.prompt || "Swarm output")}" loading="lazy" /></button>${this.librarySelectMode ? "" : `<button class="star-button ${output.starred ? "is-starred" : ""}" data-star="${output.id}" title="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}" aria-label="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}">${output.starred ? "♥" : "♡"}</button>`}</div>
+        <div class="image-card-media-wrap"><button class="image-card-media" ${this.librarySelectMode ? `data-select-output="${output.id}"` : `data-inspect-output="${output.id}"`}><img ${this.swarmImageAttributes(this.outputImageUrl(output))} alt="${escapeHtml(output.prompt || "Swarm output")}" loading="lazy" /></button>${this.librarySelectMode ? "" : `<button class="star-button ${output.starred ? "is-starred" : ""}" data-star="${output.id}" title="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}" aria-label="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}">${heartSvg}</button>`}</div>
         <div class="image-card-body">
           <b>${escapeHtml(prettyName(output.model) || "Swarm output")}</b>
           <p>${escapeHtml(output.prompt || output.sentPrompt || "No prompt recorded")}</p>
           <div class="card-meta"><span>${output.width || "?"}×${output.height || "?"}</span><span>seed ${output.seed ?? "?"}</span><span>${output.loras?.length ?? 0} LoRAs</span></div>
-          ${this.librarySelectMode ? `<div class="card-actions card-actions--wrap card-actions-placeholder" aria-hidden="true"><button class="ghost-button" disabled>Reuse</button><button class="ghost-button" disabled>Init</button><button class="ghost-button" disabled>Paint</button><select disabled tabindex="-1">${this.store.state.folders.filter((folder) => folder.id !== folderIds.favorites).map((folder) => `<option ${folder.id === output.folderId ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}</select><button class="icon-button danger-icon" disabled>×</button></div>` : `<div class="card-actions card-actions--wrap"><button class="ghost-button" data-reuse-output="${output.id}">Reuse</button><button class="ghost-button" data-init-output="${output.id}">Init</button><button class="ghost-button" data-inpaint-output="${output.id}">Paint</button><select data-move-output="${output.id}" aria-label="Move output to folder">${this.store.state.folders.filter((folder) => folder.id !== folderIds.favorites).map((folder) => `<option value="${folder.id}" ${folder.id === output.folderId ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}</select><button class="icon-button danger-icon" data-delete-output="${output.id}" title="Delete from Swarm history">×</button></div>`}
+          ${this.librarySelectMode ? `<div class="card-actions image-card-actions image-card-actions--placeholder" aria-hidden="true"><div class="image-card-action-buttons"><button class="icon-button image-card-action" disabled>${reuseSvg}</button><button class="icon-button image-card-action" disabled>${initImageSvg}</button><button class="icon-button image-card-action" disabled>${inpaintBrushSvg}</button><button class="icon-button image-card-action danger-icon" disabled>${trashSvg}</button></div><label class="image-card-folder-select">${folderSvg}<select disabled tabindex="-1">${this.store.state.folders.filter((folder) => folder.id !== folderIds.favorites).map((folder) => `<option ${folder.id === output.folderId ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}</select></label></div>` : `<div class="card-actions image-card-actions"><div class="image-card-action-buttons"><button class="icon-button image-card-action" data-reuse-output="${output.id}" title="Reuse settings" aria-label="Reuse settings">${reuseSvg}</button><button class="icon-button image-card-action" data-init-output="${output.id}" title="Use as init image" aria-label="Use as init image">${initImageSvg}</button><button class="icon-button image-card-action" data-inpaint-output="${output.id}" title="Inpaint" aria-label="Inpaint">${inpaintBrushSvg}</button><button class="icon-button image-card-action danger-icon" data-delete-output="${output.id}" title="Delete from Swarm history" aria-label="Delete from Swarm history">${trashSvg}</button></div><label class="image-card-folder-select" title="Move output to folder">${folderSvg}<select data-move-output="${output.id}" aria-label="Move output to folder">${this.store.state.folders.filter((folder) => folder.id !== folderIds.favorites).map((folder) => `<option value="${folder.id}" ${folder.id === output.folderId ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}</select></label></div>`}
         </div>
       </article>`;
   }
@@ -3723,18 +3748,18 @@ export class StudioApp {
             <div class="backend-button-row"><button type="button" class="ghost-button" data-action="fetch-comfy-versions" ${native && backend ? disabled : "disabled"}>Fetch refs</button><button type="button" class="secondary-button" data-action="pin-comfy-version" ${native && backend ? disabled : "disabled"}>Pin ref</button><button type="button" class="secondary-button" data-action="latest-comfy-version" ${native && backend ? disabled : "disabled"}>Latest</button><button type="button" class="secondary-button" data-action="restart-comfy-backend" ${backendDisabled}>Restart</button><button type="button" class="${backend?.enabled ? "danger-soft" : "primary-button"}" data-action="toggle-comfy-backend" ${backendDisabled}>${backend?.enabled ? "Stop Comfy" : "Start Comfy"}</button><button type="button" class="ghost-button" data-action="free-comfy-memory" ${backend?.enabled ? backendDisabled : "disabled"}>Free RAM</button></div>
             <div class="backend-runtime-readout"><span>Launch path</span><b>${escapeHtml(startScript || "Not exposed by backend")}</b><small>${backend ? "This comes from the self-start backend's StartScript setting." : "Connect to discover the self-start backend path."}</small></div>
             <div class="backend-runtime-pillrow">${comfyRuntimePills.map((label) => `<span class="backend-runtime-pill">${label}</span>`).join("")}</div>
-            ${diagnosticFlagActive ? `<div class="backend-warning"><b>Diagnostic flag active</b><span><code>--disable-dynamic-vram</code> is still in ExtraArgs. Your crash test showed Comfy can still implode with it, so leave it for deliberate A/B runs only.</span></div>` : ""}
+            ${diagnosticFlagActive ? `<div class="backend-warning"><b>Dynamic VRAM management is disabled</b><span><code>--disable-dynamic-vram</code> is active in ExtraArgs. Keep it enabled only when it improves stability on this system; it can change memory use and performance.</span></div>` : ""}
             <form id="comfy-backend-policy-form" class="backend-policy-form">
               <label class="field"><span>ExtraArgs</span><input name="comfyExtraArgs" value="${escapeHtml(extraArgs)}" placeholder="Optional Comfy CLI arguments" ${backend ? "" : "disabled"}/><small>Studio preserves unrelated CLI args and owns the known toggles below so you do not have to hand-edit them every time.</small></label>
               <section class="backend-managed-flags">
-                <div class="section-minihead backend-managed-head"><b>Known runtime knobs</b><span>One-click the stuff we just had to excavate from the rubble.</span></div>
-                <div class="backend-button-row backend-preset-row"><button type="button" class="ghost-button" data-action="apply-comfy-runtime-preset" data-preset="known-good" ${backend ? disabled : "disabled"}>Known-good: CUDA 0</button><button type="button" class="ghost-button" data-action="apply-comfy-runtime-preset" data-preset="diagnostic" ${backend ? disabled : "disabled"}>Crash test: + disable dynamic VRAM</button><button type="button" class="ghost-button" data-action="apply-comfy-runtime-preset" data-preset="clear" ${backend ? disabled : "disabled"}>Clear managed flags</button></div>
+                <div class="section-minihead backend-managed-head"><b>Comfy runtime controls</b><span>Managed launch flags for GPU selection and memory/offload troubleshooting. Restart Comfy after changing them.</span></div>
+                <div class="backend-button-row backend-preset-row"><button type="button" class="ghost-button" data-action="apply-comfy-runtime-preset" data-preset="known-good" ${backend ? disabled : "disabled"}>GPU 0 baseline</button><button type="button" class="ghost-button" data-action="apply-comfy-runtime-preset" data-preset="diagnostic" ${backend ? disabled : "disabled"}>VRAM diagnostic</button><button type="button" class="ghost-button" data-action="apply-comfy-runtime-preset" data-preset="clear" ${backend ? disabled : "disabled"}>Reset managed flags</button></div>
                 <div class="field-grid field-grid--2">
-                  <label class="field"><span>CUDA device override</span><input name="comfyCudaDevice" inputmode="numeric" pattern="[0-9]*" value="${escapeHtml(comfyCudaDevice)}" placeholder="blank = backend default" ${backend ? "" : "disabled"}/><small>Useful for Windows / RTX 50 rigs where forcing <code>--cuda-device 0</code> stops the mystery deaths.</small></label>
+                  <label class="field"><span>CUDA device override</span><input name="comfyCudaDevice" inputmode="numeric" pattern="[0-9]*" value="${escapeHtml(comfyCudaDevice)}" placeholder="blank = backend default" ${backend ? "" : "disabled"}/><small>Selects the CUDA GPU Comfy uses. Leave blank for the backend default; <code>0</code> selects the first CUDA device.</small></label>
                   <div class="backend-flag-stack">
-                    <label class="check-row backend-policy-toggle"><input name="comfyDisableDynamicVram" type="checkbox" ${comfyDisableDynamicVram ? "checked" : ""} ${backend ? "" : "disabled"}/><span><b>Disable dynamic VRAM</b><small>Diagnostic only. This was not the long-term fix.</small></span></label>
-                    <label class="check-row backend-policy-toggle"><input name="comfyDisablePinnedMemory" type="checkbox" ${comfyDisablePinnedMemory ? "checked" : ""} ${backend ? "" : "disabled"}/><span><b>Disable pinned memory</b><small>Expose the host-buffer lever without making you remember the flag spelling.</small></span></label>
-                    <label class="check-row backend-policy-toggle"><input name="comfyDisableAsyncOffload" type="checkbox" ${comfyDisableAsyncOffload ? "checked" : ""} ${backend ? "" : "disabled"}/><span><b>Disable async offload</b><small>Another host-buffer troubleshooting lever for Comfy experiments.</small></span></label>
+                    <label class="check-row backend-policy-toggle"><input name="comfyDisableDynamicVram" type="checkbox" ${comfyDisableDynamicVram ? "checked" : ""} ${backend ? "" : "disabled"}/><span><b>Disable dynamic VRAM</b><small>Turns off Comfy's dynamic VRAM management. Use it to isolate VRAM-management crashes or allocation issues; memory use and performance can change.</small></span></label>
+                    <label class="check-row backend-policy-toggle"><input name="comfyDisablePinnedMemory" type="checkbox" ${comfyDisablePinnedMemory ? "checked" : ""} ${backend ? "" : "disabled"}/><span><b>Disable pinned memory</b><small>Avoids page-locked host memory for CPU↔GPU transfers. Try it for pinned-memory, driver, or host-RAM instability; transfers may be slower.</small></span></label>
+                    <label class="check-row backend-policy-toggle"><input name="comfyDisableAsyncOffload" type="checkbox" ${comfyDisableAsyncOffload ? "checked" : ""} ${backend ? "" : "disabled"}/><span><b>Disable async offload</b><small>Forces model offload and transfers to run synchronously. Try it when asynchronous offload is unstable; model swapping may take longer.</small></span></label>
                   </div>
                 </div>
               </section>
@@ -3834,6 +3859,7 @@ export class StudioApp {
 
     const theme = this.store.state.theme;
     const colorField = (name: keyof StudioTheme, label: string, value: string) => `<label class="theme-color"><input type="color" name="${name}" value="${escapeHtml(value)}"/><span>${escapeHtml(label)}</span><code>${escapeHtml(value)}</code></label>`;
+    const fontField = (name: "titleFont" | "subtitleFont", label: string, value: string) => `<label class="theme-font-field field"><span>${escapeHtml(label)}</span><select name="${name}">${themeFontOptions.map((option) => `<option value="${option.id}" ${option.id === value ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}</select></label>`;
     const customProfiles = this.store.state.themeProfiles;
     const appearancePane = `
       <section class="panel settings-card settings-pane-card appearance-settings">
@@ -3843,6 +3869,7 @@ export class StudioApp {
         </div>
         <div class="theme-profile-tools"><select id="theme-profile-select"><option value="">Saved profiles…</option>${customProfiles.map((profile) => `<option value="${profile.id}">${escapeHtml(profile.name)}</option>`).join("")}</select><button class="secondary-button" type="button" data-action="load-theme-profile">Load</button><button class="secondary-button" type="button" data-action="save-theme-profile">Save current</button><button class="danger-soft" type="button" data-action="delete-theme-profile">Delete</button></div>
         <form id="theme-form" class="theme-settings-form">
+          <div class="section-minihead theme-form-heading"><b>Core colors</b><span>Chrome + content</span></div>
           <div class="theme-color-grid">
             ${colorField("accent", "Accent", theme.accent)}
             ${colorField("accentAlt", "Accent glow", theme.accentAlt)}
@@ -3851,6 +3878,19 @@ export class StudioApp {
             ${colorField("text", "Text", theme.text)}
             ${colorField("muted", "Muted text", theme.muted)}
             ${colorField("outline", "Outlines", theme.outline)}
+          </div>
+          <div class="section-minihead theme-form-heading"><b>Typography</b><span>Headings only · body text stays readable</span></div>
+          <div class="theme-font-grid">
+            ${fontField("titleFont", "Title font", theme.titleFont)}
+            ${fontField("subtitleFont", "Subtitle font", theme.subtitleFont)}
+          </div>
+          <div class="section-minihead theme-form-heading"><b>Semantic + utility</b><span>Status, warnings, destructive actions, neutral slabs</span></div>
+          <div class="theme-color-grid">
+            ${colorField("success", "Success / online", theme.success)}
+            ${colorField("warning", "Warning", theme.warning)}
+            ${colorField("danger", "Danger text + icons", theme.danger)}
+            ${colorField("dangerSurface", "Danger surface", theme.dangerSurface)}
+            ${colorField("surfaceAlt", "Utility surface", theme.surfaceAlt)}
           </div>
           <label class="range-field"><span>Panel radius <b id="theme-radius-value">${theme.radius}px</b></span><input name="radius" type="range" min="0" max="32" step="1" value="${theme.radius}" /></label>
           <label class="range-field"><span>Button + control radius <b id="theme-control-radius-value">${theme.controlRadius}px</b></span><input name="controlRadius" type="range" min="0" max="24" step="1" value="${theme.controlRadius}" /></label>
@@ -3864,9 +3904,9 @@ export class StudioApp {
     return `
       <div class="settings-shell">
         <aside class="settings-sidebar panel">
-          <button class="${pane === "connection" ? "is-active" : ""}" data-settings-pane="connection"><span>⌁</span><div><b>Connection</b><small>Account, process, network</small></div></button>
-          <button class="${pane === "backend" ? "is-active" : ""}" data-settings-pane="backend"><span>⌘</span><div><b>Backends</b><small>Versions, policy, recovery</small></div></button>
-          <button class="${pane === "appearance" ? "is-active" : ""}" data-settings-pane="appearance"><span>✦</span><div><b>Appearance</b><small>Theme profiles + shape</small></div></button>
+          <button class="${pane === "connection" ? "is-active" : ""}" data-settings-pane="connection"><span>${tabConnectionSvg}</span><div><b>Connection</b><small>Account, process, network</small></div></button>
+          <button class="${pane === "backend" ? "is-active" : ""}" data-settings-pane="backend"><span>${tabBackendSvg}</span><div><b>Backends</b><small>Versions, policy, recovery</small></div></button>
+          <button class="${pane === "appearance" ? "is-active" : ""}" data-settings-pane="appearance"><span>${tabAppearanceSvg}</span><div><b>Appearance</b><small>Theme profiles + shape</small></div></button>
         </aside>
         <div class="settings-pane-host">${pane === "connection" ? connectionPane : pane === "backend" ? backendPane : appearancePane}</div>
       </div>`;
@@ -8712,6 +8752,11 @@ export class StudioApp {
       if (!this.loraBatchMode) this.loraBatchSelected.clear();
       this.render();
     });
+    this.root.querySelector<HTMLElement>("[data-action='finish-lora-batch']")?.addEventListener("click", () => {
+      this.loraBatchMode = false;
+      this.loraBatchSelected.clear();
+      this.render();
+    });
     this.root.querySelectorAll<HTMLElement>("[data-toggle-lora-select]").forEach((button) => button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -9108,16 +9153,24 @@ export class StudioApp {
     });
 
     const themeForm = this.root.querySelector<HTMLFormElement>("#theme-form");
-    themeForm?.querySelectorAll<HTMLInputElement>("input").forEach((input) => input.addEventListener("input", () => {
+    const syncThemeForm = (source?: HTMLInputElement | HTMLSelectElement) => {
+      if (!themeForm) return;
       const data = new FormData(themeForm);
       this.store.updateTheme({
         accent: String(data.get("accent") ?? this.store.state.theme.accent),
         accentAlt: String(data.get("accentAlt") ?? this.store.state.theme.accentAlt),
         background: String(data.get("background") ?? this.store.state.theme.background),
         panel: String(data.get("panel") ?? this.store.state.theme.panel),
+        surfaceAlt: String(data.get("surfaceAlt") ?? this.store.state.theme.surfaceAlt),
         text: String(data.get("text") ?? this.store.state.theme.text),
         muted: String(data.get("muted") ?? this.store.state.theme.muted),
         outline: String(data.get("outline") ?? this.store.state.theme.outline),
+        success: String(data.get("success") ?? this.store.state.theme.success),
+        warning: String(data.get("warning") ?? this.store.state.theme.warning),
+        danger: String(data.get("danger") ?? this.store.state.theme.danger),
+        dangerSurface: String(data.get("dangerSurface") ?? this.store.state.theme.dangerSurface),
+        titleFont: String(data.get("titleFont") ?? this.store.state.theme.titleFont) as StudioTheme["titleFont"],
+        subtitleFont: String(data.get("subtitleFont") ?? this.store.state.theme.subtitleFont) as StudioTheme["subtitleFont"],
         radius: Number(data.get("radius") ?? this.store.state.theme.radius),
         controlRadius: Number(data.get("controlRadius") ?? this.store.state.theme.controlRadius),
         borderStrength: Number(data.get("borderStrength") ?? this.store.state.theme.borderStrength),
@@ -9131,8 +9184,12 @@ export class StudioApp {
         "theme-opacity-value": `${Math.round(this.store.state.theme.surfaceOpacity * 100)}%`,
       };
       for (const [id,value] of Object.entries(values)) { const node=this.root.querySelector<HTMLElement>(`#${id}`); if(node) node.textContent=value; }
-      input.closest(".theme-color")?.querySelector("code")?.replaceChildren(document.createTextNode(input.value));
-    }));
+      if (source instanceof HTMLInputElement) source.closest(".theme-color")?.querySelector("code")?.replaceChildren(document.createTextNode(source.value));
+    };
+    themeForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select").forEach((control) => {
+      control.addEventListener("input", () => syncThemeForm(control));
+      if (control instanceof HTMLSelectElement) control.addEventListener("change", () => syncThemeForm(control));
+    });
     this.root.querySelectorAll<HTMLElement>("[data-theme-built-in]").forEach((button) => button.addEventListener("click", () => {
       const profile = builtInThemes.find((item) => item.id === button.dataset.themeBuiltIn);
       if (!profile) return;
