@@ -13,6 +13,7 @@ const runner = read("start.ps1");
 const runtime = read("src/runtime/index.ts");
 const relay = read("src/runtime/relay.ts");
 const swarmClient = read("src/swarm/client.ts");
+const swarmHistory = read("src/swarm/history.ts");
 const libraryStore = read("src/library/store.ts");
 const librarySession = read("src/library/session.ts");
 const vite = read("vite.config.ts");
@@ -53,6 +54,9 @@ assert(librarySession.includes('return folders.some((folder) => folder.id === re
 assert(relay.includes("STUDIO_SWARM_PORT_PARAM") && relay.includes("resolveStudioSwarmRelayRequest"), "Dynamic browser Swarm relay port contract is missing");
 assert(runtime.includes("studioSwarmRelayUrl(parsed.href, window.location.origin)"), "Browser API/WebSocket traffic must preserve the configured Swarm port through the Studio relay");
 assert(swarmClient.includes("studioSwarmRelayUrl(direct, window.location.origin, this.baseUrl)"), "Browser image URLs must preserve the configured Swarm port through the Studio relay");
+assert(swarmHistory.includes("session?.output_append_user === true") && swarmHistory.includes("session?.output_append_user === false"), "History image routing must follow GetNewSession output_append_user instead of a fixed output tree");
+assert(!swarmHistory.includes('return `View/local/raw/${normalized}`'), "History image routing must never resurrect an implicit View/local/raw prefix");
+assert(app.includes("const source = output.swarmSourcePath || output.swarmPath || output.url;"), "Library rendering must prefer Swarm's output-root-relative source path so cached display routes can self-heal");
 assert(vite.includes("resolveStudioSwarmRelayRequest") && vite.includes("options.target = resolved.target"), "Vite Swarm relay must dynamically route the configured local Swarm port");
 assert(relay.includes("parsedTarget.port = String(requestedPort)") && !relay.includes("hostname ="), "Browser relay selection must remain port-only and must not expose arbitrary target hosts");
 assert(styles.includes(".clue-tooltip") && !styles.includes(".clue-tip::after"), "Clue help must render in the fixed viewport tooltip instead of a clipping pseudo-element");

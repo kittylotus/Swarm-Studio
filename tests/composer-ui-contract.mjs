@@ -20,5 +20,9 @@ assert(!app.includes('<span>${escapeHtml(item.name)}</span>'), 'Normal LoRA rows
 assert(app.includes('const meta = [model?.author, modelFamily(model)]'), 'Normal LoRA rows should use lightweight metadata only.');
 assert(app.includes('class="resolution-card"'), 'Resolution controls must render inside the raised resolution card.');
 assert(css.includes('.resolution-card') && css.includes('.lora-add-card') && css.includes('.stack-profile-picker'), 'Composer hierarchy styles are incomplete.');
+assert(css.includes('v0.63.21 mobile composer density'), 'Mobile composer density pass is missing.');
+assert(css.includes('grid-template-areas:\n      \"thumb copy trigger actions\"\n      \"thumb weight trigger actions\"'), 'Mobile LoRA rows must keep Trigger in the right-side control rail.');
+assert(css.includes('grid-template-rows:27px auto') && css.includes('transform:translateY(4px)'), 'Mobile Trigger control must stack its checkbox above its label beside enable/remove.');
+assert(css.includes('.lora-section .section-icon-actions') && css.includes('flex-wrap:nowrap'), 'Mobile LoRA header actions must remain a compact single-row toolbar.');
 
 console.log('Composer UI contract OK.');

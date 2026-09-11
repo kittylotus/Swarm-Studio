@@ -4111,3 +4111,182 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
   .lora-stack-row > .weight-field { justify-self:start; }
   .lora-stack-row > .stack-row-actions { align-self:center; }
 }
+
+/* v0.63.21 mobile composer density: keep the stack useful without turning Tune into a receipt */
+@media (max-width:760px) {
+  .shared-composer {
+    padding:10px;
+  }
+  .shared-composer .rail-heading {
+    margin-bottom:8px;
+  }
+  .shared-composer .rail-section {
+    padding-block:9px;
+  }
+  .lora-section {
+    padding-top:9px;
+  }
+  .lora-section .stack-section-head {
+    align-items:center;
+    gap:8px;
+  }
+  .lora-section .stack-section-head > span {
+    min-width:0;
+  }
+  .lora-section .section-icon-actions {
+    width:auto;
+    flex:0 0 auto;
+    flex-wrap:nowrap;
+    justify-content:flex-end;
+    gap:4px;
+    margin-left:auto;
+  }
+  .lora-section .section-icon-actions .icon-button,
+  .lora-section .section-icon-actions .file-button {
+    width:30px;
+    min-width:30px;
+    height:30px;
+    border-radius:9px;
+  }
+  .stack-profile-picker {
+    gap:0;
+    margin-top:6px;
+  }
+  .stack-profile-picker > span {
+    display:none;
+  }
+  .stack-profile-picker select {
+    min-height:32px;
+    padding:6px 9px;
+    font-size:8px;
+  }
+  .lora-stack {
+    gap:5px;
+    margin-top:6px;
+  }
+  .lora-stack-row {
+    grid-template-columns:38px minmax(0,1fr) 27px auto;
+    grid-template-areas:
+      "thumb copy trigger actions"
+      "thumb weight trigger actions";
+    gap:4px 7px;
+    min-height:60px;
+    padding:6px;
+    border-radius:9px;
+  }
+  .lora-stack-row > .lora-thumb {
+    width:38px;
+    height:38px;
+    align-self:center;
+    border-radius:8px;
+  }
+  .lora-stack-copy {
+    align-self:end;
+    gap:1px;
+  }
+  .lora-stack-copy b {
+    font-size:9px;
+    line-height:1.2;
+  }
+  .lora-stack-copy small {
+    font-size:6.5px;
+    line-height:1.2;
+  }
+  .lora-stack-row > .weight-field {
+    display:flex;
+    align-items:center;
+    justify-self:start;
+    align-self:start;
+    gap:5px;
+  }
+  .lora-stack-row > .weight-field > span {
+    font-size:5.5px;
+    letter-spacing:.05em;
+  }
+  .lora-stack-row > .weight-field input {
+    width:48px;
+    height:26px;
+    padding:4px 6px;
+    border-radius:7px;
+    font-size:8px;
+  }
+  .lora-stack-row > .trigger-toggle {
+    width:27px;
+    align-self:center;
+    justify-self:center;
+    display:grid;
+    grid-template-rows:27px auto;
+    place-items:center;
+    gap:1px;
+    font-size:5.5px;
+    line-height:1;
+    white-space:nowrap;
+    transform:translateY(4px);
+  }
+  .lora-stack-row > .trigger-toggle input {
+    width:13px;
+    height:13px;
+    margin:0;
+  }
+  .lora-stack-row > .stack-row-actions {
+    align-self:center;
+    justify-self:end;
+    gap:3px;
+  }
+  .stack-row-actions .icon-button {
+    width:27px;
+    min-width:27px;
+    height:27px;
+    border-radius:8px;
+  }
+  .lora-add-card {
+    margin-top:6px;
+  }
+  .lora-add-card > summary {
+    min-height:38px;
+    gap:8px;
+    padding:6px 9px;
+  }
+  .lora-add-card > summary b {
+    font-size:8px;
+  }
+  .lora-add-card > summary small {
+    font-size:6.5px;
+  }
+  .lora-add-card .lora-picker {
+    gap:5px;
+    padding:6px;
+  }
+  .stack-tools--footer {
+    gap:5px;
+    margin-top:6px;
+  }
+  .stack-tools--footer .ghost-button {
+    min-height:31px;
+  }
+}
+
+@media (max-width:380px) {
+  .lora-section .section-icon-actions { gap:3px; }
+  .lora-section .section-icon-actions .icon-button,
+  .lora-section .section-icon-actions .file-button {
+    width:28px;
+    min-width:28px;
+    height:28px;
+  }
+  .lora-stack-row {
+    grid-template-columns:36px minmax(0,1fr) 27px auto;
+    gap:4px 5px;
+    padding:5px;
+  }
+  .lora-stack-row > .lora-thumb {
+    width:36px;
+    height:36px;
+  }
+  .lora-stack-row > .weight-field > span {
+    display:none;
+  }
+  .lora-stack-row > .weight-field input {
+    width:46px;
+  }
+}

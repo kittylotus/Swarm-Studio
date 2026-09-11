@@ -92,9 +92,9 @@ export interface FolderRecord {
 export interface OutputRecord {
   id: string;
   url: string;
-  /** Fetch/display path, normally `View/local/raw/...`. */
+  /** Fetch/display path returned by Swarm or projected from session routing, e.g. `View/<user>/...` or `Output/...`. */
   swarmPath: string;
-  /** Exact output-root-relative path used by Swarm history mutations, normally `raw/...`. */
+  /** Exact path relative to the active user's Swarm output root, used by ListImages/history mutations. */
   swarmSourcePath?: string;
   folderId: string;
   prompt: string;

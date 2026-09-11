@@ -9,7 +9,7 @@ import { runtime, type RuntimeProcessStatus, type RuntimeRepoStatus, type Studio
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
 import { normalizeGenerationRequest, normalizeParamKey } from "./swarm/request";
-import { normalizeSwarmImageViewPath } from "./swarm/history";
+import { swarmImageMutationPath, swarmImageViewPath } from "./swarm/history";
 import type {
   SwarmGenerationEvent,
   SwarmGenerationImage,
@@ -600,10 +600,10 @@ export class StudioApp {
   }
 
   private outputImageUrl(output: OutputRecord): string {
-    if (output.swarmPath) return this.client.imageUrl(this.normalizeSwarmPath(output.swarmPath));
-    if (!output.url) return "";
-    if (/^(data:|blob:)/i.test(output.url)) return output.url;
-    return this.client.imageUrl(this.normalizeSwarmPath(output.url));
+    const source = output.swarmSourcePath || output.swarmPath || output.url;
+    if (!source) return "";
+    if (/^(data:|blob:)/i.test(source)) return source;
+    return this.client.imageUrl(this.normalizeSwarmPath(source));
   }
 
   private swarmImageAttributes(url: unknown): string {
@@ -2673,7 +2673,7 @@ export class StudioApp {
       if (!saved?.image) throw new Error("Swarm saved the image but did not return its history path.");
       const path = String(saved.image);
       const metadata = saved.metadata || response.metadata?.[0] || item.metadata || "";
-      const url = this.client.imageUrl(path);
+      const url = this.client.imageUrl(this.normalizeSwarmPath(path));
       const record = this.store.addOutput({
         url,
         swarmPath: path,
@@ -5633,7 +5633,7 @@ export class StudioApp {
     const image = normalizeGenerationImage(event.image);
     if (image) {
       if (!this.generationFinishedAt) this.generationFinishedAt = performance.now();
-      this.generationFinalUrl = this.client.imageUrl(image.image);
+      this.generationFinalUrl = this.client.imageUrl(this.normalizeSwarmPath(image.image));
       this.generationFinalPath = image.image;
       if (image.metadata) this.generationResolvedMetadata = image.metadata;
       const imageSeed = this.resolvedSeedFor(image, image.metadata || this.generationResolvedMetadata, -1);
@@ -5778,7 +5778,7 @@ export class StudioApp {
       for (const [index, result] of images.entries()) {
         const path = String(result.image ?? "");
         if (!path) continue;
-        const url = this.client.imageUrl(path);
+        const url = this.client.imageUrl(this.normalizeSwarmPath(path));
         const key = this.normalizeSwarmPath(path);
         const leaf = key.split("/").pop() || "";
         const capturedMetadata = index === 0 ? this.generationResolvedMetadata : "";
@@ -6834,7 +6834,7 @@ export class StudioApp {
       for (const [index, result] of images.entries()) {
         const path = String(result.image ?? "");
         if (!path) continue;
-        const url = this.client.imageUrl(path);
+        const url = this.client.imageUrl(this.normalizeSwarmPath(path));
         const key = this.normalizeSwarmPath(path);
         const leaf = key.split("/").pop() || "";
         const capturedMetadata = index === 0 ? this.generationResolvedMetadata : "";
@@ -6889,17 +6889,11 @@ export class StudioApp {
   }
 
   private normalizeSwarmPath(path: unknown): string {
-    return normalizeSwarmImageViewPath(path);
+    return swarmImageViewPath(path, this.session);
   }
 
   private swarmMutationPath(path: unknown): string {
-    let relative = String(path ?? "")
-      .trim()
-      .replace(/^https?:\/\/[^/]+/i, "")
-      .replace(/^\/+/, "")
-      .split(/[?#]/, 1)[0] ?? "";
-    relative = relative.replace(/^View\/local\//i, "").replace(/^View\//i, "").replace(/^local\//i, "");
-    return relative;
+    return swarmImageMutationPath(path, this.session);
   }
 
   private outputMutationPath(output: OutputRecord): string {
@@ -7145,7 +7139,7 @@ export class StudioApp {
       const existingByPath = new Map<string, OutputRecord>();
       const existingByLeaf = new Map<string, OutputRecord[]>();
       for (const output of outputs) {
-        const source = output.swarmPath || output.swarmSourcePath || (!/^(data:|blob:)/i.test(output.url) ? output.url : "");
+        const source = output.swarmSourcePath || output.swarmPath || (!/^(data:|blob:)/i.test(output.url) ? output.url : "");
         const canonical = this.normalizeSwarmPath(source);
         if (!canonical) continue;
         if (!existingByPath.has(canonical)) existingByPath.set(canonical, output);
@@ -7189,7 +7183,7 @@ export class StudioApp {
             matchedIds.add(current.id);
             const oldSwarmPath = current.swarmPath;
             const oldSourcePath = current.swarmSourcePath;
-            const oldCanonical = this.normalizeSwarmPath(current.swarmPath || current.url);
+            const oldCanonical = this.normalizeSwarmPath(current.swarmSourcePath || current.swarmPath || current.url);
             const refreshedMetadata = String(file.metadata ?? current.metadata ?? "");
             Object.assign(current, {
               swarmPath: path,
