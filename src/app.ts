@@ -19,6 +19,21 @@ import {
   type RegionResizeHandle,
 } from "./regions";
 import { CIVITAI_FALLBACK_ORIGIN, CIVITAI_ORIGIN, isCivitaiHost, routeCivitaiUrl } from "./civitai/urls";
+import {
+  applyLoraFacetView,
+  buildLoraFacetCounts,
+  effectiveFacetMetadata,
+  emptyCivitaiFacetCache,
+  isFacetRecordFresh,
+  normalizeCivitaiFacetCache,
+  selectFacetEnrichmentCandidates,
+  type CivitaiFacetCache,
+  type CivitaiFacetRecord,
+  type FacetEnrichmentMode,
+  type LoraFacetFilters,
+  type LoraFacetMetadataFilter,
+  type LoraFacetSort,
+} from "./civitai/facets";
 import { runtime, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
@@ -85,6 +100,7 @@ const tabJumpSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true">
 const reuseSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
 const initImageSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m3 16 5-5 4 4 3-3 6 6"/><path d="M18 2v6M15 5h6"/></svg>`;
 const folderSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>`;
+const filterSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>`;
 const heartSvg = `<svg class="action-svg heart-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8Z"/></svg>`;
 const plusSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg>`;
 const saveSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21h14"/><path d="M19 21V7.8a1 1 0 0 0-.3-.7l-2.8-2.8a1 1 0 0 0-.7-.3H7a2 2 0 0 0-2 2v15"/><path d="M9 21v-6h6v6"/><path d="M9 4v5h5"/></svg>`;
@@ -423,6 +439,19 @@ export class StudioApp {
   private loraBatchMode = false;
   private loraBatchSelected = new Set<string>();
   private loraOrphanMode = false;
+  private loraFacetCache: CivitaiFacetCache = emptyCivitaiFacetCache();
+  private loraFacetTags = new Set<string>();
+  private loraFacetCreator = "";
+  private loraFacetFamily = "";
+  private loraFacetMetadata: LoraFacetMetadataFilter = "all";
+  private loraFacetSort: LoraFacetSort = "name";
+  private loraFacetTagsOpen = false;
+  private loraFacetTagQuery = "";
+  private loraFacetMobileOpen = false;
+  private loraFacetEnriching = false;
+  private loraFacetEnrichMode: FacetEnrichmentMode | null = null;
+  private loraFacetEnrichDone = 0;
+  private loraFacetEnrichTotal = 0;
   private loraMoveModalOpen = false;
   private loraMoveDestination = "";
   private loraMoveBusy = false;
@@ -569,6 +598,16 @@ export class StudioApp {
       this.generationMiniY = Number.isFinite(miniY) && miniY >= 0 ? miniY : null;
       const blockedAuthors = JSON.parse(localStorage.getItem("swarm-studio-civitai-blocked-authors") || "[]");
       if (Array.isArray(blockedAuthors)) this.civitaiBlockedAuthors = new Set(blockedAuthors.map((value) => String(value).trim().toLowerCase()).filter(Boolean));
+      this.loraFacetCache = normalizeCivitaiFacetCache(JSON.parse(localStorage.getItem("swarm-studio-civitai-facet-cache-v1") || "{}"));
+      const savedFacetTags = JSON.parse(localStorage.getItem("swarm-studio-lora-facet-tags") || "[]");
+      if (Array.isArray(savedFacetTags)) this.loraFacetTags = new Set(savedFacetTags.map((value) => String(value).trim()).filter(Boolean));
+      this.loraFacetCreator = localStorage.getItem("swarm-studio-lora-facet-creator") || "";
+      this.loraFacetFamily = localStorage.getItem("swarm-studio-lora-facet-family") || "";
+      const savedFacetMetadata = localStorage.getItem("swarm-studio-lora-facet-metadata");
+      const normalizedFacetMetadata = savedFacetMetadata === "needs-enrichment" ? "stats-uncached" : savedFacetMetadata;
+      if (["all", "tagged", "matched", "unclassified", "stats-uncached"].includes(String(normalizedFacetMetadata))) this.loraFacetMetadata = normalizedFacetMetadata as LoraFacetMetadataFilter;
+      const savedFacetSort = localStorage.getItem("swarm-studio-lora-facet-sort");
+      if (["name", "creator", "tag-count", "downloads", "rating", "newest"].includes(String(savedFacetSort))) this.loraFacetSort = savedFacetSort as LoraFacetSort;
     } catch {
       this.loraMobileGrid = false;
       this.loraShowNonMatching = false;
@@ -1529,6 +1568,7 @@ export class StudioApp {
       ${this.renderLoraDownloadModal()}
       ${this.renderCivitaiDetailModal()}
       ${this.renderCivitaiMobileFiltersModal()}
+      ${this.renderLoraFacetMobileModal()}
       ${this.renderModelMetadataEditor()}
       ${this.renderModelMetadataViewer()}
       ${this.renderLoraMoveModal()}
@@ -3213,14 +3253,244 @@ export class StudioApp {
     </div>`;
   }
 
+  private loraFacetFilters(): LoraFacetFilters {
+    return {
+      tags: [...this.loraFacetTags],
+      creator: this.loraFacetCreator,
+      family: this.loraFacetFamily,
+      metadata: this.loraFacetMetadata,
+      sort: this.loraFacetSort,
+    };
+  }
+
+  private persistLoraFacetPreferences(): void {
+    try {
+      localStorage.setItem("swarm-studio-lora-facet-tags", JSON.stringify([...this.loraFacetTags]));
+      localStorage.setItem("swarm-studio-lora-facet-creator", this.loraFacetCreator);
+      localStorage.setItem("swarm-studio-lora-facet-family", this.loraFacetFamily);
+      localStorage.setItem("swarm-studio-lora-facet-metadata", this.loraFacetMetadata);
+      localStorage.setItem("swarm-studio-lora-facet-sort", this.loraFacetSort);
+    } catch { /* facet preferences can remain session-only */ }
+  }
+
+  private persistLoraFacetCache(): void {
+    try { localStorage.setItem("swarm-studio-civitai-facet-cache-v1", JSON.stringify(this.loraFacetCache)); } catch { /* cache is optional */ }
+  }
+
+  private clearLoraFacetFilters(): void {
+    this.loraFacetTags.clear();
+    this.loraFacetCreator = "";
+    this.loraFacetFamily = "";
+    this.loraFacetMetadata = "all";
+    this.loraFacetSort = "name";
+    this.persistLoraFacetPreferences();
+  }
+
+  private loraFacetBaseScope(): SwarmModel[] {
+    const matching = this.compatibleLoras();
+    const orphaned = this.orphanedLoras();
+    const source = this.loraOrphanMode ? orphaned : (this.loraShowNonMatching ? this.loras : matching);
+    return source.filter((model) => this.loraInCurrentFolder(model));
+  }
+
+  private loraFacetSummaryMarkup(models: SwarmModel[]): string {
+    const counts = buildLoraFacetCounts(models, this.loraFacetCache);
+    const active = this.loraFacetTags.size + Number(Boolean(this.loraFacetCreator)) + Number(Boolean(this.loraFacetFamily)) + Number(this.loraFacetMetadata !== "all") + Number(this.loraFacetSort !== "name");
+    const selectedTagKeys = new Set([...this.loraFacetTags].map((tag) => tag.toLowerCase()));
+    const tagRows = counts.tags.slice(0, 160).map(({ name, count }) => {
+      const checked = selectedTagKeys.has(name.toLowerCase());
+      return `<label class="lora-facet-check" data-lora-facet-tag-row="${escapeHtml(name.toLowerCase())}"><input type="checkbox" data-lora-facet-tag="${escapeHtml(name)}" ${checked ? "checked" : ""}/><span>${escapeHtml(name)}</span><small>${count}</small></label>`;
+    }).join("");
+    const creatorOptions = counts.creators.map(({ name, count }) => `<option value="${escapeHtml(name)}" ${name.toLowerCase() === this.loraFacetCreator.toLowerCase() ? "selected" : ""}>${escapeHtml(name)} · ${count}</option>`).join("");
+    const familyOptions = counts.families.map(({ name, count }) => `<option value="${escapeHtml(name)}" ${name.toLowerCase() === this.loraFacetFamily.toLowerCase() ? "selected" : ""}>${escapeHtml(name)} · ${count}</option>`).join("");
+    const activeChips = [...this.loraFacetTags].map((tag) => `<button type="button" class="lora-facet-chip" data-remove-lora-facet-tag="${escapeHtml(tag)}">${escapeHtml(tag)} ×</button>`).join("");
+    const classificationRunning = this.loraFacetEnriching && this.loraFacetEnrichMode === "classification";
+    const statsRunning = this.loraFacetEnriching && this.loraFacetEnrichMode === "stats";
+    const progress = `${this.loraFacetEnrichDone}/${this.loraFacetEnrichTotal}`;
+    return `<div class="lora-facet-toolbar lora-facet-toolbar--desktop">
+      <details class="lora-facet-tags" ${this.loraFacetTagsOpen ? "open" : ""}>
+        <summary>${filterSvg}<span>Tags${this.loraFacetTags.size ? ` · ${this.loraFacetTags.size}` : ""}</span></summary>
+        <div class="lora-facet-popover">
+          <label class="lora-facet-tag-search"><span>Search tags</span><input id="lora-facet-tag-search" value="${escapeHtml(this.loraFacetTagQuery)}" placeholder="clothing, pose, style…" autocomplete="off" /></label>
+          <div class="lora-facet-tag-list">${tagRows || `<div class="compact-empty">No tags indexed in this folder yet.</div>`}</div>
+        </div>
+      </details>
+      <label class="lora-facet-field"><span>Creator</span><select id="lora-facet-creator"><option value="">All creators</option>${creatorOptions}</select></label>
+      <label class="lora-facet-field"><span>Family</span><select id="lora-facet-family"><option value="">All families</option>${familyOptions}</select></label>
+      <label class="lora-facet-field"><span>Metadata</span><select id="lora-facet-metadata"><option value="all" ${this.loraFacetMetadata === "all" ? "selected" : ""}>All</option><option value="tagged" ${this.loraFacetMetadata === "tagged" ? "selected" : ""}>Tagged · ${counts.tagged}</option><option value="matched" ${this.loraFacetMetadata === "matched" ? "selected" : ""}>CivitAI matched · ${counts.matched}</option><option value="unclassified" ${this.loraFacetMetadata === "unclassified" ? "selected" : ""}>Unclassified · ${counts.unclassified}</option><option value="stats-uncached" ${this.loraFacetMetadata === "stats-uncached" ? "selected" : ""}>CivitAI stats uncached · ${counts.statsUncached}</option></select></label>
+      <label class="lora-facet-field"><span>Sort</span><select id="lora-facet-sort"><option value="name" ${this.loraFacetSort === "name" ? "selected" : ""}>Name</option><option value="creator" ${this.loraFacetSort === "creator" ? "selected" : ""}>Creator</option><option value="tag-count" ${this.loraFacetSort === "tag-count" ? "selected" : ""}>Tag count</option><option value="downloads" ${this.loraFacetSort === "downloads" ? "selected" : ""}>CivitAI downloads</option><option value="rating" ${this.loraFacetSort === "rating" ? "selected" : ""}>CivitAI rating</option><option value="newest" ${this.loraFacetSort === "newest" ? "selected" : ""}>CivitAI newest</option></select></label>
+      <div class="lora-facet-enrichment-actions">
+        <button class="secondary-button lora-facet-enrich" data-action="enrich-lora-classification" ${this.loraFacetEnriching || !counts.unclassifiedLookupDue ? "disabled" : ""} title="Resolve up to 24 unclassified LoRAs by Swarm hash. Existing local tags stay authoritative.">${classificationRunning ? `Enriching ${progress}` : counts.unclassifiedLookupDue ? `Enrich unclassified · ${counts.unclassifiedLookupDue}` : `Unclassified checked`}</button>
+        <button class="ghost-button lora-facet-enrich" data-action="fetch-lora-civitai-stats" ${this.loraFacetEnriching || !counts.statsUncached ? "disabled" : ""} title="Fetch CivitAI popularity and version metadata for up to 24 LoRAs, prioritizing the current visible result set.">${statsRunning ? `Fetching ${progress}` : `Fetch stats · ${counts.statsUncached}`}</button>
+      </div>
+      ${active ? `<button class="ghost-button lora-facet-clear" data-action="clear-lora-facets">Clear</button>` : ""}
+      ${activeChips ? `<div class="lora-facet-active">${activeChips}</div>` : ""}
+      <small class="lora-facet-status">${counts.tags.length} local tags · ${counts.tagged}/${models.length} classified · ${counts.statsUncached} CivitAI stats uncached</small>
+    </div>`;
+  }
+
+  private renderLoraFacetMobileModal(): string {
+    if (!this.loraFacetMobileOpen) return "";
+    const models = this.loraFacetBaseScope();
+    const counts = buildLoraFacetCounts(models, this.loraFacetCache);
+    const selectedTagKeys = new Set([...this.loraFacetTags].map((tag) => tag.toLowerCase()));
+    const tagRows = counts.tags.slice(0, 160).map(({ name, count }) => `<label class="lora-facet-check" data-lora-facet-tag-row="${escapeHtml(name.toLowerCase())}"><input type="checkbox" data-lora-facet-tag="${escapeHtml(name)}" ${selectedTagKeys.has(name.toLowerCase()) ? "checked" : ""}/><span>${escapeHtml(name)}</span><small>${count}</small></label>`).join("");
+    const creatorOptions = counts.creators.map(({ name, count }) => `<option value="${escapeHtml(name)}" ${name.toLowerCase() === this.loraFacetCreator.toLowerCase() ? "selected" : ""}>${escapeHtml(name)} · ${count}</option>`).join("");
+    const familyOptions = counts.families.map(({ name, count }) => `<option value="${escapeHtml(name)}" ${name.toLowerCase() === this.loraFacetFamily.toLowerCase() ? "selected" : ""}>${escapeHtml(name)} · ${count}</option>`).join("");
+    return `<div class="download-backdrop lora-facet-mobile-backdrop" data-action="close-lora-facet-mobile"><section class="download-modal lora-facet-mobile-modal" data-lora-facet-mobile-dialog role="dialog" aria-modal="true" aria-labelledby="lora-facet-mobile-title">
+      <header><div><span class="panel-kicker">LOCAL LORA FACETS</span><h2 id="lora-facet-mobile-title">Filter installed LoRAs</h2></div><button class="icon-button" data-action="close-lora-facet-mobile" aria-label="Close">×</button></header>
+      <div class="lora-facet-mobile-body">
+        <label class="lora-facet-field"><span>Creator</span><select id="lora-facet-mobile-creator"><option value="">All creators</option>${creatorOptions}</select></label>
+        <label class="lora-facet-field"><span>Family</span><select id="lora-facet-mobile-family"><option value="">All families</option>${familyOptions}</select></label>
+        <label class="lora-facet-field"><span>Metadata</span><select id="lora-facet-mobile-metadata"><option value="all" ${this.loraFacetMetadata === "all" ? "selected" : ""}>All</option><option value="tagged" ${this.loraFacetMetadata === "tagged" ? "selected" : ""}>Tagged · ${counts.tagged}</option><option value="matched" ${this.loraFacetMetadata === "matched" ? "selected" : ""}>CivitAI matched · ${counts.matched}</option><option value="unclassified" ${this.loraFacetMetadata === "unclassified" ? "selected" : ""}>Unclassified · ${counts.unclassified}</option><option value="stats-uncached" ${this.loraFacetMetadata === "stats-uncached" ? "selected" : ""}>CivitAI stats uncached · ${counts.statsUncached}</option></select></label>
+        <label class="lora-facet-field"><span>Sort</span><select id="lora-facet-mobile-sort"><option value="name" ${this.loraFacetSort === "name" ? "selected" : ""}>Name</option><option value="creator" ${this.loraFacetSort === "creator" ? "selected" : ""}>Creator</option><option value="tag-count" ${this.loraFacetSort === "tag-count" ? "selected" : ""}>Tag count</option><option value="downloads" ${this.loraFacetSort === "downloads" ? "selected" : ""}>CivitAI downloads</option><option value="rating" ${this.loraFacetSort === "rating" ? "selected" : ""}>CivitAI rating</option><option value="newest" ${this.loraFacetSort === "newest" ? "selected" : ""}>CivitAI newest</option></select></label>
+        <div class="lora-facet-mobile-tags"><div><b>Tags</b><small>OR within tags; AND with the fields above.</small></div><label class="lora-facet-tag-search"><input id="lora-facet-mobile-tag-search" value="${escapeHtml(this.loraFacetTagQuery)}" placeholder="Search local tags…" autocomplete="off" /></label><div class="lora-facet-tag-list">${tagRows || `<div class="compact-empty">No tags indexed here yet.</div>`}</div></div>
+        <div class="lora-facet-enrichment-actions lora-facet-enrichment-actions--mobile">
+          <button class="secondary-button" data-action="enrich-lora-classification" ${this.loraFacetEnriching || !counts.unclassifiedLookupDue ? "disabled" : ""}>${this.loraFacetEnriching && this.loraFacetEnrichMode === "classification" ? `Enriching ${this.loraFacetEnrichDone}/${this.loraFacetEnrichTotal}` : counts.unclassifiedLookupDue ? `Enrich unclassified · ${counts.unclassifiedLookupDue}` : `Unclassified checked`}</button>
+          <button class="ghost-button" data-action="fetch-lora-civitai-stats" ${this.loraFacetEnriching || !counts.statsUncached ? "disabled" : ""}>${this.loraFacetEnriching && this.loraFacetEnrichMode === "stats" ? `Fetching ${this.loraFacetEnrichDone}/${this.loraFacetEnrichTotal}` : `Fetch CivitAI stats · ${counts.statsUncached}`}</button>
+          <small>${counts.tags.length} local tags · ${counts.tagged}/${models.length} classified · ${counts.statsUncached} stats uncached</small>
+        </div>
+      </div>
+      <footer class="form-actions"><button class="ghost-button" data-action="clear-lora-facets">Clear filters</button><button class="primary-button" data-action="close-lora-facet-mobile">Done</button></footer>
+    </section></div>`;
+  }
+
+  private facetRecordFromCivitai(model: SwarmModel, hash: string, version: Record<string, unknown>, detail: Record<string, unknown>): CivitaiFacetRecord {
+    const nestedModel = version.model && typeof version.model === "object" && !Array.isArray(version.model) ? version.model as Record<string, unknown> : {};
+    const creator = detail.creator && typeof detail.creator === "object" && !Array.isArray(detail.creator) ? detail.creator as Record<string, unknown> : {};
+    const stats = detail.stats && typeof detail.stats === "object" && !Array.isArray(detail.stats) ? detail.stats as Record<string, unknown> : {};
+    const versionStats = version.stats && typeof version.stats === "object" && !Array.isArray(version.stats) ? version.stats as Record<string, unknown> : {};
+    const number = (...values: unknown[]): number | undefined => {
+      for (const value of values) { const parsed = Number(value); if (Number.isFinite(parsed)) return parsed; }
+      return undefined;
+    };
+    const baseModel = String(version.baseModel ?? "").trim();
+    return {
+      modelKey: serverModelKey(model.name),
+      hash,
+      modelId: number(detail.id, version.modelId, nestedModel.id),
+      versionId: number(version.id, version.modelVersionId),
+      tags: normalizeCivitaiTags(detail.tags ?? nestedModel.tags),
+      creator: String(creator.username ?? detail.creatorName ?? nestedModel.creatorName ?? "").trim() || undefined,
+      baseModel: baseModel || undefined,
+      family: familyFromCivitaiBaseModel(baseModel) || undefined,
+      downloads: number(stats.downloadCount, stats.downloads, versionStats.downloadCount, versionStats.downloads),
+      rating: number(stats.rating, versionStats.rating),
+      ratingCount: number(stats.ratingCount, versionStats.ratingCount),
+      createdAt: String(version.createdAt ?? detail.createdAt ?? "").trim() || undefined,
+      fetchedAt: Date.now(),
+      status: "matched",
+    };
+  }
+
+  private async enrichOneLoraFacet(model: SwarmModel): Promise<void> {
+    const modelKey = serverModelKey(model.name);
+    try {
+      const swarmHash = await this.client.getModelHash(model.name, "LoRA");
+      const hash = this.normalizedCivitaiLookupHash(swarmHash);
+      if (!/^[a-f0-9]{8,}$/i.test(hash)) throw new Error("Swarm returned an invalid model hash.");
+      let version: Record<string, unknown>;
+      try { version = await this.jsonFromUrl(`${CIVITAI_ORIGIN}/api/v1/model-versions/by-hash/${encodeURIComponent(hash)}`); }
+      catch { version = await this.jsonFromUrl(`${CIVITAI_FALLBACK_ORIGIN}/api/v1/model-versions/by-hash/${encodeURIComponent(hash)}`); }
+      const nestedModel = version.model && typeof version.model === "object" && !Array.isArray(version.model) ? version.model as Record<string, unknown> : {};
+      const modelId = Number(version.modelId ?? nestedModel.id ?? 0);
+      const detail = modelId > 0 ? await this.jsonFromUrl(`${CIVITAI_ORIGIN}/api/v1/models/${modelId}`) : nestedModel;
+      this.loraFacetCache.records[modelKey] = this.facetRecordFromCivitai(model, hash, version, detail);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const notFound = /404|not found|no model|could not find/i.test(message);
+      this.loraFacetCache.records[modelKey] = {
+        modelKey,
+        tags: [],
+        fetchedAt: Date.now(),
+        status: notFound ? "unmatched" : "error",
+        error: message.slice(0, 320),
+      };
+    }
+    this.persistLoraFacetCache();
+  }
+
+  private loraFacetPreferredStatsModels(): string[] {
+    const base = this.loraFacetBaseScope();
+    const search = this.loraSearch.trim().toLowerCase();
+    return applyLoraFacetView(base, this.loraFacetCache, this.loraFacetFilters())
+      .filter((model) => {
+        if (!search) return true;
+        const facet = effectiveFacetMetadata(model, this.loraFacetCache);
+        return [model.name, model.title, model.author, model.description, model.trigger_phrase, facet.creator, facet.family, ...facet.tags]
+          .filter(Boolean).join(" ").toLowerCase().includes(search);
+      })
+      .map((model) => model.name);
+  }
+
+  private async enrichLoraFacets(mode: FacetEnrichmentMode): Promise<void> {
+    if (this.loraFacetEnriching || !this.connected) return;
+    const base = this.loraFacetBaseScope();
+    const candidates = selectFacetEnrichmentCandidates(
+      base,
+      this.loraFacetCache,
+      mode,
+      mode === "stats" ? this.loraFacetPreferredStatsModels() : [],
+      24,
+    );
+    if (!candidates.length) {
+      this.notify(mode === "classification"
+        ? "No unclassified LoRAs in this folder are due for a CivitAI lookup."
+        : "CivitAI stats are already cached or recently checked for this folder.", "info");
+      return;
+    }
+    const previouslyClassified = new Set(candidates.filter((model) => effectiveFacetMetadata(model, this.loraFacetCache).tags.length).map((model) => serverModelKey(model.name)));
+    this.loraFacetEnriching = true;
+    this.loraFacetEnrichMode = mode;
+    this.loraFacetEnrichDone = 0;
+    this.loraFacetEnrichTotal = candidates.length;
+    this.render();
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < candidates.length) {
+        const model = candidates[cursor++];
+        if (!model) break;
+        await this.enrichOneLoraFacet(model);
+        this.loraFacetEnrichDone += 1;
+        const action = mode === "classification" ? "enrich-lora-classification" : "fetch-lora-civitai-stats";
+        const buttons = this.root.querySelectorAll<HTMLButtonElement>(`[data-action='${action}']`);
+        buttons.forEach((button) => { button.textContent = `${mode === "classification" ? "Enriching" : "Fetching"} ${this.loraFacetEnrichDone}/${this.loraFacetEnrichTotal}`; });
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.min(3, candidates.length) }, () => worker()));
+      const records = candidates.map((model) => this.loraFacetCache.records[serverModelKey(model.name)]);
+      const matched = records.filter((record) => record?.status === "matched").length;
+      const unavailable = records.filter((record) => record?.status === "unmatched").length;
+      const errors = records.filter((record) => record?.status === "error").length;
+      const newlyClassified = candidates.filter((model) => !previouslyClassified.has(serverModelKey(model.name)) && effectiveFacetMetadata(model, this.loraFacetCache).tags.length).length;
+      const result = `${matched} matched · ${unavailable} unavailable${errors ? ` · ${errors} error${errors === 1 ? "" : "s"}` : ""}`;
+      if (mode === "classification") {
+        this.notify(`CivitAI lookup finished · ${result}. ${newlyClassified ? `${newlyClassified} LoRA${newlyClassified === 1 ? "" : "s"} classified.` : "Local classification unchanged."}`, newlyClassified ? "success" : "info");
+      } else {
+        this.notify(`CivitAI stats lookup finished · ${result}. Local classification remains available from existing metadata.`, matched ? "success" : "info");
+      }
+    } finally {
+      this.loraFacetEnriching = false;
+      this.loraFacetEnrichMode = null;
+      this.loraFacetEnrichDone = 0;
+      this.loraFacetEnrichTotal = 0;
+      this.render();
+    }
+  }
+
   private renderModels(): string {
     const checkpoint = this.currentCheckpoint();
     const matching = this.compatibleLoras();
     const orphaned = this.orphanedLoras();
     const sourceLoras = this.loraOrphanMode ? orphaned : (this.loraShowNonMatching ? this.loras : matching);
-    const browsedLoras = sourceLoras.filter((model) => this.loraInCurrentFolder(model));
+    const folderLoras = sourceLoras.filter((model) => this.loraInCurrentFolder(model));
+    const browsedLoras = applyLoraFacetView(folderLoras, this.loraFacetCache, this.loraFacetFilters());
     const search = this.loraSearch.trim().toLowerCase();
-    const matchesSearch = (model: SwarmModel) => !search || [model.name, model.title, model.author, model.description, model.trigger_phrase, ...(model.tags ?? [])].filter(Boolean).join(" ").toLowerCase().includes(search);
+    const matchesSearch = (model: SwarmModel) => {
+      const facet = effectiveFacetMetadata(model, this.loraFacetCache);
+      return !search || [model.name, model.title, model.author, model.description, model.trigger_phrase, facet.creator, facet.family, ...facet.tags].filter(Boolean).join(" ").toLowerCase().includes(search);
+    };
     const visibleCount = browsedLoras.filter(matchesSearch).length;
     const selectedCount = this.loraBatchSelected.size;
     const folderLabel = this.loraFolderPath || "LoRA root";
@@ -3246,9 +3516,11 @@ export class StudioApp {
                 <label class="library-search"><span>⌕</span><input id="lora-library-search" value="${escapeHtml(this.loraSearch)}" placeholder="Search this folder…" autocomplete="off" /></label>
                 ${this.loraOrphanMode ? `<button class="lora-match-toggle lora-orphan-pill" data-action="exit-orphaned-loras" title="Return to the current checkpoint"><span>∅ Orphaned only</span></button>` : `<label class="lora-match-toggle" title="Show every indexed LoRA, including incompatible or incorrectly classified models"><input id="lora-show-nonmatching" type="checkbox" ${this.loraShowNonMatching ? "checked" : ""} /><span>Show non-matching</span></label>`}
                 <div class="lora-library-view-tools">
+                  <button class="icon-button lora-facet-mobile-button" data-action="open-lora-facet-mobile" title="Filter and sort installed LoRAs" aria-label="Filter and sort installed LoRAs">${filterSvg}<small>Filters</small></button>
                   <button class="icon-button mobile-lora-view-toggle" data-action="toggle-lora-view" title="${this.loraMobileGrid ? "Switch to list view" : "Switch to grid view"}" aria-label="${this.loraMobileGrid ? "Switch to list view" : "Switch to grid view"}">${this.loraMobileGrid ? "☷" : "▦"}<small>${this.loraMobileGrid ? "List" : "Grid"}</small></button>
                 </div>
               </div>
+              ${this.loraFacetSummaryMarkup(folderLoras)}
               <div class="lora-library-actions">
                 <button class="secondary-button lora-organizer-action" data-action="toggle-lora-tree" title="Browse Swarm LoRA folders">${folderTreeSvg}<span>Folders</span></button>
                 <button class="secondary-button lora-organizer-action ${this.loraBatchMode ? "is-active" : ""}" data-action="toggle-lora-batch" title="${this.loraBatchMode ? "Finish organizing LoRAs" : "Select and move LoRAs into folders"}">${batchSelectSvg}<span>${this.loraBatchMode ? "Done" : "Organize"}</span>${this.loraBatchMode ? `<b>${selectedCount}</b>` : ""}</button>
@@ -3258,7 +3530,7 @@ export class StudioApp {
             </div>
             <div class="lora-library-browser">
               ${this.loraFolderTreeMarkup()}
-              ${browsedLoras.length ? `<div class="model-grid ${this.loraMobileGrid ? "lora-view-grid" : "lora-view-list"} ${this.loraMobileGrid && this.loraGridSize === "compact" ? "lora-grid-compact" : ""} ${this.loraBatchMode ? "is-batch-mode" : ""}" id="lora-library-grid">${browsedLoras.map((model) => this.modelCard(model, true, !matchesSearch(model))).join("")}</div><div id="lora-search-empty" class="panel compact-empty" ${visibleCount ? "hidden" : ""}>No ${this.loraOrphanMode ? "orphaned" : this.loraShowNonMatching ? "server" : "matching"} LoRAs match that search in ${escapeHtml(folderLabel)}.</div>` : this.inventoryEmpty(`No ${this.loraOrphanMode ? "orphaned" : this.loraShowNonMatching ? "server" : "matching"} LoRAs in ${folderLabel}.`)}
+              ${folderLoras.length ? (browsedLoras.length ? `<div class="model-grid ${this.loraMobileGrid ? "lora-view-grid" : "lora-view-list"} ${this.loraMobileGrid && this.loraGridSize === "compact" ? "lora-grid-compact" : ""} ${this.loraBatchMode ? "is-batch-mode" : ""}" id="lora-library-grid">${browsedLoras.map((model) => this.modelCard(model, true, !matchesSearch(model))).join("")}</div><div id="lora-search-empty" class="panel compact-empty" ${visibleCount ? "hidden" : ""}>No LoRAs match the current search and facets in ${escapeHtml(folderLabel)}.</div>` : this.inventoryEmpty(`No LoRAs match the active facets in ${folderLabel}.`)) : this.inventoryEmpty(`No ${this.loraOrphanMode ? "orphaned" : this.loraShowNonMatching ? "server" : "matching"} LoRAs in ${folderLabel}.`)}
             </div>
           </section>
         </div>
@@ -3649,10 +3921,12 @@ export class StudioApp {
 
   private modelCard(model: SwarmModel, lora: boolean, hidden = false): string {
     const preview = model.preview_image ? this.client.imageUrl(model.preview_image) : "";
-    const tag = lora ? (modelFamily(model) || "matching LoRA") : (model.compat_class || model.architecture || modelFamily(model) || "Checkpoint");
+    const facet = lora ? effectiveFacetMetadata(model, this.loraFacetCache) : null;
+    const tag = lora ? (facet?.family || modelFamily(model) || "matching LoRA") : (model.compat_class || model.architecture || modelFamily(model) || "Checkpoint");
     const added = lora && this.store.state.draft.loras.some((item) => serverModelKey(item.name) === serverModelKey(model.name));
+    const facetSearch = lora ? [model.name, model.title, model.author, model.description, model.trigger_phrase, facet?.creator, facet?.family, ...(facet?.tags ?? [])].filter(Boolean).join(" ").toLowerCase() : "";
     return `
-      <article class="model-card ${added ? "is-added" : ""} ${lora && this.loraBatchSelected.has(model.name) ? "is-selected" : ""}" ${hidden ? "hidden" : ""} ${lora ? `data-lora-search="${escapeHtml([model.name, model.title, model.author, model.description, model.trigger_phrase, ...(model.tags ?? [])].filter(Boolean).join(" ").toLowerCase())}" data-lora-model="${escapeHtml(model.name)}"` : ""}>
+      <article class="model-card ${added ? "is-added" : ""} ${lora && this.loraBatchSelected.has(model.name) ? "is-selected" : ""}" ${hidden ? "hidden" : ""} ${lora ? `data-lora-search="${escapeHtml(facetSearch)}" data-lora-model="${escapeHtml(model.name)}"` : ""}>
         ${lora && this.loraBatchMode ? `<button class="lora-batch-check" data-toggle-lora-select="${escapeHtml(model.name)}" aria-label="${this.loraBatchSelected.has(model.name) ? "Deselect" : "Select"} ${escapeHtml(model.title || prettyName(model.name))}">${this.loraBatchSelected.has(model.name) ? "✓" : ""}</button>` : ""}
         ${lora ? `<button class="model-preview lora-metadata-open" type="button" data-view-model-metadata="${escapeHtml(model.name)}" title="View LoRA metadata" aria-label="View metadata for ${escapeHtml(model.title || prettyName(model.name))}">${preview ? `<img ${this.swarmImageAttributes(preview)} alt="" loading="lazy" />` : `<span>◇</span>`}</button>` : `<div class="model-preview">${preview ? `<img ${this.swarmImageAttributes(preview)} alt="" loading="lazy" />` : `<span>✦</span>`}</div>`}
         <div class="model-card-copy"><span class="tiny-tag">${escapeHtml(tag)}</span><h3>${escapeHtml(model.title || prettyName(model.name))}</h3><p>${escapeHtml(model.author || model.description || model.name)}</p></div>
@@ -8858,6 +9132,53 @@ export class StudioApp {
     this.root.querySelectorAll<HTMLElement>("[data-edit-model-metadata]").forEach((button) => button.addEventListener("click", () => {
       void this.openModelMetadataEditor(button.dataset.editModelMetadata ?? "");
     }));
+    const bindFacetSelect = (selector: string, assign: (value: string) => void) => {
+      this.root.querySelectorAll<HTMLSelectElement>(selector).forEach((select) => select.addEventListener("change", (event) => {
+        assign((event.currentTarget as HTMLSelectElement).value);
+        this.persistLoraFacetPreferences();
+        this.render();
+      }));
+    };
+    bindFacetSelect("#lora-facet-creator,#lora-facet-mobile-creator", (value) => { this.loraFacetCreator = value; });
+    bindFacetSelect("#lora-facet-family,#lora-facet-mobile-family", (value) => { this.loraFacetFamily = value; });
+    bindFacetSelect("#lora-facet-metadata,#lora-facet-mobile-metadata", (value) => { this.loraFacetMetadata = value as LoraFacetMetadataFilter; });
+    bindFacetSelect("#lora-facet-sort,#lora-facet-mobile-sort", (value) => { this.loraFacetSort = value as LoraFacetSort; });
+    this.root.querySelectorAll<HTMLInputElement>("[data-lora-facet-tag]").forEach((input) => input.addEventListener("change", (event) => {
+      const target = event.currentTarget as HTMLInputElement;
+      const tag = target.dataset.loraFacetTag || "";
+      if (!tag) return;
+      if (target.checked) this.loraFacetTags.add(tag);
+      else this.loraFacetTags = new Set([...this.loraFacetTags].filter((value) => value.toLowerCase() !== tag.toLowerCase()));
+      this.loraFacetTagsOpen = true;
+      this.persistLoraFacetPreferences();
+      this.render();
+    }));
+    this.root.querySelectorAll<HTMLElement>("[data-remove-lora-facet-tag]").forEach((button) => button.addEventListener("click", () => {
+      const tag = button.dataset.removeLoraFacetTag || "";
+      this.loraFacetTags = new Set([...this.loraFacetTags].filter((value) => value.toLowerCase() !== tag.toLowerCase()));
+      this.persistLoraFacetPreferences();
+      this.render();
+    }));
+    this.root.querySelectorAll<HTMLElement>("[data-action='clear-lora-facets']").forEach((button) => button.addEventListener("click", () => {
+      this.clearLoraFacetFilters();
+      this.render();
+    }));
+    this.root.querySelectorAll<HTMLElement>("[data-action='enrich-lora-classification']").forEach((button) => button.addEventListener("click", () => void this.enrichLoraFacets("classification")));
+    this.root.querySelectorAll<HTMLElement>("[data-action='fetch-lora-civitai-stats']").forEach((button) => button.addEventListener("click", () => void this.enrichLoraFacets("stats")));
+    this.root.querySelector<HTMLElement>("[data-action='open-lora-facet-mobile']")?.addEventListener("click", () => { this.loraFacetMobileOpen = true; this.render(); });
+    this.root.querySelectorAll<HTMLElement>("[data-action='close-lora-facet-mobile']").forEach((element) => element.addEventListener("click", (event) => {
+      if (element.classList.contains("download-backdrop") && (event.target as HTMLElement).closest("[data-lora-facet-mobile-dialog]")) return;
+      this.loraFacetMobileOpen = false;
+      this.render();
+    }));
+    this.root.querySelector<HTMLDetailsElement>(".lora-facet-tags")?.addEventListener("toggle", (event) => { this.loraFacetTagsOpen = (event.currentTarget as HTMLDetailsElement).open; });
+    const bindTagSearch = (selector: string) => this.root.querySelector<HTMLInputElement>(selector)?.addEventListener("input", (event) => {
+      const query = (event.currentTarget as HTMLInputElement).value.trim().toLowerCase();
+      this.loraFacetTagQuery = (event.currentTarget as HTMLInputElement).value;
+      this.root.querySelectorAll<HTMLElement>("[data-lora-facet-tag-row]").forEach((row) => { row.hidden = Boolean(query) && !(row.dataset.loraFacetTagRow || "").includes(query); });
+    });
+    bindTagSearch("#lora-facet-tag-search");
+    bindTagSearch("#lora-facet-mobile-tag-search");
     this.root.querySelector<HTMLInputElement>("#lora-library-search")?.addEventListener("input", (event) => {
       const input = event.currentTarget as HTMLInputElement;
       this.loraSearch = input.value;
