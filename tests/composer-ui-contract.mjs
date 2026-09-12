@@ -51,4 +51,8 @@ assert(css.includes('.theme-font-grid') && css.includes('.theme-font-field'), 'T
 assert(css.includes('.status-chip.is-online {') && css.includes('.link-dimensions.is-active { color: var(--accent);'), 'Online and linked states must be fully theme-aware.');
 assert(css.includes('.log-console {') && css.includes('background: var(--surface-alt);'), 'Light themes need a configurable log utility surface.');
 
+
+assert((app.match(/querySelectorAll<HTMLElement>\(\"\[data-ratio\]\"\)/g) ?? []).length === 1, 'Ratio presets must bind exactly once; duplicate handlers make reverse-ratio flicker back to its starting orientation.');
+assert(css.includes('.seed-inline-toggle { position:absolute;') && css.includes('.seed-field-label { display:block; min-height:0;'), 'Seed toggle must not add layout height that pushes the seed input below Steps and CFG.');
+
 console.log('Composer UI contract OK.');

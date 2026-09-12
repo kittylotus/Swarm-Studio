@@ -34,6 +34,7 @@ import {
   type LoraFacetMetadataFilter,
   type LoraFacetSort,
 } from "./civitai/facets";
+import { dimensionsForRatio, ratioReversedForDimensions, swapResolutionDimensions } from "./resolution";
 import { runtime, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
@@ -4813,19 +4814,6 @@ export class StudioApp {
       this.store.updateDraft({ prompt: "", negativePrompt: "", regionalPrompt: emptyRegionalPromptDraft() });
       this.render();
     });
-    this.root.querySelectorAll<HTMLElement>("[data-ratio]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const ratio = button.dataset.ratio ?? "1:1";
-        this.applyRatioToInputs(ratio, false);
-        this.render();
-      });
-    });
-    this.root.querySelector<HTMLElement>("[data-action='reverse-ratio']")?.addEventListener("click", () => {
-      const draft = this.store.state.draft;
-      if (draft.ratio === "1:1") return;
-      this.applyRatioToInputs(draft.ratio, !draft.ratioReversed);
-      this.render();
-    });
 
     this.root.querySelector<HTMLInputElement>("#variation-seed-enabled")?.addEventListener("change", (event) => {
       this.store.updateDraft({ variationSeedEnabled: (event.currentTarget as HTMLInputElement).checked });
@@ -5189,14 +5177,18 @@ export class StudioApp {
     this.root.querySelectorAll<HTMLElement>("[data-ratio]").forEach((button) => {
       button.addEventListener("click", () => {
         const ratio = button.dataset.ratio ?? "1:1";
-        this.applyRatioToInputs(ratio, false);
+        const draft = this.store.state.draft;
+        const reversed = ratio === "1:1" ? false : ratioReversedForDimensions(ratio, draft.width, draft.height, draft.ratioReversed);
+        this.applyRatioToInputs(ratio, reversed);
         this.render();
       });
     });
     this.root.querySelector<HTMLElement>("[data-action='reverse-ratio']")?.addEventListener("click", () => {
       const draft = this.store.state.draft;
       if (draft.ratio === "1:1") return;
-      this.applyRatioToInputs(draft.ratio, !draft.ratioReversed);
+      const swapped = swapResolutionDimensions(draft.width, draft.height);
+      const ratioReversed = ratioReversedForDimensions(draft.ratio, swapped.width, swapped.height, !draft.ratioReversed);
+      this.store.updateDraft({ ...swapped, ratioReversed });
       this.render();
     });
   }
@@ -5626,6 +5618,11 @@ export class StudioApp {
       }
     }
     this.persistDraftFromForm();
+    const persisted = this.store.state.draft;
+    if (!persisted.lockRatio && persisted.ratio !== "1:1") {
+      const ratioReversed = ratioReversedForDimensions(persisted.ratio, persisted.width, persisted.height, persisted.ratioReversed);
+      if (ratioReversed !== persisted.ratioReversed) this.store.updateDraft({ ratioReversed }, false);
+    }
     const display = this.root.querySelector<HTMLElement>("#resolution-value");
     if (display) display.textContent = `${Math.max(asNumber(widthInput.value, draft.width), asNumber(heightInput.value, draft.height))}px`;
     const widthDisplay = this.root.querySelector<HTMLElement>("#resolution-width-value");
@@ -5669,14 +5666,9 @@ export class StudioApp {
   }
 
   private applyRatioToInputs(ratio: string, reversed: boolean): void {
-    const [baseW, baseH] = ratio.split(":").map(Number);
-    if (!baseW || !baseH) return;
-    const w = reversed ? baseH : baseW;
-    const h = reversed ? baseW : baseH;
-    const currentMax = clamp(Math.max(this.store.state.draft.width, this.store.state.draft.height), 256, 2048);
-    const width = w >= h ? round64(currentMax) : round64(currentMax * w / h);
-    const height = h >= w ? round64(currentMax) : round64(currentMax * h / w);
-    this.store.updateDraft({ width, height, ratio, ratioReversed: reversed });
+    const geometry = dimensionsForRatio(ratio, reversed, this.store.state.draft.width, this.store.state.draft.height);
+    if (!geometry) return;
+    this.store.updateDraft({ ...geometry, ratio, ratioReversed: reversed });
   }
 
   private openPresetEditor(title = ""): void {
@@ -9518,7 +9510,9 @@ export class StudioApp {
       this.render();
     }));
     this.root.querySelector<HTMLElement>("[data-action='reset-theme']")?.addEventListener("click", () => {
-      this.store.updateTheme({ ...builtInThemes[0].theme });
+      const defaultTheme = builtInThemes[0];
+      if (!defaultTheme) return;
+      this.store.updateTheme({ ...defaultTheme.theme });
       this.render();
     });
     this.root.querySelector<HTMLElement>("[data-action='save-theme-profile']")?.addEventListener("click", () => {

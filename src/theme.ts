@@ -17,7 +17,7 @@ export const themeFontOptions: ReadonlyArray<{ id: StudioThemeFont; label: strin
 const fontKeys = new Set<StudioThemeFont>(themeFontOptions.map((option) => option.id));
 
 export function themeFontStack(font: StudioThemeFont): string {
-  return themeFontOptions.find((option) => option.id === font)?.stack ?? themeFontOptions[0].stack;
+  return themeFontOptions.find((option) => option.id === font)?.stack ?? themeFontOptions[0]?.stack ?? "ui-sans-serif, system-ui, sans-serif";
 }
 
 const vibecoderPurple: StudioTheme = {

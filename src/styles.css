@@ -783,9 +783,10 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 
 /* v0.7 mobile generation polish */
 .action-svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.seed-field-label { display:flex; align-items:center; justify-content:space-between; gap:6px; min-height:24px; }
+.seed-field { position:relative; }
+.seed-field-label { display:block; min-height:0; padding-right:30px; }
 .seed-field-label > span { color:inherit; font:inherit; letter-spacing:inherit; text-transform:inherit; }
-.seed-inline-toggle { width:24px; height:22px; flex:0 0 auto; border-radius:6px; }
+.seed-inline-toggle { position:absolute; top:-7px; right:0; width:24px; height:22px; border-radius:6px; }
 .seed-inline-toggle .action-svg { width:13px; height:13px; }
 .syntax-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
 .syntax-toggle em { font-style: normal; }
@@ -3768,9 +3769,6 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 }
 .seed-field {
   align-content:start;
-}
-.seed-field-label {
-  align-items:flex-start;
 }
 .clue-tip,
 .advanced-param-group > summary > .clue-tip {
