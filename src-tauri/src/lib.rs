@@ -474,6 +474,82 @@ fn resolve_studio_repo_root() -> Result<PathBuf, String> {
     Err("This copy of Swarm Studio is not running from a Git checkout. The source updater is available after cloning the repository once.".into())
 }
 
+fn resolve_studio_root() -> Result<PathBuf, String> {
+    let mut candidates = Vec::<PathBuf>::new();
+    if let Ok(root) = std::env::var("SWARM_STUDIO_ROOT") {
+        if !root.trim().is_empty() { candidates.push(PathBuf::from(root.trim())); }
+    }
+    if let Ok(current) = std::env::current_dir() { candidates.push(current); }
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(parent) = manifest.parent() { candidates.push(parent.to_path_buf()); }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() { candidates.push(parent.to_path_buf()); }
+    }
+
+    for candidate in candidates {
+        let mut cursor = if candidate.is_file() { candidate.parent().map(Path::to_path_buf).unwrap_or_else(|| candidate.clone()) } else { candidate };
+        loop {
+            if is_studio_repo(&cursor) { return Ok(cursor); }
+            if !cursor.pop() { break; }
+        }
+    }
+    Err("Could not resolve the Swarm Studio source directory for host control.".into())
+}
+
+fn run_host_control(args: &[String]) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let root = resolve_studio_root()?;
+        let script = root.join("scripts").join("host-control.ps1");
+        if !script.is_file() {
+            return Err(format!("Host-control helper is missing at {}.", script.display()));
+        }
+        let output = Command::new("powershell.exe")
+            .args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .args(args)
+            .arg("-Json")
+            .current_dir(&root)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| format!("Could not run host control: {error}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let parsed = serde_json::from_str::<serde_json::Value>(&stdout).ok();
+        if !output.status.success() {
+            if let Some(message) = parsed.as_ref().and_then(|value| value.get("error")).and_then(|value| value.as_str()) {
+                return Err(message.to_string());
+            }
+            return Err(if stderr.is_empty() { format!("Host control exited with {}.", output.status) } else { stderr });
+        }
+        return parsed.ok_or_else(|| format!("Host control returned invalid JSON: {stdout}"));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = args;
+        Ok(serde_json::json!({
+            "available": false,
+            "installed": false,
+            "taskInstalled": false,
+            "cliInstalled": false,
+            "command": "studio start",
+            "message": "Host control currently targets Windows.",
+            "studio": { "running": false, "pid": null },
+            "swarm": { "running": false, "pid": null }
+        }))
+    }
+}
+
+#[tauri::command]
+fn host_control_status() -> Result<serde_json::Value, String> {
+    run_host_control(&["status".into()])
+}
+
+#[tauri::command]
+fn host_control_install() -> Result<serde_json::Value, String> {
+    run_host_control(&["install".into()])
+}
+
 fn remote_package_version(root: &Path, remote_ref: &str) -> String {
     let spec = format!("{remote_ref}:package.json");
     let Ok(text) = git_output(root, &["show", &spec]) else { return String::new(); };
@@ -1140,6 +1216,8 @@ pub fn run() {
             start_swarm,
             stop_swarm,
             swarm_process_status,
+            host_control_status,
+            host_control_install,
             backend_repo_status,
             backend_repo_fetch,
             backend_repo_switch,

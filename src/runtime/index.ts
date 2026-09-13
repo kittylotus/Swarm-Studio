@@ -15,6 +15,18 @@ export interface RuntimeProcessStatus {
   pid: number | null;
 }
 
+export interface RuntimeHostControlStatus {
+  available: boolean;
+  installed: boolean;
+  taskInstalled: boolean;
+  cliInstalled: boolean;
+  command: string;
+  message: string;
+  actionMessage?: string;
+  studio: { running: boolean; pid: number | null };
+  swarm: { running: boolean; pid: number | null };
+}
+
 export interface RuntimeRepoRef {
   value: string;
   label: string;
@@ -57,6 +69,8 @@ export interface RuntimeBridge {
   getText(url: string, authToken?: string): Promise<string>;
   probe(url: string, authToken?: string): Promise<boolean>;
   fetchDataUrl(url: string, authToken?: string): Promise<string>;
+  hostControlStatus(): Promise<RuntimeHostControlStatus>;
+  installHostControl(): Promise<RuntimeHostControlStatus>;
   startLocalSwarm(settings: ConnectionSettings): Promise<string>;
   stopLocalSwarm(): Promise<string>;
   processStatus(): Promise<RuntimeProcessStatus>;
@@ -104,6 +118,29 @@ function isExternalMetadataHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
   return isCivitaiHost(host)
     || host === "huggingface.co" || host.endsWith(".huggingface.co");
+}
+
+let browserHostControlSessionReady = false;
+
+async function browserHostControlFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!browserHostControlSessionReady) {
+    const session = await fetch("/__studio/host-control/session", { credentials: "same-origin", cache: "no-store" });
+    if (!session.ok) throw new Error(`Host control session failed with ${session.status}.`);
+    browserHostControlSessionReady = true;
+  }
+  const response = await fetch(`/__studio/host-control/${path}`, { ...init, credentials: "same-origin", cache: "no-store" });
+  const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok || payload.error) throw new Error(String(payload.error || `Host control returned ${response.status}.`));
+  return payload as T;
+}
+
+function connectionPort(settings: ConnectionSettings): number {
+  try {
+    const value = Number(new URL(settings.baseUrl || "http://127.0.0.1:7801").port || 7801);
+    return Number.isInteger(value) && value > 0 && value <= 65535 ? value : 7801;
+  } catch {
+    return 7801;
+  }
 }
 
 function browserRelayUrl(url: string): string {
@@ -238,14 +275,35 @@ const browserRuntime: RuntimeBridge = {
       reader.readAsDataURL(blob);
     });
   },
-  async startLocalSwarm() {
-    throw new Error("The PWA cannot launch desktop processes. Start SwarmUI on its host machine, then connect remotely.");
+  async hostControlStatus() {
+    return browserHostControlFetch<RuntimeHostControlStatus>("status");
+  },
+  async installHostControl() {
+    throw new Error("Install or repair the SSH launcher from desktop Studio on the host PC.");
+  },
+  async startLocalSwarm(settings) {
+    const status = await browserHostControlFetch<RuntimeHostControlStatus>("action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: "swarm", action: "start", workingDirectory: settings.workingDirectory, port: connectionPort(settings) }),
+    });
+    return status.actionMessage || status.message || "Swarm start requested.";
   },
   async stopLocalSwarm() {
-    throw new Error("The PWA does not own a local SwarmUI process.");
+    const status = await browserHostControlFetch<RuntimeHostControlStatus>("action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: "swarm", action: "stop" }),
+    });
+    return status.actionMessage || status.message || "Swarm stop requested.";
   },
   async processStatus() {
-    return { owned: false, running: false, pid: null };
+    try {
+      const status = await browserHostControlFetch<RuntimeHostControlStatus>("status");
+      return { owned: status.swarm.running, running: status.swarm.running, pid: status.swarm.pid };
+    } catch {
+      return { owned: false, running: false, pid: null };
+    }
   },
   async repoStatus() {
     throw new Error("Backend source version controls are only available in the desktop app.");
@@ -324,6 +382,12 @@ const tauriRuntime: RuntimeBridge = {
   },
   async fetchDataUrl(url, authToken) {
     return tauriInvoke<string>("http_get_data_url", { url, authToken: authToken || null });
+  },
+  async hostControlStatus() {
+    return tauriInvoke<RuntimeHostControlStatus>("host_control_status");
+  },
+  async installHostControl() {
+    return tauriInvoke<RuntimeHostControlStatus>("host_control_install");
   },
   async startLocalSwarm(settings) {
     // System mode needs an explicit PowerShell function/launcher. If that field is blank,

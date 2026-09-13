@@ -13,6 +13,9 @@ Set-Location $Root
 $env:SWARM_STUDIO_ROOT = $Root
 $RunnerLog = Join-Path $Root ".swarm-studio-runner.log"
 $SwarmPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-owned-swarm.pid"
+$RunnerPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-runner.pid"
+Set-Content -LiteralPath $RunnerPidFile -Value $PID -Encoding ASCII
+$env:SWARM_STUDIO_RUNNER_PID_FILE = $RunnerPidFile
 $env:SWARM_STUDIO_SWARM_PID_FILE = $SwarmPidFile
 $env:SWARM_STUDIO_RUNNER_LOG = $RunnerLog
 

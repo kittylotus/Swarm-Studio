@@ -35,7 +35,7 @@ import {
   type LoraFacetSort,
 } from "./civitai/facets";
 import { dimensionsForRatio, ratioReversedForDimensions, swapResolutionDimensions } from "./resolution";
-import { runtime, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
+import { runtime, type RuntimeHostControlStatus, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
 import { normalizeGenerationRequest, normalizeParamKey } from "./swarm/request";
@@ -386,6 +386,8 @@ export class StudioApp {
   private draftSaveTimer = 0;
   private logs: LogEntry[] = [];
   private processStatus: RuntimeProcessStatus = { owned: false, running: false, pid: null };
+  private hostControlStatus: RuntimeHostControlStatus | null = null;
+  private hostControlLoading = false;
   private processStatusRefreshTimer = 0;
   private backendControlLoaded = false;
   private backendControlLoading = false;
@@ -894,13 +896,16 @@ export class StudioApp {
       this.notify(persistenceWarning, "info");
     }
     void this.refreshProcessStatus(false);
+    void this.refreshHostControlStatus(false).then(() => {
+      if (runtime.kind === "browser") {
+        if (this.store.state.connection.autoStart && this.hostControlStatus?.available) void this.connect(true);
+        else void this.connect(false, true);
+      }
+    });
     if (runtime.kind === "tauri") {
       window.setTimeout(() => void this.checkStudioUpdate(false), 2600);
-    }
-    if (this.store.state.connection.autoStart && runtime.kind === "tauri") {
-      void this.connect(true);
-    } else {
-      void this.connect(false, true);
+      if (this.store.state.connection.autoStart) void this.connect(true);
+      else void this.connect(false, true);
     }
   }
 
@@ -1118,6 +1123,38 @@ export class StudioApp {
     }
   }
 
+  private async refreshHostControlStatus(rerender = true): Promise<void> {
+    try {
+      this.hostControlStatus = await runtime.hostControlStatus();
+    } catch (error) {
+      this.hostControlStatus = {
+        available: false, installed: false, taskInstalled: false, cliInstalled: false,
+        command: "studio start", message: error instanceof Error ? error.message : String(error),
+        studio: { running: false, pid: null }, swarm: { running: false, pid: null },
+      };
+    }
+    if (rerender && this.view === "settings") this.render();
+  }
+
+  private async installHostControl(): Promise<void> {
+    if (runtime.kind !== "tauri") {
+      this.notify("Install or repair the SSH launcher from desktop Studio on the host PC.", "info");
+      return;
+    }
+    this.hostControlLoading = true;
+    try {
+      this.hostControlStatus = await runtime.installHostControl();
+      this.notify("Host control installed. New SSH sessions can use: studio start", "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.addLog(`Host control install: ${message}`, "error", "studio");
+      this.notify(message, "error");
+    } finally {
+      this.hostControlLoading = false;
+      if (this.view === "settings") this.render();
+    }
+  }
+
   private scheduleProcessStatusRefresh(): void {
     if (this.processStatusRefreshTimer) return;
     this.processStatusRefreshTimer = window.setTimeout(() => {
@@ -1196,13 +1233,13 @@ export class StudioApp {
       this.backendControlBusy = "";
       if (this.connected) await this.refreshBackendControl(false).catch(() => undefined);
       await this.refreshProcessStatus(false);
+      await this.refreshHostControlStatus(false);
       if (this.view === "settings" && this.store.state.ui.settingsPane === "backend") this.render();
     }
   }
 
   private async restartOwnedSwarm(): Promise<void> {
     await this.runBackendControlAction("Restart Swarm", async () => {
-      if (runtime.kind !== "tauri") throw new Error("Swarm process restart is only available in desktop Studio.");
       if (!this.processStatus.owned || !this.processStatus.running) throw new Error("Studio does not own the running Swarm process. Stop/restart that external launcher directly.");
       await runtime.stopLocalSwarm();
       this.connected = false;
@@ -3978,6 +4015,7 @@ export class StudioApp {
     const busy = Boolean(this.backendControlBusy);
     const disabled = loading || busy ? "disabled" : "";
     const native = runtime.kind === "tauri";
+    const hostSwarmControl = native || this.hostControlStatus?.available === true;
     const startScript = String(this.backendSetting(backend, "StartScript") ?? "");
     const extraArgs = String(this.backendSetting(backend, "ExtraArgs") ?? "");
     const extraArgList = parseLaunchArgs(extraArgs);
@@ -4011,9 +4049,9 @@ export class StudioApp {
             <header><div><span class="panel-kicker">SWARMUI</span><h3>${escapeHtml(this.session?.version ?? "Unknown server version")}</h3></div><span class="backend-state ${this.connected ? "is-running" : ""}">${this.connected ? "online" : "offline"}</span></header>
             <div class="backend-repo-readout"><span>Local checkout</span><b>${escapeHtml(swarmRef)}</b><small>${this.swarmRepoStatus ? `${this.swarmRepoStatus.dirty ? "TRACKED CHANGES · " : ""}${escapeHtml(this.swarmRepoStatus.path)}` : escapeHtml(this.swarmRepoError || (native ? "Repository not resolved yet." : "Version checkout controls require desktop Studio."))}</small></div>
             <label class="field"><span>Pin tag / commit / branch</span><input id="swarm-version-target" list="swarm-version-options" placeholder="v0.9.8.3 or commit hash" ${native ? "" : "disabled"}/><datalist id="swarm-version-options">${this.backendRepoRefOptions(this.swarmRepoStatus)}</datalist></label>
-            <div class="backend-button-row"><button type="button" class="ghost-button" data-action="fetch-swarm-versions" ${repoDisabled}>Fetch refs</button><button type="button" class="secondary-button" data-action="pin-swarm-version" ${repoDisabled}>Pin ref</button><button type="button" class="secondary-button" data-action="latest-swarm-version" ${repoDisabled}>Latest</button><button type="button" class="primary-button" data-action="restart-owned-swarm" ${native && this.processStatus.owned && this.processStatus.running ? disabled : "disabled"}>Restart</button></div>
+            <div class="backend-button-row"><button type="button" class="ghost-button" data-action="fetch-swarm-versions" ${repoDisabled}>Fetch refs</button><button type="button" class="secondary-button" data-action="pin-swarm-version" ${repoDisabled}>Pin ref</button><button type="button" class="secondary-button" data-action="latest-swarm-version" ${repoDisabled}>Latest</button><button type="button" class="primary-button" data-action="restart-owned-swarm" ${hostSwarmControl && this.processStatus.owned && this.processStatus.running ? disabled : "disabled"}>Restart</button></div>
             <label class="check-row backend-policy-toggle"><input id="swarm-launch-autopull" type="checkbox" ${swarmLaunchAutoPull ? "checked" : ""} ${native && this.swarmRepoStatus ? "" : "disabled"}/><span><b>Pull latest on Swarm launch</b><small>Controls Swarm's <code>src/bin/always_pull</code> marker. Pin ref turns this off automatically so the pin cannot be undone at next launch.</small></span></label>
-            <p class="helper-copy">Pinning refuses tracked local changes and uses detached HEAD. Latest returns to <code>origin/${escapeHtml(this.swarmRepoStatus?.defaultBranch || "default")}</code> with a fast-forward-only update. Studio only restarts Swarm when it owns that process.</p>
+            <p class="helper-copy">Pinning refuses tracked local changes and uses detached HEAD. Latest returns to <code>origin/${escapeHtml(this.swarmRepoStatus?.defaultBranch || "default")}</code> with a fast-forward-only update. Studio only restarts Swarm when its native or host-control launcher owns that process.</p>
           </article>
 
           <article class="backend-control-card">
@@ -4053,7 +4091,8 @@ export class StudioApp {
   private renderSettings(): string {
     const settings = this.store.state.connection;
     const pane = this.store.state.ui.settingsPane;
-    const systemLaunch = settings.launchMode === "system";
+    const hostSwarmControl = runtime.kind === "tauri" || this.hostControlStatus?.available === true;
+    const systemLaunch = runtime.kind === "tauri" && settings.launchMode === "system";
     const permissions = this.userData?.permissions ?? this.session?.permissions ?? [];
     const canReadSettings = permissions.includes("read_server_settings");
     const canEditSettings = permissions.includes("edit_server_settings");
@@ -4080,7 +4119,7 @@ export class StudioApp {
             <div><span>Permissions</span><b>${this.connected ? `${canReadSettings ? "read ✓" : "read —"} · ${canEditSettings ? "edit ✓" : "edit —"}` : "Connect to inspect"}</b></div>
           </div>
           <p class="helper-copy">Single-user Swarm normally identifies as <code>local</code>; that is a real account name, not an anonymous fallback. Auth tokens are only needed when your Swarm setup requires account authentication.</p>
-          <label class="check-row"><input type="checkbox" name="autoStart" ${settings.autoStart ? "checked" : ""} ${runtime.kind !== "tauri" ? "disabled" : ""}/><span><b>Auto-start local Swarm</b><small>Studio tries the API first and only launches when nothing is already listening.</small></span></label>
+          <label class="check-row"><input type="checkbox" name="autoStart" ${settings.autoStart ? "checked" : ""} ${hostSwarmControl ? "" : "disabled"}/><span><b>Auto-start local Swarm</b><small>Studio tries the API first and only launches when nothing is already listening.</small></span></label>
 
           <div class="section-minihead settings-subhead"><b>Launch method</b><span>${systemLaunch ? "External Windows shell" : "Managed child process"}</span></div>
           <div class="mode-switch launch-switch">
@@ -4092,6 +4131,11 @@ export class StudioApp {
             <label class="field"><span>Arguments</span><input name="launchArgs" value="${escapeHtml(formatLaunchArgs(settings.launchArgs))}" placeholder="--launch_mode none" /></label>
             <p class="helper-copy">Runs through your normal PowerShell profile in a visible terminal. Arguments use normal one-line shell-style spacing; quotes are preserved.</p>
             <input type="hidden" name="workingDirectory" value="${escapeHtml(settings.workingDirectory)}" />
+          ` : runtime.kind === "browser" ? `
+            <input type="hidden" name="launchCommand" value="${escapeHtml(settings.launchCommand)}" />
+            <input type="hidden" name="launchArgs" value="${escapeHtml(formatLaunchArgs(settings.launchArgs))}" />
+            <label class="field"><span>Host Swarm directory</span><input name="workingDirectory" value="${escapeHtml(settings.workingDirectory)}" placeholder="Optional, e.g. C:\SwarmUI" /></label>
+            <p class="helper-copy">PWA host control only discovers known Swarm launchers (<code>launch-windows.bat/.cmd/.ps1</code> or <code>SwarmUI.exe</code>) in this directory or common install locations. It never accepts an arbitrary shell command from the browser.</p>
           ` : `
             <label class="field"><span>Launch command</span><input name="launchCommand" value="${escapeHtml(settings.launchCommand)}" placeholder="C:\SwarmUI\launch-windows.bat or ./launch-linux.sh" /></label>
             <label class="field"><span>Working directory</span><input name="workingDirectory" value="${escapeHtml(settings.workingDirectory)}" placeholder="Optional SwarmUI directory" /></label>
@@ -4100,10 +4144,25 @@ export class StudioApp {
           `}
           <div class="form-actions settings-actions">
             <button class="primary-button" type="submit">Connect</button>
-            <button class="secondary-button" type="button" data-action="start-swarm" ${runtime.kind !== "tauri" ? "disabled" : ""}>${systemLaunch ? "Open Swarm" : "Start local"}</button>
-            <button class="danger-soft" type="button" data-action="stop-swarm" ${runtime.kind !== "tauri" || systemLaunch || !this.processStatus.running ? "disabled" : ""}>Stop process tree</button>
+            <button class="secondary-button" type="button" data-action="start-swarm" ${hostSwarmControl ? "" : "disabled"}>${systemLaunch ? "Open Swarm" : "Start local"}</button>
+            <button class="danger-soft" type="button" data-action="stop-swarm" ${!hostSwarmControl || systemLaunch || !this.processStatus.running ? "disabled" : ""}>Stop process tree</button>
           </div>
         </form>
+        <div class="allowed-hosts-card host-control-card">
+          <div class="section-minihead"><b>Host control</b><span>${this.hostControlStatus?.available ? "Host bridge ready" : "Unavailable"}</span></div>
+          <p class="helper-copy">The host bridge exposes fixed lifecycle verbs only. PWA clients can start/stop/restart host-managed Swarm, while the optional SSH launcher lets a logged-in Windows desktop session respond to <code>studio start</code>.</p>
+          <div class="runtime-status-grid">
+            <p><span>PWA bridge</span><b>${this.hostControlStatus?.available ? "Ready" : "Unavailable"}</b></p>
+            <p><span>SSH launcher</span><b>${this.hostControlStatus?.installed ? "Installed" : "Not installed"}</b></p>
+            <p><span>Command</span><b><code>${escapeHtml(this.hostControlStatus?.command || "studio start")}</code></b></p>
+            <p><span>Host Studio</span><b>${this.hostControlStatus?.studio.running ? `PID ${this.hostControlStatus.studio.pid}` : "Not detected"}</b></p>
+          </div>
+          <div class="form-actions">
+            <button class="secondary-button" type="button" data-action="refresh-host-control" ${this.hostControlLoading ? "disabled" : ""}>Refresh</button>
+            <button class="primary-button" type="button" data-action="install-host-control" ${runtime.kind === "tauri" && !this.hostControlLoading ? "" : "disabled"}>${this.hostControlLoading ? "Installing…" : this.hostControlStatus?.installed ? "Repair SSH launcher" : "Install SSH launcher"}</button>
+          </div>
+          ${this.hostControlStatus?.message ? `<p class="helper-copy">${escapeHtml(this.hostControlStatus.message)}</p>` : ""}
+        </div>
         <div class="runtime-status-grid settings-runtime-grid">
           <p><span>Connection</span><b>${this.connected ? "Online" : "Offline"}</b></p>
           <p><span>Transport</span><b>${runtime.kind === "tauri" ? "Native" : "Studio relay / browser"}</b></p>
@@ -9404,15 +9463,17 @@ export class StudioApp {
       mode: runtime.kind === "tauri" ? "local" : (String(data.get("mode") ?? "local") === "remote" ? "remote" : "local"),
       baseUrl: String(data.get("baseUrl") ?? "http://127.0.0.1:7801"),
       authToken: String(data.get("authToken") ?? ""),
-      autoStart: data.get("autoStart") === "on",
-      launchMode: String(data.get("launchMode") ?? "managed") === "system" ? "system" : "managed",
-      launchCommand: String(data.get("launchCommand") ?? ""),
-      launchArgs: parseLaunchArgs(String(data.get("launchArgs") ?? "")),
-      workingDirectory: String(data.get("workingDirectory") ?? ""),
+      autoStart: data.has("autoStart") ? data.get("autoStart") === "on" : this.store.state.connection.autoStart,
+      launchMode: data.has("launchMode") ? (String(data.get("launchMode")) === "system" ? "system" : "managed") : this.store.state.connection.launchMode,
+      launchCommand: data.has("launchCommand") ? String(data.get("launchCommand") ?? "") : this.store.state.connection.launchCommand,
+      launchArgs: data.has("launchArgs") ? parseLaunchArgs(String(data.get("launchArgs") ?? "")) : this.store.state.connection.launchArgs,
+      workingDirectory: data.has("workingDirectory") ? String(data.get("workingDirectory") ?? "") : this.store.state.connection.workingDirectory,
     });
   }
 
   private bindSettingsEvents(): void {
+    this.root.querySelector<HTMLElement>("[data-action='refresh-host-control']")?.addEventListener("click", () => void this.refreshHostControlStatus(true));
+    this.root.querySelector<HTMLElement>("[data-action='install-host-control']")?.addEventListener("click", () => void this.installHostControl());
     this.root.querySelector<HTMLElement>("[data-action='refresh-backend-control']")?.addEventListener("click", () => void this.refreshBackendControl(true, false));
     this.root.querySelector<HTMLElement>("[data-action='fetch-swarm-versions']")?.addEventListener("click", () => void this.runBackendControlAction("Fetch Swarm refs", async () => {
       this.swarmRepoStatus = await runtime.fetchRepoVersions("swarm", this.store.state.connection.workingDirectory || undefined);
@@ -9551,13 +9612,15 @@ export class StudioApp {
       const settings = this.store.state.connection;
       // Native Connect is an explicit request to make local Swarm available. It probes the
       // loopback API first and launches the configured/discovered process when nothing answers.
-      // Browser/PWA Connect never spawns a desktop process.
-      void this.connect(runtime.kind === "tauri");
+      // Browser/PWA Connect can request the fixed host-control launcher when that bridge is available; it never receives arbitrary shell access.
+      void this.connect(runtime.kind === "tauri" || this.hostControlStatus?.available === true);
     });
     this.root.querySelector<HTMLElement>("[data-action='start-swarm']")?.addEventListener("click", async () => {
       this.readConnectionFromForm();
       await this.connect(true);
-      await this.refreshProcessStatus(true);
+      await this.refreshProcessStatus(false);
+      await this.refreshHostControlStatus(false);
+      this.render();
     });
     this.root.querySelector<HTMLElement>("[data-action='stop-swarm']")?.addEventListener("click", async () => {
       try {
@@ -9567,6 +9630,7 @@ export class StudioApp {
         this.connected = false;
         this.session = null;
         await this.refreshProcessStatus(false);
+        await this.refreshHostControlStatus(false);
         this.render();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

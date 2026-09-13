@@ -1,0 +1,19 @@
+Swarm Studio host-control overlay
+
+Modified / added files:
+- package.json
+- scripts/host-control.ps1
+- src/app.ts
+- src/runtime/index.ts
+- src-tauri/src/lib.rs
+- start.ps1
+- tests/host-control-contract.mjs
+- vite.config.ts
+- changelog/host-control-ssh-pwa.md
+- changelog/host-control-ssh-pwa.manifest.txt
+
+Safety boundary:
+- Browser/PWA can request only fixed Swarm start/stop/restart/status verbs.
+- No arbitrary command, executable, or argument surface is exposed to the browser.
+- PWA control POSTs require the per-process HttpOnly SameSite session cookie and a same-origin Origin header.
+- SSH Studio launch is brokered by an interactive Windows Scheduled Task installed explicitly by the user.
