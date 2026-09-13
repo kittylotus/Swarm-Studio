@@ -192,6 +192,10 @@ export class SwarmClient {
     return this.call<SwarmParamList>("ListT2IParams", {});
   }
 
+  async refreshCapabilities(strong = true): Promise<SwarmParamList> {
+    return this.parameterData(true, strong);
+  }
+
   async refreshInventory(): Promise<SwarmParamList> {
     return this.parameterData(true, true);
   }

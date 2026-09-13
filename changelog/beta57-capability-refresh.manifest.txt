@@ -1,0 +1,5 @@
+src/app.ts
+src/swarm/client.ts
+scripts/preflight.mjs
+changelog/beta57-capability-refresh.md
+changelog/beta57-capability-refresh.manifest.txt

@@ -2176,10 +2176,49 @@ export class StudioApp {
     this.wildcards = data.wildcards ?? this.wildcards;
   }
 
+  private capabilityValues(...names: string[]): string[] {
+    return getParamValues(this.params, ...names);
+  }
+
+  private addedCapabilityValues(before: string[], after: string[]): string[] {
+    const seen = new Set(before.map((value) => normalizeParamKey(value)).filter(Boolean));
+    return after.filter((value) => {
+      const key = normalizeParamKey(value);
+      return Boolean(key) && !seen.has(key);
+    });
+  }
+
+  private logCapabilityHydrationResult(
+    context: string,
+    beforeSampler: string[],
+    beforeScheduler: string[],
+    afterSampler: string[],
+    afterScheduler: string[],
+  ): void {
+    const samplerChanged = beforeSampler.join("\u0000") !== afterSampler.join("\u0000");
+    const schedulerChanged = beforeScheduler.join("\u0000") !== afterScheduler.join("\u0000");
+    if (!samplerChanged && !schedulerChanged) return;
+
+    const parts: string[] = [];
+    if (samplerChanged) {
+      const added = this.addedCapabilityValues(beforeSampler, afterSampler);
+      parts.push(added.length
+        ? `samplers ${beforeSampler.length} → ${afterSampler.length} (added: ${added.join(", ")})`
+        : `samplers ${beforeSampler.length} → ${afterSampler.length}`);
+    }
+    if (schedulerChanged) {
+      const added = this.addedCapabilityValues(beforeScheduler, afterScheduler);
+      parts.push(added.length
+        ? `schedulers ${beforeScheduler.length} → ${afterScheduler.length} (added: ${added.join(", ")})`
+        : `schedulers ${beforeScheduler.length} → ${afterScheduler.length}`);
+    }
+    this.addLog(`${context}${parts.length ? ` · ${parts.join(" · ")}` : ""}`, "info", "api");
+  }
+
   private paramValueAdvertised(value: string, ...names: string[]): boolean {
     if (!value) return true;
     const wanted = normalizeParamKey(value);
-    return getParamValues(this.params, ...names).some((candidate) => normalizeParamKey(candidate) === wanted);
+    return this.capabilityValues(...names).some((candidate) => normalizeParamKey(candidate) === wanted);
   }
 
   private generationDynamicValuesAdvertised(draft: GenerationDraft): boolean {
@@ -2192,8 +2231,8 @@ export class StudioApp {
     const client = this.client;
     void (async () => {
       // Swarm can accept a session before a self-starting Comfy backend has finished publishing
-      // extension samplers/schedulers. Wait only during this bounded startup window, then refresh
-      // ListT2IParams once the backend reports ready. This is not a permanent connection poll.
+      // extension samplers/schedulers. Wait only during this bounded startup window, then ask
+      // Swarm to refresh its live capability schema. This is not a permanent connection poll.
       for (let attempt = 0; attempt < 16; attempt += 1) {
         await sleep(attempt === 0 ? 500 : 750);
         if (!this.connected || epoch !== this.parameterHydrationEpoch || client !== this.client) return;
@@ -2203,15 +2242,13 @@ export class StudioApp {
           if (!enabled.length) return;
           const ready = enabled.some((backend) => ["running", "idle"].includes(String(backend.status ?? "").toLowerCase()));
           if (!ready) continue;
-          const beforeSampler = getParamValues(this.params, "Sampler", "sampler").join("\u0000");
-          const beforeScheduler = getParamValues(this.params, "Scheduler", "scheduler").join("\u0000");
-          this.applyParameterData(await client.parameterData(false));
+          const beforeSampler = this.capabilityValues("Sampler", "sampler");
+          const beforeScheduler = this.capabilityValues("Scheduler", "scheduler");
+          this.applyParameterData(await client.refreshCapabilities(true));
           if (!this.connected || epoch !== this.parameterHydrationEpoch || client !== this.client) return;
-          const afterSampler = getParamValues(this.params, "Sampler", "sampler").join("\u0000");
-          const afterScheduler = getParamValues(this.params, "Scheduler", "scheduler").join("\u0000");
-          if (beforeSampler !== afterSampler || beforeScheduler !== afterScheduler) {
-            this.addLog("Backend capability schema hydrated after Comfy became ready.", "info", "api");
-          }
+          const afterSampler = this.capabilityValues("Sampler", "sampler");
+          const afterScheduler = this.capabilityValues("Scheduler", "scheduler");
+          this.logCapabilityHydrationResult("Backend capability schema refreshed after Comfy became ready.", beforeSampler, beforeScheduler, afterSampler, afterScheduler);
           return;
         } catch {
           // Backend-list permissions can be restricted. Fall through to the generation-time
@@ -2230,24 +2267,51 @@ export class StudioApp {
     ].filter(Boolean);
     if (!missing.length) return;
 
-    this.addLog(`Waiting for backend capability registration: ${missing.join(", ")}.`, "info", "api");
+    this.addLog(`Refreshing backend capabilities for ${missing.join(", ")}.`, "info", "api");
     const client = this.client;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      if (attempt) await sleep(600);
+    const beforeSampler = this.capabilityValues("Sampler", "sampler");
+    const beforeScheduler = this.capabilityValues("Scheduler", "scheduler");
+
+    try {
+      // Strong refresh is deliberate here: Swarm's weak TriggerRefresh only returns the current
+      // parameter snapshot. Extension schedulers such as RES4LYF beta57 live in Comfy object_info,
+      // which Swarm reloads only through the full backend refresh path.
+      this.applyParameterData(await client.refreshCapabilities(true));
+    } catch (error) {
+      this.addLog(`Strong backend capability refresh failed: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
+    }
+    if (!this.connected || client !== this.client) return;
+
+    let afterSampler = this.capabilityValues("Sampler", "sampler");
+    let afterScheduler = this.capabilityValues("Scheduler", "scheduler");
+    this.logCapabilityHydrationResult("Backend capability schema strongly refreshed for generation.", beforeSampler, beforeScheduler, afterSampler, afterScheduler);
+    if (this.generationDynamicValuesAdvertised(draft)) {
+      this.addLog(`Backend capabilities registered: ${missing.join(", ")}.`, "info", "api");
+      return;
+    }
+
+    // A strong refresh may continue backend value loading briefly. Do a few cheap reads only;
+    // never repeat the expensive full refresh in a loop.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await sleep(600);
       if (!this.connected || client !== this.client) return;
       try {
         this.applyParameterData(await client.parameterData(false));
       } catch (error) {
-        if (attempt === 9) this.addLog(`Backend capability refresh failed: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
+        if (attempt === 4) this.addLog(`Backend capability read failed: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
         continue;
       }
+      afterSampler = this.capabilityValues("Sampler", "sampler");
+      afterScheduler = this.capabilityValues("Scheduler", "scheduler");
       if (this.generationDynamicValuesAdvertised(draft)) {
+        this.logCapabilityHydrationResult("Backend capability schema completed after strong refresh.", beforeSampler, beforeScheduler, afterSampler, afterScheduler);
         this.addLog(`Backend capabilities registered: ${missing.join(", ")}.`, "info", "api");
         return;
       }
     }
-    // Extension-owned values are intentionally still sent unchanged. This refresh is a startup
-    // catch-up, not a validator that gets to erase values Studio cannot prove are invalid.
+
+    // Extension-owned values remain untouched. If Swarm still rejects one, the server's actual
+    // Comfy capability registry did not acquire it; Studio must not fabricate acceptance locally.
     this.addLog(`Backend capability metadata still does not advertise ${missing.join(", ")}; sending the selected value unchanged.`, "warn", "api");
   }
 

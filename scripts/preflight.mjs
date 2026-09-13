@@ -87,8 +87,10 @@ assert(app.includes("wireGenerationRequest("), "Generation requests must pass th
 assert(app.includes("schedulePostConnectParameterHydration()"), "Connect must schedule bounded backend capability hydration");
 assert(app.includes("ensureGenerationParameterHydration(draft)"), "Generation must catch up stale backend-provided sampler/scheduler metadata on demand");
 assert(app.includes("sampler: this.inpaintConfigSampler || draft.sampler") && app.includes("scheduler: this.inpaintConfigScheduler || draft.scheduler"), "Inpaint capability hydration must use the effective Inpaint sampler/scheduler overrides");
-assert(app.includes("attempt < 16") && app.includes("attempt < 10"), "Parameter hydration must remain bounded rather than becoming a permanent connection poll");
-assert(app.includes('client.parameterData(false)'), "Dynamic capability hydration must use weak ListT2IParams refreshes rather than repeated strong model rescans");
+assert(app.includes("attempt < 16") && app.includes("attempt < 5"), "Parameter hydration must remain bounded rather than becoming a permanent connection poll");
+assert(read("src/swarm/client.ts").includes("async refreshCapabilities(strong = true)") && read("src/swarm/client.ts").includes("return this.parameterData(true, strong);"), "Swarm client must expose a strong-by-default TriggerRefresh capability helper");
+assert(app.includes("client.refreshCapabilities(true)"), "Missing dynamic capabilities must force one strong Swarm backend refresh");
+assert(app.includes("client.parameterData(false)"), "Strong capability refresh may be followed only by bounded cheap parameter reads");
 assert(app.includes("sampler: draft.sampler || undefined") && app.includes("scheduler: draft.scheduler || undefined"), "Create requests must use Create sampler/scheduler state rather than stale Inpaint config");
 assert(app.includes("sampler: this.inpaintConfigSampler || draft.sampler || undefined") && app.includes("scheduler: this.inpaintConfigScheduler || draft.scheduler || undefined"), "Inpaint requests must honor the Inpaint generation settings");
 assert(app.includes("const renamed = new Map<string, string>()") && app.includes("this.store.updateDraft({ loras: nextStack })"), "LoRA organizer moves must update active stack paths");
