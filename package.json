@@ -13,7 +13,7 @@
     "tauri:build": "tauri build",
     "check": "tsc --noEmit",
     "start": "tauri dev",
-    "preflight": "node scripts/preflight.mjs && node --no-warnings --experimental-strip-types tests/lora-request-contract.mjs && node --no-warnings --experimental-strip-types tests/generation-request-contract.mjs && node --no-warnings --experimental-strip-types tests/comfy-runtime-flags-contract.mjs && node --no-warnings --experimental-strip-types tests/relay-contract.mjs && node --no-warnings --experimental-strip-types tests/library-session-contract.mjs && node tests/studio-updater-contract.mjs && node tests/composer-ui-contract.mjs && node --no-warnings --experimental-strip-types tests/resolution-contract.mjs && node --no-warnings --experimental-strip-types tests/swarm-history-path-contract.mjs && node --no-warnings --experimental-strip-types tests/region-preset-contract.mjs && node --no-warnings --experimental-strip-types tests/theme-contract.mjs && node --no-warnings --experimental-strip-types tests/civitai-facet-contract.mjs && node tests/host-control-contract.mjs",
+    "preflight": "node scripts/preflight.mjs && node --no-warnings --experimental-strip-types tests/lora-request-contract.mjs && node --no-warnings --experimental-strip-types tests/generation-request-contract.mjs && node --no-warnings --experimental-strip-types tests/comfy-runtime-flags-contract.mjs && node --no-warnings --experimental-strip-types tests/relay-contract.mjs && node --no-warnings --experimental-strip-types tests/library-session-contract.mjs && node tests/studio-updater-contract.mjs && node tests/composer-ui-contract.mjs && node --no-warnings --experimental-strip-types tests/resolution-contract.mjs && node --no-warnings --experimental-strip-types tests/swarm-history-path-contract.mjs && node --no-warnings --experimental-strip-types tests/region-preset-contract.mjs && node --no-warnings --experimental-strip-types tests/theme-contract.mjs && node --no-warnings --experimental-strip-types tests/civitai-facet-contract.mjs && node tests/capability-hydration-contract.mjs && node tests/host-control-contract.mjs",
     "test:lora-request": "node --no-warnings --experimental-strip-types tests/lora-request-contract.mjs",
     "test:request": "node --no-warnings --experimental-strip-types tests/generation-request-contract.mjs",
     "test:comfy-runtime": "node --no-warnings --experimental-strip-types tests/comfy-runtime-flags-contract.mjs",
@@ -26,7 +26,8 @@
     "test:theme": "node --no-warnings --experimental-strip-types tests/theme-contract.mjs",
     "test:civitai-facets": "node --no-warnings --experimental-strip-types tests/civitai-facet-contract.mjs",
     "test:resolution": "node --no-warnings --experimental-strip-types tests/resolution-contract.mjs",
-    "test:host-control": "node tests/host-control-contract.mjs"
+    "test:host-control": "node tests/host-control-contract.mjs",
+    "test:capability-hydration": "node tests/capability-hydration-contract.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0"

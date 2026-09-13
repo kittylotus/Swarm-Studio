@@ -2176,6 +2176,32 @@ export class StudioApp {
     this.wildcards = data.wildcards ?? this.wildcards;
   }
 
+  private syncDynamicParameterControls(): void {
+    const syncSelect = (selector: string, options: string[]): void => {
+      const select = this.root.querySelector<HTMLSelectElement>(selector);
+      if (!select) return;
+      const selected = select.value;
+      const normalized = [...new Set([selected, ...options].filter(Boolean))];
+      if (!normalized.length) normalized.push("");
+      const nextSignature = normalized.join("\u0000");
+      const currentSignature = [...select.options].map((option) => option.value).join("\u0000");
+      if (nextSignature === currentSignature) return;
+      select.replaceChildren(...normalized.map((option) => {
+        const item = document.createElement("option");
+        item.value = option;
+        item.textContent = option || "Swarm default";
+        item.selected = option === selected;
+        return item;
+      }));
+      select.value = selected;
+    };
+
+    syncSelect("#sampler", this.capabilityValues("Sampler", "sampler"));
+    syncSelect("#scheduler", this.capabilityValues("Scheduler", "scheduler"));
+    syncSelect("#inpaint-config-sampler", this.capabilityValues("Sampler", "sampler"));
+    syncSelect("#inpaint-config-scheduler", this.capabilityValues("Scheduler", "scheduler"));
+  }
+
   private capabilityValues(...names: string[]): string[] {
     return getParamValues(this.params, ...names);
   }
@@ -2230,32 +2256,36 @@ export class StudioApp {
     const epoch = ++this.parameterHydrationEpoch;
     const client = this.client;
     void (async () => {
-      // Swarm can accept a session before a self-starting Comfy backend has finished publishing
-      // extension samplers/schedulers. Wait only during this bounded startup window, then ask
-      // Swarm to refresh its live capability schema. This is not a permanent connection poll.
-      for (let attempt = 0; attempt < 16; attempt += 1) {
-        await sleep(attempt === 0 ? 500 : 750);
+      // Studio can connect before a self-starting Comfy backend exists at all. Keep a bounded,
+      // low-frequency readiness watch alive long enough for delayed/manual backend starts, then
+      // strongly refresh Swarm's capability schema once the first enabled backend is actually ready.
+      for (let attempt = 0; attempt < 180; attempt += 1) {
+        await sleep(attempt === 0 ? 500 : 2000);
         if (!this.connected || epoch !== this.parameterHydrationEpoch || client !== this.client) return;
         try {
           const backends = await client.listBackends();
           const enabled = backends.filter((backend) => backend.enabled);
-          if (!enabled.length) return;
+          if (!enabled.length) continue;
           const ready = enabled.some((backend) => ["running", "idle"].includes(String(backend.status ?? "").toLowerCase()));
           if (!ready) continue;
+
           const beforeSampler = this.capabilityValues("Sampler", "sampler");
           const beforeScheduler = this.capabilityValues("Scheduler", "scheduler");
           this.applyParameterData(await client.refreshCapabilities(true));
+          this.syncDynamicParameterControls();
           if (!this.connected || epoch !== this.parameterHydrationEpoch || client !== this.client) return;
+
           const afterSampler = this.capabilityValues("Sampler", "sampler");
           const afterScheduler = this.capabilityValues("Scheduler", "scheduler");
           this.logCapabilityHydrationResult("Backend capability schema refreshed after Comfy became ready.", beforeSampler, beforeScheduler, afterSampler, afterScheduler);
           return;
         } catch {
-          // Backend-list permissions can be restricted. Fall through to the generation-time
-          // one-shot catch-up rather than reviving the old permanent reachability loop.
-          if (attempt >= 3) return;
+          // Backend-list permissions can be restricted. Keep the bounded watch alive; generation
+          // still has its own one-shot strong refresh fallback.
+          continue;
         }
       }
+      this.addLog("Backend capability readiness watch expired before an enabled Comfy backend became ready.", "warn", "api");
     })();
   }
 
@@ -2277,6 +2307,7 @@ export class StudioApp {
       // parameter snapshot. Extension schedulers such as RES4LYF beta57 live in Comfy object_info,
       // which Swarm reloads only through the full backend refresh path.
       this.applyParameterData(await client.refreshCapabilities(true));
+      this.syncDynamicParameterControls();
     } catch (error) {
       this.addLog(`Strong backend capability refresh failed: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
     }
@@ -2297,6 +2328,7 @@ export class StudioApp {
       if (!this.connected || client !== this.client) return;
       try {
         this.applyParameterData(await client.parameterData(false));
+        this.syncDynamicParameterControls();
       } catch (error) {
         if (attempt === 4) this.addLog(`Backend capability read failed: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
         continue;

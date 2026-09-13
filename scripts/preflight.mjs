@@ -87,7 +87,9 @@ assert(app.includes("wireGenerationRequest("), "Generation requests must pass th
 assert(app.includes("schedulePostConnectParameterHydration()"), "Connect must schedule bounded backend capability hydration");
 assert(app.includes("ensureGenerationParameterHydration(draft)"), "Generation must catch up stale backend-provided sampler/scheduler metadata on demand");
 assert(app.includes("sampler: this.inpaintConfigSampler || draft.sampler") && app.includes("scheduler: this.inpaintConfigScheduler || draft.scheduler"), "Inpaint capability hydration must use the effective Inpaint sampler/scheduler overrides");
-assert(app.includes("attempt < 16") && app.includes("attempt < 5"), "Parameter hydration must remain bounded rather than becoming a permanent connection poll");
+assert(app.includes("attempt < 180") && app.includes("attempt < 5"), "Parameter hydration must remain bounded while surviving delayed backend startup");
+assert(app.includes("if (!enabled.length) continue;"), "Post-connect capability hydration must keep waiting when no backend is enabled yet");
+assert(app.includes("syncDynamicParameterControls()"), "Capability hydration must update already-rendered sampler/scheduler selects without a full view rebuild");
 assert(read("src/swarm/client.ts").includes("async refreshCapabilities(strong = true)") && read("src/swarm/client.ts").includes("return this.parameterData(true, strong);"), "Swarm client must expose a strong-by-default TriggerRefresh capability helper");
 assert(app.includes("client.refreshCapabilities(true)"), "Missing dynamic capabilities must force one strong Swarm backend refresh");
 assert(app.includes("client.parameterData(false)"), "Strong capability refresh may be followed only by bounded cheap parameter reads");
