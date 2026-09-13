@@ -19,6 +19,16 @@ assert.match(helper, /taskkill\.exe \/PID \$pidValue \/T \/F/, "host stops must 
 
 assert.match(runner, /swarm-studio-runner\.pid/, "runner must publish a host-readable PID");
 assert.match(runner, /SWARM_STUDIO_RUNNER_PID_FILE/, "runner PID path must be available to descendants");
+assert.match(runner, /\[switch\]\$DesktopChild/, "runner must expose an internal desktop-child mode so the control console can survive window exits");
+assert.match(runner, /function Invoke-StudioDesktopControlLoop/, "desktop mode must run through the persistent keyboard-control loop");
+assert.match(runner, /\[Console\]::KeyAvailable/, "runner controls must be non-blocking single-key actions");
+assert.match(runner, /\[W\] Open Studio.*\[R\] Restart Studio.*\[C\] Stop Studio/s, "runner must advertise open, restart, and stop desktop-shell actions");
+assert.match(runner, /\[S\] Restart Swarm.*\[Q\] Quit when Studio is closed.*\[X\] Stop all \+ quit/s, "runner must advertise backend restart and safe exit actions");
+assert.match(runner, /switch \(\$Key\).*"W".*"R".*"C".*"S".*"Q".*"X"/s, "runner key handler must wire every advertised action");
+assert.match(runner, /Start-Process .*?-NoNewWindow -PassThru/s, "desktop child must share the runner console while remaining independently restartable");
+assert.match(runner, /taskkill\.exe \/PID \$Process\.Id \/T \/F/, "Ctrl+C-style desktop stop must target only the tracked desktop child tree");
+assert.match(runner, /host-control\.ps1.*"swarm", "restart"/s, "runner Swarm restart must reuse the fixed host-control verb instead of inventing shell execution");
+assert.match(runner, /Desktop shell exited\$Suffix\. Press W to reopen it; the runner stays alive\./, "closing the desktop shell must leave the runner available for reopening");
 
 assert.match(vite, /studio-host-control-bridge/, "PWA host bridge must be installed in Vite");
 assert.match(vite, /swarm_studio_host=.*HttpOnly; SameSite=Strict/, "host bridge must protect actions with an HttpOnly same-site session cookie");

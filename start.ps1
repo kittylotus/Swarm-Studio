@@ -4,7 +4,8 @@
     [switch]$SetupFirewall,
     [switch]$VerboseRunner,
     [switch]$EmergencyStop,
-    [switch]$RefreshDependencies
+    [switch]$RefreshDependencies,
+    [switch]$DesktopChild
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,7 +15,9 @@ $env:SWARM_STUDIO_ROOT = $Root
 $RunnerLog = Join-Path $Root ".swarm-studio-runner.log"
 $SwarmPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-owned-swarm.pid"
 $RunnerPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-runner.pid"
-Set-Content -LiteralPath $RunnerPidFile -Value $PID -Encoding ASCII
+if (-not $DesktopChild) {
+    Set-Content -LiteralPath $RunnerPidFile -Value $PID -Encoding ASCII
+}
 $env:SWARM_STUDIO_RUNNER_PID_FILE = $RunnerPidFile
 $env:SWARM_STUDIO_SWARM_PID_FILE = $SwarmPidFile
 $env:SWARM_STUDIO_RUNNER_LOG = $RunnerLog
@@ -303,6 +306,162 @@ function Get-StudioAddresses {
     }
 }
 
+function Get-StudioPowerShellExecutable {
+    try {
+        $Current = Get-Process -Id $PID -ErrorAction Stop
+        if ($Current.Path) { return $Current.Path }
+    } catch {}
+    return "powershell.exe"
+}
+
+function Test-StudioDesktopChildRunning($Process) {
+    if (-not $Process) { return $false }
+    try {
+        $Process.Refresh()
+        return -not $Process.HasExited
+    } catch {
+        return $false
+    }
+}
+
+function Start-StudioDesktopChild {
+    $PowerShellExe = Get-StudioPowerShellExecutable
+    $QuotedScript = '"' + $PSCommandPath.Replace('"', '""') + '"'
+    $Arguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $QuotedScript, "-DesktopChild", "-NoShortcut")
+    if ($VerboseRunner) { $Arguments += "-VerboseRunner" }
+    Write-Status "WINDOW" "Opening Tauri desktop shell..." Cyan
+    return Start-Process -FilePath $PowerShellExe -ArgumentList $Arguments -WorkingDirectory $Root -NoNewWindow -PassThru
+}
+
+function Stop-StudioDesktopChild($Process) {
+    if (-not (Test-StudioDesktopChildRunning $Process)) {
+        Write-Status "WINDOW" "Desktop shell is already stopped." DarkGray
+        return $true
+    }
+    if ($env:OS -eq "Windows_NT") {
+        & taskkill.exe /PID $Process.Id /T /F *> $null
+        $Stopped = ($LASTEXITCODE -eq 0)
+    } else {
+        try {
+            $Process.Kill()
+            $Stopped = $true
+        } catch {
+            $Stopped = $false
+        }
+    }
+    if ($Stopped) {
+        try { $Process.WaitForExit(2500) | Out-Null } catch {}
+        Write-Status "WINDOW" "Desktop shell stopped." DarkGray
+    } else {
+        Write-Status "ERROR" "Could not stop desktop shell PID $($Process.Id)." Red
+    }
+    return $Stopped
+}
+
+function Invoke-StudioRunnerSwarmRestart {
+    $Helper = Join-Path $Root "scripts\host-control.ps1"
+    if (-not (Test-Path -LiteralPath $Helper -PathType Leaf)) {
+        Write-Status "SWARM" "Host-control helper is missing; cannot restart Swarm from the runner." Red
+        return
+    }
+    $PowerShellExe = Get-StudioPowerShellExecutable
+    $Arguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $Helper, "swarm", "restart")
+    if ($env:SWARM_STUDIO_SWARM_HOME) {
+        $Arguments += @("-SwarmDirectory", $env:SWARM_STUDIO_SWARM_HOME)
+    }
+    Write-Status "SWARM" "Restart requested through host control..." Yellow
+    & $PowerShellExe @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        Write-Status "SWARM" "Host-control restart failed with code $LASTEXITCODE." Red
+    }
+}
+
+function Write-StudioRunnerControls {
+    Write-Host ""
+    Write-Host '  Runner controls' -ForegroundColor White
+    Write-Host '  [W] Open Studio   [R] Restart Studio   [C] Stop Studio' -ForegroundColor Cyan
+    Write-Host '  [S] Restart Swarm [Q] Quit when Studio is closed   [X] Stop all + quit' -ForegroundColor Cyan
+    Write-Host '  ------------------------------------------------------------' -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+function Read-StudioRunnerKey {
+    try {
+        if ([Console]::KeyAvailable) {
+            return [string][Console]::ReadKey($true).Key
+        }
+    } catch {}
+    return $null
+}
+
+function Invoke-StudioDesktopControlLoop {
+    $DesktopProcess = Start-StudioDesktopChild
+    $ReportedStoppedPid = 0
+    Write-StudioRunnerControls
+
+    while ($true) {
+        if ($DesktopProcess -and -not (Test-StudioDesktopChildRunning $DesktopProcess)) {
+            if ($ReportedStoppedPid -ne $DesktopProcess.Id) {
+                $ReportedStoppedPid = $DesktopProcess.Id
+                $Code = $null
+                try { $Code = $DesktopProcess.ExitCode } catch {}
+                $Suffix = if ($null -ne $Code) { " (code $Code)" } else { "" }
+                Write-Status "WINDOW" "Desktop shell exited$Suffix. Press W to reopen it; the runner stays alive." Yellow
+            }
+        }
+
+        $Key = Read-StudioRunnerKey
+        if ($Key) {
+            switch ($Key) {
+                "W" {
+                    if (Test-StudioDesktopChildRunning $DesktopProcess) {
+                        Write-Status "WINDOW" "Desktop shell is already running (PID $($DesktopProcess.Id))." DarkGray
+                    } else {
+                        $DesktopProcess = Start-StudioDesktopChild
+                        $ReportedStoppedPid = 0
+                    }
+                }
+                "R" {
+                    if (Test-StudioDesktopChildRunning $DesktopProcess) { $null = Stop-StudioDesktopChild $DesktopProcess }
+                    Start-Sleep -Milliseconds 250
+                    $DesktopProcess = Start-StudioDesktopChild
+                    $ReportedStoppedPid = 0
+                }
+                "C" {
+                    if (Test-StudioDesktopChildRunning $DesktopProcess) {
+                        $null = Stop-StudioDesktopChild $DesktopProcess
+                    } else {
+                        Write-Status "WINDOW" "Desktop shell is already stopped." DarkGray
+                    }
+                }
+                "S" {
+                    Invoke-StudioRunnerSwarmRestart
+                }
+                "Q" {
+                    if (Test-StudioDesktopChildRunning $DesktopProcess) {
+                        Write-Status "RUNNER" "Studio is still running. Use C first, or X to stop everything." Yellow
+                    } else {
+                        Write-Status "RUNNER" "Runner closed; backend processes are left alone." DarkGray
+                        return 0
+                    }
+                }
+                "X" {
+                    if (Test-StudioDesktopChildRunning $DesktopProcess) { $null = Stop-StudioDesktopChild $DesktopProcess }
+                    $null = Stop-StudioOwnedBackendTree
+                    Write-Status "RUNNER" "Stopped managed Studio/backend processes." DarkGray
+                    return 0
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+if ($DesktopChild) {
+    $ExitCode = Invoke-StudioProcess @("run", "tauri:dev")
+    exit $ExitCode
+}
+
 Write-StudioBanner
 if ($EmergencyStop) {
     Write-Status "PANIC" "Emergency backend stop requested." Red
@@ -400,8 +559,8 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     exit $ExitCode
 }
 
-Write-Status "MODE" "Starting Tauri desktop development window." Cyan
-$ExitCode = Invoke-StudioProcess @("run", "tauri:dev")
+Write-Status "MODE" "Starting Tauri desktop runner with keyboard controls." Cyan
+$ExitCode = Invoke-StudioDesktopControlLoop
 Write-Host ""
-Write-Status "EXIT" "Swarm Studio stopped with code $ExitCode." $(if ($ExitCode -eq 0) { [ConsoleColor]::DarkGray } else { [ConsoleColor]::Red })
+Write-Status "EXIT" "Swarm Studio runner stopped with code $ExitCode." $(if ($ExitCode -eq 0) { [ConsoleColor]::DarkGray } else { [ConsoleColor]::Red })
 exit $ExitCode
