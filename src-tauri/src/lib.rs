@@ -17,6 +17,12 @@ struct ManagedProcess {
 
 struct OwnedSwarmProcess(Mutex<Option<ManagedProcess>>);
 
+fn publish_desktop_pid() {
+    let Ok(path) = std::env::var("SWARM_STUDIO_DESKTOP_PID_FILE") else { return; };
+    if path.trim().is_empty() { return; }
+    let _ = fs::write(path, std::process::id().to_string());
+}
+
 #[derive(Clone, Serialize)]
 struct LogPayload {
     source: String,
@@ -1205,6 +1211,10 @@ fn swarm_process_status(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|_| {
+            publish_desktop_pid();
+            Ok(())
+        })
         .manage(OwnedSwarmProcess(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             http_post_json,

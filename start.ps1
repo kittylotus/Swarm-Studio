@@ -15,12 +15,19 @@ $env:SWARM_STUDIO_ROOT = $Root
 $RunnerLog = Join-Path $Root ".swarm-studio-runner.log"
 $SwarmPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-owned-swarm.pid"
 $RunnerPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-runner.pid"
+$DesktopPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-desktop.pid"
+$RunnerCommandFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-runner-command.txt"
 if (-not $DesktopChild) {
     Set-Content -LiteralPath $RunnerPidFile -Value $PID -Encoding ASCII
+    Remove-Item -LiteralPath $DesktopPidFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $RunnerCommandFile -Force -ErrorAction SilentlyContinue
 }
 $env:SWARM_STUDIO_RUNNER_PID_FILE = $RunnerPidFile
+$env:SWARM_STUDIO_DESKTOP_PID_FILE = $DesktopPidFile
+$env:SWARM_STUDIO_RUNNER_COMMAND_FILE = $RunnerCommandFile
 $env:SWARM_STUDIO_SWARM_PID_FILE = $SwarmPidFile
 $env:SWARM_STUDIO_RUNNER_LOG = $RunnerLog
+$script:StudioDevLauncherProcess = $null
 
 function Test-StudioTrueColor {
     if ($env:NO_COLOR) { return $false }
@@ -314,48 +321,189 @@ function Get-StudioPowerShellExecutable {
     return "powershell.exe"
 }
 
+function Read-StudioDesktopWindowPid {
+    if (-not (Test-Path -LiteralPath $DesktopPidFile -PathType Leaf)) { return 0 }
+    $Raw = ([string](Get-Content -LiteralPath $DesktopPidFile -Raw -ErrorAction SilentlyContinue)).Trim()
+    $PidValue = 0
+    if (-not [int]::TryParse($Raw, [ref]$PidValue) -or $PidValue -le 0) {
+        Remove-Item -LiteralPath $DesktopPidFile -Force -ErrorAction SilentlyContinue
+        return 0
+    }
+    $Target = Get-CimInstance Win32_Process -Filter "ProcessId = $PidValue" -ErrorAction SilentlyContinue
+    if (-not $Target) {
+        Remove-Item -LiteralPath $DesktopPidFile -Force -ErrorAction SilentlyContinue
+        return 0
+    }
+    $Identity = "$($Target.Name) $($Target.ExecutablePath) $($Target.CommandLine)"
+    if ($Identity -notmatch '(?i)swarm[-_ ]studio') {
+        Write-Status "REFUSE" "Desktop PID $PidValue no longer looks like Swarm Studio; stale marker removed." Red
+        Remove-Item -LiteralPath $DesktopPidFile -Force -ErrorAction SilentlyContinue
+        return 0
+    }
+    return $PidValue
+}
+
 function Test-StudioDesktopChildRunning($Process) {
-    if (-not $Process) { return $false }
+    return ((Read-StudioDesktopWindowPid) -gt 0)
+}
+
+function Test-StudioDevServer {
     try {
-        $Process.Refresh()
-        return -not $Process.HasExited
+        $Response = Invoke-WebRequest -Uri "http://127.0.0.1:1420" -UseBasicParsing -TimeoutSec 1
+        return ([int]$Response.StatusCode -eq 200 -and [string]$Response.Content -match '<title>Swarm Studio</title>')
     } catch {
         return $false
     }
 }
 
+function Test-StudioDevServerStable {
+    if (-not (Test-StudioDevServer)) { return $false }
+    Start-Sleep -Milliseconds 300
+    return (Test-StudioDevServer)
+}
+
+function Get-StudioDebugExecutable {
+    return (Join-Path $Root "src-tauri\target\debug\swarm-studio.exe")
+}
+
+function Wait-StudioDesktopWindowPid($LauncherProcess, [int]$TimeoutMs = 120000) {
+    $Deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    while ([DateTime]::UtcNow -lt $Deadline) {
+        $WindowPid = Read-StudioDesktopWindowPid
+        if ($WindowPid -gt 0) { return $WindowPid }
+        if ($LauncherProcess) {
+            try {
+                $LauncherProcess.Refresh()
+                if ($LauncherProcess.HasExited) { return 0 }
+            } catch { return 0 }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    return 0
+}
+
 function Start-StudioDesktopChild {
+    $ExistingWindowPid = Read-StudioDesktopWindowPid
+    if ($ExistingWindowPid -gt 0) {
+        Write-Status "WINDOW" "Desktop shell is already running (PID $ExistingWindowPid)." DarkGray
+        try { return Get-Process -Id $ExistingWindowPid -ErrorAction Stop } catch { return $null }
+    }
+
+    $DebugExe = Get-StudioDebugExecutable
+    if ((Test-Path -LiteralPath $DebugExe -PathType Leaf) -and (Test-StudioDevServerStable)) {
+        Write-Status "WINDOW" "Reusing the live Studio web server and reopening the native shell..." Cyan
+        $Process = Start-Process -FilePath $DebugExe -WorkingDirectory $Root -PassThru
+        $WindowPid = Wait-StudioDesktopWindowPid $Process 10000
+        if ($WindowPid -le 0) {
+            Write-Status "ERROR" "Native shell launched but did not publish its desktop PID." Red
+        }
+        return $Process
+    }
+
     $PowerShellExe = Get-StudioPowerShellExecutable
     $QuotedScript = '"' + $PSCommandPath.Replace('"', '""') + '"'
     $Arguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $QuotedScript, "-DesktopChild", "-NoShortcut")
     if ($VerboseRunner) { $Arguments += "-VerboseRunner" }
-    Write-Status "WINDOW" "Opening Tauri desktop shell..." Cyan
-    return Start-Process -FilePath $PowerShellExe -ArgumentList $Arguments -WorkingDirectory $Root -NoNewWindow -PassThru
+    Write-Status "WINDOW" "Opening Tauri desktop shell and Studio web server..." Cyan
+    $Process = Start-Process -FilePath $PowerShellExe -ArgumentList $Arguments -WorkingDirectory $Root -NoNewWindow -PassThru
+    $script:StudioDevLauncherProcess = $Process
+    $WindowPid = Wait-StudioDesktopWindowPid $Process 120000
+    if ($WindowPid -le 0) {
+        Write-Status "ERROR" "Tauri bootstrap exited before the desktop shell published its PID. See runner log." Red
+    }
+    return $Process
 }
 
 function Stop-StudioDesktopChild($Process) {
-    if (-not (Test-StudioDesktopChildRunning $Process)) {
+    $WindowPid = Read-StudioDesktopWindowPid
+    if ($WindowPid -le 0) {
         Write-Status "WINDOW" "Desktop shell is already stopped." DarkGray
         return $true
     }
+
+    # Stop only the native window process. Do not /T the bootstrap tree: that also owns the dev
+    # server and may contain the Studio-owned Swarm process. Keeping Vite alive is what lets W/R
+    # reopen the Tauri shell without racing a second server onto port 1420.
     if ($env:OS -eq "Windows_NT") {
-        & taskkill.exe /PID $Process.Id /T /F *> $null
+        & taskkill.exe /PID $WindowPid /F *> $null
         $Stopped = ($LASTEXITCODE -eq 0)
     } else {
         try {
-            $Process.Kill()
+            Stop-Process -Id $WindowPid -Force -ErrorAction Stop
             $Stopped = $true
         } catch {
             $Stopped = $false
         }
     }
-    if ($Stopped) {
-        try { $Process.WaitForExit(2500) | Out-Null } catch {}
-        Write-Status "WINDOW" "Desktop shell stopped." DarkGray
-    } else {
-        Write-Status "ERROR" "Could not stop desktop shell PID $($Process.Id)." Red
+
+    if (-not $Stopped) {
+        if (-not (Get-Process -Id $WindowPid -ErrorAction SilentlyContinue)) { $Stopped = $true }
     }
-    return $Stopped
+    if (-not $Stopped) {
+        Write-Status "ERROR" "Could not stop desktop shell PID $WindowPid." Red
+        return $false
+    }
+
+    $Deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ((Get-Process -Id $WindowPid -ErrorAction SilentlyContinue) -and [DateTime]::UtcNow -lt $Deadline) {
+        Start-Sleep -Milliseconds 100
+    }
+    Remove-Item -LiteralPath $DesktopPidFile -Force -ErrorAction SilentlyContinue
+
+    # The bootstrap PowerShell/Tauri CLI should retire after its native app exits. Give it a moment
+    # to clean up, but never kill its descendant tree here -- the remaining Vite server is useful.
+    if ($Process -and $Process.Id -ne $WindowPid) {
+        try { $Process.WaitForExit(3000) | Out-Null } catch {}
+    }
+    Write-Status "WINDOW" "Desktop shell stopped; Studio web server/backend are left running." DarkGray
+    return $true
+}
+
+function Stop-StudioDevServer {
+    if (-not (Test-StudioDevServer)) { return $true }
+    if ($env:OS -ne "Windows_NT") { return $false }
+    $Owners = @()
+    try {
+        $Owners = @(Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess -Unique)
+    } catch {
+        Write-Status "WEB" "Studio dev server is live on :1420 but its owning PID could not be resolved." Yellow
+        return $false
+    }
+    $StoppedAny = $false
+    foreach ($OwnerPid in $Owners) {
+        $Target = Get-CimInstance Win32_Process -Filter "ProcessId = $OwnerPid" -ErrorAction SilentlyContinue
+        if (-not $Target) { continue }
+        $Identity = "$($Target.Name) $($Target.ExecutablePath) $($Target.CommandLine)"
+        if ($Identity -notmatch '(?i)vite') {
+            Write-Status "REFUSE" "Port 1420 belongs to PID $OwnerPid, but it does not look like Vite. Not killing it." Red
+            continue
+        }
+        & taskkill.exe /PID $OwnerPid /T /F *> $null
+        if ($LASTEXITCODE -eq 0) { $StoppedAny = $true }
+    }
+    if ($StoppedAny) {
+        Write-Status "WEB" "Studio dev server stopped." DarkGray
+        return $true
+    }
+    return (-not (Test-StudioDevServer))
+}
+
+function Stop-StudioDesktopLauncherTree {
+    $Launcher = $script:StudioDevLauncherProcess
+    if ($Launcher) {
+        try {
+            $Launcher.Refresh()
+            if (-not $Launcher.HasExited) {
+                if ($env:OS -eq "Windows_NT") {
+                    & taskkill.exe /PID $Launcher.Id /T /F *> $null
+                } else {
+                    $Launcher.Kill()
+                }
+            }
+        } catch {}
+    }
+    $script:StudioDevLauncherProcess = $null
+    $null = Stop-StudioDevServer
 }
 
 function Invoke-StudioRunnerSwarmRestart {
@@ -394,6 +542,18 @@ function Read-StudioRunnerKey {
     return $null
 }
 
+function Read-StudioRunnerCommand {
+    if (-not (Test-Path -LiteralPath $RunnerCommandFile -PathType Leaf)) { return $null }
+    try {
+        $Command = ([string](Get-Content -LiteralPath $RunnerCommandFile -Raw -ErrorAction Stop)).Trim().ToUpperInvariant()
+        Remove-Item -LiteralPath $RunnerCommandFile -Force -ErrorAction SilentlyContinue
+        if ($Command -in @("W", "R", "C", "S", "X")) { return $Command }
+    } catch {
+        Remove-Item -LiteralPath $RunnerCommandFile -Force -ErrorAction SilentlyContinue
+    }
+    return $null
+}
+
 function Invoke-StudioDesktopControlLoop {
     $DesktopProcess = Start-StudioDesktopChild
     $ReportedStoppedPid = 0
@@ -406,26 +566,33 @@ function Invoke-StudioDesktopControlLoop {
                 $Code = $null
                 try { $Code = $DesktopProcess.ExitCode } catch {}
                 $Suffix = if ($null -ne $Code) { " (code $Code)" } else { "" }
+                Remove-Item -LiteralPath $DesktopPidFile -Force -ErrorAction SilentlyContinue
                 Write-Status "WINDOW" "Desktop shell exited$Suffix. Press W to reopen it; the runner stays alive." Yellow
             }
         }
 
         $Key = Read-StudioRunnerKey
+        if (-not $Key) { $Key = Read-StudioRunnerCommand }
         if ($Key) {
             switch ($Key) {
                 "W" {
                     if (Test-StudioDesktopChildRunning $DesktopProcess) {
-                        Write-Status "WINDOW" "Desktop shell is already running (PID $($DesktopProcess.Id))." DarkGray
+                        Write-Status "WINDOW" "Desktop shell is already running (PID $(Read-StudioDesktopWindowPid))." DarkGray
                     } else {
                         $DesktopProcess = Start-StudioDesktopChild
                         $ReportedStoppedPid = 0
                     }
                 }
                 "R" {
-                    if (Test-StudioDesktopChildRunning $DesktopProcess) { $null = Stop-StudioDesktopChild $DesktopProcess }
-                    Start-Sleep -Milliseconds 250
-                    $DesktopProcess = Start-StudioDesktopChild
-                    $ReportedStoppedPid = 0
+                    $CanRestart = $true
+                    if (Test-StudioDesktopChildRunning $DesktopProcess) { $CanRestart = Stop-StudioDesktopChild $DesktopProcess }
+                    if ($CanRestart) {
+                        Start-Sleep -Milliseconds 250
+                        $DesktopProcess = Start-StudioDesktopChild
+                        $ReportedStoppedPid = 0
+                    } else {
+                        Write-Status "WINDOW" "Restart aborted because the current desktop shell did not stop cleanly." Red
+                    }
                 }
                 "C" {
                     if (Test-StudioDesktopChildRunning $DesktopProcess) {
@@ -448,7 +615,8 @@ function Invoke-StudioDesktopControlLoop {
                 "X" {
                     if (Test-StudioDesktopChildRunning $DesktopProcess) { $null = Stop-StudioDesktopChild $DesktopProcess }
                     $null = Stop-StudioOwnedBackendTree
-                    Write-Status "RUNNER" "Stopped managed Studio/backend processes." DarkGray
+                    Stop-StudioDesktopLauncherTree
+                    Write-Status "RUNNER" "Stopped managed Studio/backend/dev-server processes." DarkGray
                     return 0
                 }
             }
@@ -561,6 +729,9 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 
 Write-Status "MODE" "Starting Tauri desktop runner with keyboard controls." Cyan
 $ExitCode = Invoke-StudioDesktopControlLoop
+Remove-Item -LiteralPath $DesktopPidFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $RunnerCommandFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $RunnerPidFile -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Status "EXIT" "Swarm Studio runner stopped with code $ExitCode." $(if ($ExitCode -eq 0) { [ConsoleColor]::DarkGray } else { [ConsoleColor]::Red })
 exit $ExitCode

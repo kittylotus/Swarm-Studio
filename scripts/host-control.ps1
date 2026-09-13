@@ -1,6 +1,6 @@
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("install", "uninstall", "start", "stop", "restart", "status", "swarm")]
+    [ValidateSet("install", "uninstall", "start", "stop", "restart", "status", "runner", "swarm")]
     [string]$Command = "status",
 
     [Parameter(Position = 1)]
@@ -20,6 +20,9 @@ $StateRoot = Join-Path $env:LOCALAPPDATA "SwarmStudio"
 $BinRoot = Join-Path $StateRoot "bin"
 $CliPath = Join-Path $BinRoot "studio.cmd"
 $RunnerPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-runner.pid"
+$DesktopPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-desktop.pid"
+$RunnerCommandFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-runner-command.txt"
+$RunnerLog = Join-Path $Root ".swarm-studio-runner.log"
 $SwarmPidFile = Join-Path ([IO.Path]::GetTempPath()) "swarm-studio-owned-swarm.pid"
 $HostSwarmLog = Join-Path $StateRoot "host-swarm.log"
 $HostSwarmErrorLog = Join-Path $StateRoot "host-swarm-error.log"
@@ -123,7 +126,9 @@ function Start-SwarmHost([string]$Hint, [int]$Port) {
 
 function Get-ControlStatus {
     $studioPid = Read-PidFile $RunnerPidFile
+    $desktopPid = Read-PidFile $DesktopPidFile
     $swarmPid = Read-PidFile $SwarmPidFile
+    $swarmReachable = Test-TcpPort $SwarmPort
     $taskInstalled = $false
     try { $taskInstalled = $null -ne (Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop) } catch {}
     $cliInstalled = Test-Path -LiteralPath $CliPath -PathType Leaf
@@ -134,7 +139,8 @@ function Get-ControlStatus {
         cliInstalled = $cliInstalled
         command = "studio start"
         studio = [PSCustomObject]@{ running = [bool]$studioPid; pid = if ($studioPid) { $studioPid } else { $null } }
-        swarm = [PSCustomObject]@{ running = [bool]$swarmPid; pid = if ($swarmPid) { $swarmPid } else { $null } }
+        desktop = [PSCustomObject]@{ running = [bool]$desktopPid; pid = if ($desktopPid) { $desktopPid } else { $null } }
+        swarm = [PSCustomObject]@{ running = [bool]$swarmPid; pid = if ($swarmPid) { $swarmPid } else { $null }; reachable = $swarmReachable; port = $SwarmPort }
         message = if ($taskInstalled -and $cliInstalled) { "SSH launcher installed." } elseif ($env:OS -ne "Windows_NT") { "Host control currently targets Windows." } else { "SSH launcher is not installed yet." }
     }
 }
@@ -169,10 +175,24 @@ function Uninstall-Control {
     return Get-ControlStatus
 }
 
+function Send-StudioRunnerCommand([string]$Key) {
+    $normalized = $Key.Trim().ToUpperInvariant()
+    if ($normalized -notin @("W", "R", "C", "S", "X")) { throw "Unsupported runner command '$Key'." }
+    $running = Read-PidFile $RunnerPidFile
+    if (-not $running) { throw "Swarm Studio runner is not running." }
+    $temp = "$RunnerCommandFile.$PID.tmp"
+    Set-Content -LiteralPath $temp -Value $normalized -Encoding ASCII
+    Move-Item -LiteralPath $temp -Destination $RunnerCommandFile -Force
+    return "Sent $normalized to Swarm Studio runner PID $running."
+}
+
 function Start-StudioHost {
     $running = Read-PidFile $RunnerPidFile
-    if ($running) { return "Swarm Studio is already running as PID $running." }
-    try { $null = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop } catch { throw "SSH launcher is not installed. Run .\\scripts\\host-control.ps1 install once from the desktop checkout." }
+    if ($running) {
+        $null = Send-StudioRunnerCommand "W"
+        return "Requested the Studio window from runner PID $running."
+    }
+    try { $null = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop } catch { throw "SSH launcher is not installed. Run .\scripts\host-control.ps1 install once from the desktop checkout." }
     Start-ScheduledTask -TaskName $TaskName
     return "Requested Swarm Studio launch in the logged-in desktop session."
 }
@@ -208,6 +228,126 @@ function Invoke-SwarmCommand([string]$Verb) {
     }
 }
 
+function Get-RemoteRunnerLogTail([int]$Lines = 8) {
+    if (-not (Test-Path -LiteralPath $RunnerLog -PathType Leaf)) { return @() }
+    try { return @(Get-Content -LiteralPath $RunnerLog -Tail $Lines -ErrorAction Stop) } catch { return @() }
+}
+
+function Format-RemoteRunnerStatus($Status) {
+    $studio = if ($Status.studio.running) { "runner PID $($Status.studio.pid)" } else { "stopped" }
+    $window = if ($Status.desktop.running) { "open PID $($Status.desktop.pid)" } elseif ($Status.studio.running) { "closed" } else { "stopped" }
+    $swarm = if ($Status.swarm.running) { "managed PID $($Status.swarm.pid) | :$($Status.swarm.port)" } elseif ($Status.swarm.reachable) { "reachable | external | :$($Status.swarm.port)" } else { "stopped | :$($Status.swarm.port)" }
+    return [PSCustomObject]@{ Studio = $studio; Window = $window; Swarm = $swarm }
+}
+
+function Write-RemoteRunnerScreen([bool]$ShowLogs, [string]$Notice = "") {
+    $status = Get-ControlStatus
+    $display = Format-RemoteRunnerStatus $status
+    Clear-Host
+    Write-Host "SWARM STUDIO REMOTE RUNNER" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host ("  {0,-10} {1}" -f "Studio", $display.Studio)
+    Write-Host ("  {0,-10} {1}" -f "Window", $display.Window)
+    Write-Host ("  {0,-10} {1}" -f "Swarm", $display.Swarm)
+    if ($Notice) {
+        Write-Host ""
+        Write-Host "  $Notice" -ForegroundColor Yellow
+    }
+    if ($ShowLogs) {
+        Write-Host ""
+        Write-Host "  recent runner log" -ForegroundColor DarkGray
+        foreach ($line in (Get-RemoteRunnerLogTail 8)) {
+            $plain = [regex]::Replace([string]$line, "`e\[[0-9;?]*[ -/]*[@-~]", "")
+            if ($plain.Length -gt 120) { $plain = $plain.Substring(0, 117) + "..." }
+            Write-Host "  $plain" -ForegroundColor DarkGray
+        }
+    }
+    Write-Host ""
+    Write-Host "  [W] Open window   [R] Restart window   [C] Close window" -ForegroundColor Cyan
+    Write-Host "  [S] Restart Swarm [L] Logs             [F] Refresh" -ForegroundColor Cyan
+    Write-Host "  [Q] Detach        [X] Stop all + quit" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+function Read-RemoteRunnerKey {
+    try {
+        if ([Console]::KeyAvailable) { return [string][Console]::ReadKey($true).Key }
+    } catch {
+        throw "studio runner needs an interactive terminal/TTY."
+    }
+    return $null
+}
+
+function Invoke-RemoteRunner {
+    try { $null = [Console]::KeyAvailable } catch { throw "studio runner needs an interactive terminal/TTY." }
+    $showLogs = $false
+    $notice = "Q detaches without stopping anything."
+    $lastRender = [DateTime]::MinValue
+    $forceRender = $true
+
+    while ($true) {
+        if ($forceRender -or ((Get-Date) - $lastRender).TotalMilliseconds -ge 1000) {
+            Write-RemoteRunnerScreen $showLogs $notice
+            $notice = ""
+            $lastRender = Get-Date
+            $forceRender = $false
+        }
+
+        $key = Read-RemoteRunnerKey
+        if ($key) {
+            switch ($key) {
+                "W" {
+                    $notice = Start-StudioHost
+                    $forceRender = $true
+                }
+                "R" {
+                    $runner = Read-PidFile $RunnerPidFile
+                    if ($runner) { $notice = Send-StudioRunnerCommand "R" }
+                    else { $notice = Start-StudioHost }
+                    $forceRender = $true
+                }
+                "C" {
+                    $runner = Read-PidFile $RunnerPidFile
+                    if ($runner) { $notice = Send-StudioRunnerCommand "C" }
+                    else { $notice = "Studio runner is not running." }
+                    $forceRender = $true
+                }
+                "S" {
+                    $runner = Read-PidFile $RunnerPidFile
+                    if ($runner) { $notice = Send-StudioRunnerCommand "S" }
+                    else { $notice = Invoke-SwarmCommand "restart" }
+                    $forceRender = $true
+                }
+                "L" {
+                    $showLogs = -not $showLogs
+                    $notice = if ($showLogs) { "Runner log tail enabled." } else { "Runner log tail hidden." }
+                    $forceRender = $true
+                }
+                "F" {
+                    $notice = "Status refreshed."
+                    $forceRender = $true
+                }
+                "Q" {
+                    Write-Host "Detached. Studio and Swarm were left alone." -ForegroundColor DarkGray
+                    return
+                }
+                "X" {
+                    $runner = Read-PidFile $RunnerPidFile
+                    if ($runner) {
+                        $null = Send-StudioRunnerCommand "X"
+                        Start-Sleep -Milliseconds 500
+                    } else {
+                        $null = Stop-TreeFromPidFile $SwarmPidFile "Swarm"
+                    }
+                    Write-Host "Stop-all requested. Remote runner detached." -ForegroundColor DarkGray
+                    return
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
 try {
     switch ($Command) {
         "install" { $result = Install-Control }
@@ -216,13 +356,18 @@ try {
         "start" { $message = Invoke-StudioCommand "start"; $result = Get-ControlStatus; $result | Add-Member -NotePropertyName actionMessage -NotePropertyValue $message }
         "stop" { $message = Invoke-StudioCommand "stop"; $result = Get-ControlStatus; $result | Add-Member -NotePropertyName actionMessage -NotePropertyValue $message }
         "restart" { $message = Invoke-StudioCommand "restart"; $result = Get-ControlStatus; $result | Add-Member -NotePropertyName actionMessage -NotePropertyValue $message }
+        "runner" {
+            if ($Json) { throw "studio runner is interactive and cannot be combined with -Json." }
+            Invoke-RemoteRunner
+            exit 0
+        }
         "swarm" { $message = Invoke-SwarmCommand $Action; $result = Get-ControlStatus; $result | Add-Member -NotePropertyName actionMessage -NotePropertyValue $message }
     }
     if ($Json) { $result | ConvertTo-Json -Depth 6 -Compress }
     else {
         if ($result.actionMessage) { Write-Host $result.actionMessage }
         Write-Host $result.message
-        if ($result.installed) { Write-Host "SSH command: studio start" }
+        if ($result.installed) { Write-Host "SSH commands: studio runner | studio start | studio status" }
     }
 } catch {
     if ($Json) {
