@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::{header::COOKIE, HeaderValue}, Message};
 
 struct ManagedProcess {
@@ -1208,6 +1208,61 @@ fn swarm_process_status(
     }
 }
 
+fn safe_download_name(value: &str) -> String {
+    let cleaned = value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') { ch } else { '-' })
+        .collect::<String>()
+        .trim_matches(|ch: char| matches!(ch, '.' | '-' | '_'))
+        .to_string();
+    if cleaned.is_empty() { "swarm-studio-export.png".to_string() } else { cleaned }
+}
+
+fn unique_download_path(directory: &Path, file_name: &str) -> PathBuf {
+    let initial = directory.join(file_name);
+    if !initial.exists() { return initial; }
+    let path = Path::new(file_name);
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("swarm-studio-export");
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("");
+    for index in 1..10_000 {
+        let candidate = if extension.is_empty() {
+            directory.join(format!("{stem}-{index}"))
+        } else {
+            directory.join(format!("{stem}-{index}.{extension}"))
+        };
+        if !candidate.exists() { return candidate; }
+    }
+    if extension.is_empty() {
+        directory.join(format!("{stem}-{}", std::process::id()))
+    } else {
+        directory.join(format!("{stem}-{}.{}", std::process::id(), extension))
+    }
+}
+
+#[tauri::command]
+fn save_data_url_download(app: tauri::AppHandle, data_url: String, suggested_name: String) -> Result<String, String> {
+    let (header, encoded) = data_url
+        .split_once(',')
+        .ok_or_else(|| "Export data was not a valid data URL.".to_string())?;
+    if !header.to_ascii_lowercase().ends_with(";base64") {
+        return Err("Export data URL was not base64 encoded.".to_string());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("Could not decode exported data: {error}"))?;
+    let downloads = app
+        .path()
+        .download_dir()
+        .map_err(|error| format!("Could not resolve Downloads directory: {error}"))?;
+    fs::create_dir_all(&downloads)
+        .map_err(|error| format!("Could not create Downloads directory {}: {error}", downloads.display()))?;
+    let file_name = safe_download_name(&suggested_name);
+    let path = unique_download_path(&downloads, &file_name);
+    fs::write(&path, bytes)
+        .map_err(|error| format!("Could not write export {}: {error}", path.display()))?;
+    Ok(path.display().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1234,7 +1289,8 @@ pub fn run() {
             backend_repo_latest,
             swarm_repo_set_launch_auto_pull,
             studio_update_check,
-            studio_update_apply
+            studio_update_apply,
+            save_data_url_download
         ])
         .run(tauri::generate_context!())
         .expect("error while running Swarm Studio");

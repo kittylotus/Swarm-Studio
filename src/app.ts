@@ -35,6 +35,7 @@ import {
   type LoraFacetSort,
 } from "./civitai/facets";
 import { dimensionsForRatio, ratioReversedForDimensions, swapResolutionDimensions } from "./resolution";
+import { STUDIO_KEYBIND_ACTIONS, STUDIO_KEYBIND_STORAGE_KEY, defaultStudioKeybinds, eventToKeybind, keybindDisplay, keybindMatches, normalizeStudioKeybindPreferences, type StudioKeybindAction, type StudioKeybindMap } from "./keybinds";
 import { runtime, type RuntimeHostControlStatus, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
@@ -97,6 +98,7 @@ const tabSearchSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true
 const tabConnectionSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.6a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1"/></svg>`;
 const tabBackendSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01"/></svg>`;
 const tabAppearanceSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const tabKeybindsSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M19 10h.01M8 14h8"/></svg>`;
 const tabJumpSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>`;
 const reuseSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
 const initImageSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m3 16 5-5 4 4 3-3 6 6"/><path d="M18 2v6M15 5h6"/></svg>`;
@@ -428,6 +430,8 @@ export class StudioApp {
   private pendingGenerationApprovalIndex = 0;
   private pendingGenerationSaveBusy = false;
   private generationMiniEnabled = true;
+  private keybindsEnabled = false;
+  private keybinds: StudioKeybindMap = defaultStudioKeybinds();
   private generationMiniX: number | null = null;
   private generationMiniY: number | null = null;
   private resetMobileScrollAfterRender = false;
@@ -611,12 +615,16 @@ export class StudioApp {
       if (["all", "tagged", "matched", "unclassified", "stats-uncached"].includes(String(normalizedFacetMetadata))) this.loraFacetMetadata = normalizedFacetMetadata as LoraFacetMetadataFilter;
       const savedFacetSort = localStorage.getItem("swarm-studio-lora-facet-sort");
       if (["name", "creator", "tag-count", "downloads", "rating", "newest"].includes(String(savedFacetSort))) this.loraFacetSort = savedFacetSort as LoraFacetSort;
+      const keybindPreferences = normalizeStudioKeybindPreferences(JSON.parse(localStorage.getItem(STUDIO_KEYBIND_STORAGE_KEY) || "null"));
+      this.keybindsEnabled = keybindPreferences.enabled;
+      this.keybinds = keybindPreferences.bindings;
     } catch {
       this.loraMobileGrid = false;
       this.loraShowNonMatching = false;
       this.loraGridSize = "comfortable";
     }
     this.bindExternalImageDropTarget();
+    window.addEventListener("keydown", (event) => this.handleStudioKeybind(event));
   }
 
   private setExternalImageDragActive(active: boolean): void {
@@ -653,6 +661,63 @@ export class StudioApp {
       const file = Array.from(event.dataTransfer?.files ?? []).find((item) => item.type.startsWith("image/") || /\.(png|jpe?g)$/i.test(item.name));
       if (file) void this.inspectDroppedImage(file);
     });
+  }
+
+  private persistKeybindPreferences(): void {
+    try {
+      localStorage.setItem(STUDIO_KEYBIND_STORAGE_KEY, JSON.stringify({ enabled: this.keybindsEnabled, bindings: this.keybinds }));
+    } catch {
+      // Preferences can remain session-only when storage is unavailable.
+    }
+  }
+
+  private navigateToView(requested: StudioView): void {
+    if (requested === "settings" && this.view === "settings") return;
+    if (this.view !== "settings") this.lastNonSettingsView = this.view;
+    this.view = requested;
+    if (this.view !== "settings") this.lastNonSettingsView = this.view;
+    if (requested === "create" && window.matchMedia("(max-width: 760px)").matches) {
+      this.store.updateUi({ mobileCreatePane: "output" });
+      this.resetMobileScrollAfterRender = true;
+    }
+    this.store.updateUi({ lastView: this.view, selectedOutputId: "" });
+    const shouldLoadCivitai = this.view === "civitai" && !this.civitaiLoadedOnce;
+    this.render();
+    if (shouldLoadCivitai) void this.searchCivitai(true);
+  }
+
+  private handleStudioKeybind(event: KeyboardEvent): void {
+    if (!this.keybindsEnabled || event.defaultPrevented || event.repeat || this.inpaintOpen) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const editing = Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
+    const blockingDialog = Boolean(this.root.querySelector("[role='dialog'][aria-modal='true'], .modal-backdrop:not([hidden]), .download-backdrop:not([hidden]), .quicknav-overlay.is-open"));
+    if (blockingDialog) return;
+    for (const definition of STUDIO_KEYBIND_ACTIONS) {
+      if (!keybindMatches(this.keybinds[definition.id], event)) continue;
+      if (editing && !definition.allowWhenEditing) return;
+      if (definition.id === "generate") {
+        if (this.view !== "create") return;
+        event.preventDefault();
+        event.stopPropagation();
+        void this.generate();
+        return;
+      }
+      const destinations: Partial<Record<StudioKeybindAction, StudioView>> = {
+        "nav-create": "create",
+        "nav-library": "library",
+        "nav-identities": "identities",
+        "nav-models": "models",
+        "nav-civitai": "civitai",
+        "nav-logs": "logs",
+        "nav-settings": "settings",
+      };
+      const destination = destinations[definition.id];
+      if (!destination) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.navigateToView(destination);
+      return;
+    }
   }
 
   private effectiveSwarmBaseUrl(settings = this.store.state.connection): string {
@@ -1701,12 +1766,13 @@ export class StudioApp {
     } else if (section === "library") {
       tabs = `<button class="is-active" data-nav="library"><span>${tabLibrarySvg}</span>Library</button>`;
     } else {
-      count = 4;
+      count = 5;
       const settingsPane = this.store.state.ui.settingsPane;
       tabs = `<button class="${this.view === "logs" ? "is-active" : ""}" data-mobile-settings="logs"><span>${tabLogsSvg}</span>Logs</button>
         <button class="${this.view === "settings" && settingsPane === "connection" ? "is-active" : ""}" data-mobile-settings="connection"><span>${tabConnectionSvg}</span>Connection</button>
         <button class="${this.view === "settings" && settingsPane === "backend" ? "is-active" : ""}" data-mobile-settings="backend"><span>${tabBackendSvg}</span>Backends</button>
-        <button class="${this.view === "settings" && settingsPane === "appearance" ? "is-active" : ""}" data-mobile-settings="appearance"><span>${tabAppearanceSvg}</span>Appearance</button>`;
+        <button class="${this.view === "settings" && settingsPane === "appearance" ? "is-active" : ""}" data-mobile-settings="appearance"><span>${tabAppearanceSvg}</span>Appearance</button>
+        <button class="${this.view === "settings" && settingsPane === "keybinds" ? "is-active" : ""}" data-mobile-settings="keybinds"><span>${tabKeybindsSvg}</span>Keybinds</button>`;
     }
     return `<div class="mobile-context-tabs mobile-context-tabs--${count}">${tabs}</div>
       <button class="mobile-quicknav-trigger" type="button" data-action="quick-nav" aria-label="Quick navigation" aria-expanded="${this.quickNavOpen ? "true" : "false"}"><span>${tabJumpSvg}</span><em>Jump</em></button>`;
@@ -1718,7 +1784,7 @@ export class StudioApp {
       { id: "create", label: "Create", icon: tabCreateSvg, hint: "Generation · Output · Tune" },
       { id: "visuals", label: "Visuals", icon: tabVisualsSvg, hint: "Identities · Models · CivitAI" },
       { id: "library", label: "Library", icon: tabLibrarySvg, hint: "Outputs and folders" },
-      { id: "settings", label: "Settings", icon: tabSettingsSvg, hint: "Logs · Connection · Backends · Appearance" },
+      { id: "settings", label: "Settings", icon: tabSettingsSvg, hint: "Logs · Connection · Backends · Appearance · Keybinds" },
     ];
     return `<div class="quicknav-overlay ${this.quickNavOpen ? "is-open" : ""}" data-quicknav-overlay ${this.quickNavOpen ? "" : "hidden"}>
       <div class="quicknav-copy"><b>Quick navigation</b><span>Slide to a destination and release</span></div>
@@ -1790,7 +1856,7 @@ export class StudioApp {
       return;
     }
     if (section === "settings") {
-      const options = ["logs", "connection", "backend", "appearance"] as const;
+      const options = ["logs", "connection", "backend", "appearance", "keybinds"] as const;
       const currentKey = this.view === "logs" ? "logs" : this.store.state.ui.settingsPane;
       const current = Math.max(0, options.indexOf(currentKey));
       const next = options[(current + direction + options.length) % options.length]!;
@@ -4331,14 +4397,26 @@ export class StudioApp {
         <label class="field"><span>Grid card size</span><select id="lora-grid-size"><option value="comfortable" ${this.loraGridSize === "comfortable" ? "selected" : ""}>Comfortable · 2 columns on mobile</option><option value="compact" ${this.loraGridSize === "compact" ? "selected" : ""}>Compact · 3 columns on mobile</option></select><small>Compact also fits more cards per row on desktop while keeping portrait previews.</small></label>
       </section>`;
 
+    const keybindGroups = ["Generation", "Navigation"] as const;
+    const keybindPane = `
+      <section class="panel settings-card settings-pane-card keybind-settings">
+        <div class="panel-heading"><div><span class="panel-kicker">INPUT</span><h2>Keybinds</h2></div><button class="ghost-button" type="button" data-action="reset-keybinds">Reset defaults</button></div>
+        <label class="check-row keybind-master-toggle"><input id="keybinds-enabled" type="checkbox" ${this.keybindsEnabled ? "checked" : ""}/><span><b>Enable keyboard shortcuts</b><small>Opt in. Studio leaves every global shortcut dormant until this is enabled.</small></span></label>
+        <p class="helper-copy keybind-helper">Swarm-style fast generation, adapted for Studio's multiline prompt: Ctrl/Cmd + Enter generates while plain Enter stays a newline. Click any shortcut field, then press a replacement combo. Delete or Backspace clears it.</p>
+        <div class="keybind-groups">
+          ${keybindGroups.map((group) => `<section class="keybind-group"><div class="section-minihead"><b>${group}</b><span>${group === "Generation" ? "Works from prompt fields" : "Paused while typing or while a dialog is open"}</span></div><div class="keybind-list">${STUDIO_KEYBIND_ACTIONS.filter((item) => item.group === group).map((item) => `<div class="keybind-row"><div class="keybind-copy"><b>${escapeHtml(item.label)}</b><small>${escapeHtml(item.description)}</small></div><div class="keybind-editor"><input type="text" readonly spellcheck="false" data-keybind-input="${item.id}" value="${escapeHtml(keybindDisplay(this.keybinds[item.id]))}" aria-label="${escapeHtml(item.label)} shortcut"/><button type="button" class="icon-button" data-keybind-clear="${item.id}" title="Clear shortcut" aria-label="Clear ${escapeHtml(item.label)} shortcut">×</button></div></div>`).join("")}</div></section>`).join("")}
+        </div>
+      </section>`;
+
     return `
       <div class="settings-shell">
         <aside class="settings-sidebar panel">
           <button class="${pane === "connection" ? "is-active" : ""}" data-settings-pane="connection"><span>${tabConnectionSvg}</span><div><b>Connection</b><small>Account, process, network</small></div></button>
           <button class="${pane === "backend" ? "is-active" : ""}" data-settings-pane="backend"><span>${tabBackendSvg}</span><div><b>Backends</b><small>Versions, policy, recovery</small></div></button>
           <button class="${pane === "appearance" ? "is-active" : ""}" data-settings-pane="appearance"><span>${tabAppearanceSvg}</span><div><b>Appearance</b><small>Theme profiles + shape</small></div></button>
+          <button class="${pane === "keybinds" ? "is-active" : ""}" data-settings-pane="keybinds"><span>${tabKeybindsSvg}</span><div><b>Keybinds</b><small>Opt-in keyboard controls</small></div></button>
         </aside>
-        <div class="settings-pane-host">${pane === "connection" ? connectionPane : pane === "backend" ? backendPane : appearancePane}</div>
+        <div class="settings-pane-host">${pane === "connection" ? connectionPane : pane === "backend" ? backendPane : pane === "appearance" ? appearancePane : keybindPane}</div>
       </div>`;
   }
 
@@ -4394,20 +4472,10 @@ export class StudioApp {
         const requested = button.dataset.nav as StudioView | undefined;
         if (!requested) return;
         if (requested === "settings" && this.view === "settings") {
-          this.view = this.lastNonSettingsView;
-        } else {
-          if (this.view !== "settings") this.lastNonSettingsView = this.view;
-          this.view = requested;
+          this.navigateToView(this.lastNonSettingsView);
+          return;
         }
-        if (this.view !== "settings") this.lastNonSettingsView = this.view;
-        if (requested === "create" && window.matchMedia("(max-width: 760px)").matches) {
-          this.store.updateUi({ mobileCreatePane: "output" });
-          this.resetMobileScrollAfterRender = true;
-        }
-        this.store.updateUi({ lastView: this.view, selectedOutputId: "" });
-        const shouldLoadCivitai = this.view === "civitai" && !this.civitaiLoadedOnce;
-        this.render();
-        if (shouldLoadCivitai) void this.searchCivitai(true);
+        this.navigateToView(requested);
       });
     });
     this.root.querySelectorAll<HTMLElement>("[data-mobile-section]").forEach((button) => button.addEventListener("click", () => {
@@ -4505,7 +4573,7 @@ export class StudioApp {
       if (target === "logs") {
         this.view = "logs";
         this.store.updateUi({ lastView: "logs", selectedOutputId: "" });
-      } else if (["connection", "backend", "appearance"].includes(String(target))) {
+      } else if (["connection", "backend", "appearance", "keybinds"].includes(String(target))) {
         this.view = "settings";
         this.store.updateUi({ lastView: "settings", settingsPane: target as StudioUiState["settingsPane"], selectedOutputId: "" });
       }
@@ -4859,7 +4927,7 @@ export class StudioApp {
       this.drawInpaintCanvas();
     });
     this.root.querySelector<HTMLInputElement>("#inpaint-mask-file")?.addEventListener("change", (event) => void this.importInpaintMask(event.currentTarget as HTMLInputElement));
-    this.root.querySelector<HTMLElement>("[data-action='export-inpaint-mask']")?.addEventListener("click", () => this.downloadInpaintMask());
+    this.root.querySelector<HTMLElement>("[data-action='export-inpaint-mask']")?.addEventListener("click", () => void this.downloadInpaintMask());
     this.root.querySelectorAll<HTMLElement>("[data-action='generate-inpaint']").forEach((button) => button.addEventListener("click", () => void this.generateInpaint()));
     this.root.querySelector<HTMLElement>("[data-action='use-inpaint-result-as-init']")?.addEventListener("click", () => {
       const latest = this.store.state.outputs[0];
@@ -7146,13 +7214,12 @@ export class StudioApp {
     }
   }
 
-  private downloadInpaintMask(): void {
+  private async downloadInpaintMask(): Promise<void> {
     try {
       const mask = this.exportInpaintMask();
-      const anchor = document.createElement("a");
-      anchor.href = mask;
-      anchor.download = `${(this.inpaintSourceName || "swarm-output").replace(/[^a-z0-9._-]+/gi, "-")}-mask.png`;
-      anchor.click();
+      const fileName = `${(this.inpaintSourceName || "swarm-output").replace(/[^a-z0-9._-]+/gi, "-")}-mask.png`;
+      const savedPath = await runtime.saveDataUrl(mask, fileName);
+      this.notify(savedPath ? `Mask exported to ${savedPath}.` : "Mask export started.", "success");
     } catch (error) {
       this.notify(error instanceof Error ? error.message : String(error), "error");
     }
@@ -9609,9 +9676,52 @@ export class StudioApp {
     });
 
     this.root.querySelectorAll<HTMLElement>("[data-settings-pane]").forEach((button) => button.addEventListener("click", () => {
-      const pane = button.dataset.settingsPane as "connection" | "backend" | "appearance" | undefined;
+      const pane = button.dataset.settingsPane as StudioUiState["settingsPane"] | undefined;
       if (!pane) return;
       this.store.updateUi({ settingsPane: pane });
+      this.render();
+    }));
+
+    this.root.querySelector<HTMLInputElement>("#keybinds-enabled")?.addEventListener("change", (event) => {
+      this.keybindsEnabled = (event.currentTarget as HTMLInputElement).checked;
+      this.persistKeybindPreferences();
+    });
+    this.root.querySelector<HTMLElement>("[data-action='reset-keybinds']")?.addEventListener("click", () => {
+      this.keybinds = defaultStudioKeybinds();
+      this.persistKeybindPreferences();
+      this.notify("Keybinds reset to Studio defaults.", "success");
+      this.render();
+    });
+    this.root.querySelectorAll<HTMLInputElement>("[data-keybind-input]").forEach((input) => {
+      input.addEventListener("focus", () => input.select());
+      input.addEventListener("keydown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const action = input.dataset.keybindInput as StudioKeybindAction | undefined;
+        if (!action) return;
+        if (event.key === "Backspace" || event.key === "Delete") {
+          this.keybinds = { ...this.keybinds, [action]: "" };
+          this.persistKeybindPreferences();
+          this.render();
+          return;
+        }
+        const binding = eventToKeybind(event);
+        if (!binding) return;
+        const conflict = STUDIO_KEYBIND_ACTIONS.find((item) => item.id !== action && this.keybinds[item.id] === binding);
+        if (conflict) {
+          this.notify(`${keybindDisplay(binding)} is already assigned to ${conflict.label}.`, "error");
+          return;
+        }
+        this.keybinds = { ...this.keybinds, [action]: binding };
+        this.persistKeybindPreferences();
+        this.render();
+      });
+    });
+    this.root.querySelectorAll<HTMLElement>("[data-keybind-clear]").forEach((button) => button.addEventListener("click", () => {
+      const action = button.dataset.keybindClear as StudioKeybindAction | undefined;
+      if (!action) return;
+      this.keybinds = { ...this.keybinds, [action]: "" };
+      this.persistKeybindPreferences();
       this.render();
     }));
 

@@ -116,7 +116,7 @@ assert(runner.includes("255, 77, 184") && runner.includes("168, 85, 247") && run
 assert(runner.includes("▄▀▀▀▀▀█") && runner.includes("▒▀▀▀▀▀▄"), "Runner block-glyph Swarm Studio banner is missing");
 assert(app.includes("renderBackendControlRoom()"), "Settings backend control room is missing");
 assert(app.includes('data-settings-pane="backend"') && !app.includes('data-settings-pane="remote"'), "Settings sidebar must expose Backends and retire Remote Access");
-assert(app.includes('pane === "backend" ? backendPane : appearancePane'), "Backend control room must render in the dedicated Backends pane");
+assert(app.includes('pane === "backend" ? backendPane : pane === "appearance" ? appearancePane : keybindPane'), "Backend control room must render in the dedicated Backends pane without swallowing later Settings panes");
 assert(app.includes('String(parsed.ui?.settingsPane) === "remote"') || read("src/library/store.ts").includes('String(parsed.ui?.settingsPane) === "remote"'), "Legacy Remote Access pane state must migrate safely");
 assert(app.includes('this.view === "settings") && !this.resetMobileScrollAfterRender'), "Settings rerenders must preserve visual scroll");
 assert(!styles.includes(".remote-guide") && !styles.includes(".relay-diagram"), "Retired Remote Access guide CSS still exists");

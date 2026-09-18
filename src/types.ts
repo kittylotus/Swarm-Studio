@@ -173,7 +173,7 @@ export interface StudioUiState {
   advancedOpen: boolean;
   mobileCreatePane: "generation" | "output" | "tune";
   identityEditorOpen: boolean;
-  settingsPane: "connection" | "backend" | "appearance";
+  settingsPane: "connection" | "backend" | "appearance" | "keybinds";
 }
 
 export interface PersistedStudioState {

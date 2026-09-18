@@ -183,7 +183,7 @@ function safeParse(value: string | null): PersistedStudioState {
         identityEditorOpen: parsed.ui?.identityEditorOpen === true,
         settingsPane: String(parsed.ui?.settingsPane) === "remote"
           ? "connection"
-          : ["connection", "backend", "appearance"].includes(String(parsed.ui?.settingsPane))
+          : ["connection", "backend", "appearance", "keybinds"].includes(String(parsed.ui?.settingsPane))
             ? parsed.ui?.settingsPane as StudioUiState["settingsPane"]
             : "connection",
       },

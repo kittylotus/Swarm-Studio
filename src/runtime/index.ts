@@ -69,6 +69,7 @@ export interface RuntimeBridge {
   getText(url: string, authToken?: string): Promise<string>;
   probe(url: string, authToken?: string): Promise<boolean>;
   fetchDataUrl(url: string, authToken?: string): Promise<string>;
+  saveDataUrl(dataUrl: string, suggestedName: string): Promise<string | null>;
   hostControlStatus(): Promise<RuntimeHostControlStatus>;
   installHostControl(): Promise<RuntimeHostControlStatus>;
   startLocalSwarm(settings: ConnectionSettings): Promise<string>;
@@ -275,6 +276,20 @@ const browserRuntime: RuntimeBridge = {
       reader.readAsDataURL(blob);
     });
   },
+  async saveDataUrl(dataUrl, suggestedName) {
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = suggestedName;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    return null;
+  },
   async hostControlStatus() {
     return browserHostControlFetch<RuntimeHostControlStatus>("status");
   },
@@ -382,6 +397,9 @@ const tauriRuntime: RuntimeBridge = {
   },
   async fetchDataUrl(url, authToken) {
     return tauriInvoke<string>("http_get_data_url", { url, authToken: authToken || null });
+  },
+  async saveDataUrl(dataUrl, suggestedName) {
+    return tauriInvoke<string>("save_data_url_download", { dataUrl, suggestedName });
   },
   async hostControlStatus() {
     return tauriInvoke<RuntimeHostControlStatus>("host_control_status");
