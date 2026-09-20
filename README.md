@@ -1,4 +1,8 @@
-# Swarm Studio standalone
+# Swarm Studio
+
+<img width="1918" height="1007" alt="image" src="https://github.com/user-attachments/assets/f50b6db4-6930-4f48-b500-3e30f114be94" />
+
+
 
 Swarm Studio is a standalone PWA and Tauri creative client for SwarmUI. It provides a focused generation workspace, local library and inspector, LoRA management, CivitAI discovery/install tools, identity/preset workflows, inpainting, and runtime diagnostics without replacing SwarmUI as the generation backend.
 
@@ -30,11 +34,31 @@ If a future release changes JavaScript dependencies, the detached updater asks t
 
 - **Create:** checkpoint/LoRA controls, presets, prompt editing, advanced Swarm parameters, live generation progress, and optional Review Before Save with a compact approve/regenerate/discard strip.
 - **Library:** locally indexed Swarm outputs, search/filtering, Studio folders, Swarm date folders, batch actions, favorites, history sync, and a desktop right-docked Browse panel.
+<img width="1915" height="1000" alt="image" src="https://github.com/user-attachments/assets/0ed882db-7e4f-4401-86e4-644956299af7" />
+<img width="1916" height="1009" alt="image" src="https://github.com/user-attachments/assets/c53b5e8b-96ee-4127-a54a-947d845d61e7" />
+
 - **Inspect:** prompt/model/seed/LoRA metadata, historical Swarm prep/generation timing when present, reuse/init/inpaint actions, and transient inspection of dropped Swarm PNG/JPEG files.
+<img width="1341" height="956" alt="image" src="https://github.com/user-attachments/assets/73bd7856-231b-4f0f-830b-25b9f616b940" />
+
+
 - **Models / LoRAs:** compatibility browsing, folder navigation, batch move/delete, metadata editing, hash-assisted CivitAI recovery, LoRA stack import/export, and saved stacks.
+<img width="1918" height="1002" alt="image" src="https://github.com/user-attachments/assets/44d96872-b509-45d6-a158-6e1b60cddf2c" />
+
+
 - **CivitAI:** search/detail/pagination and direct install through the `civitai.red` route, while still accepting copied `civitai.com` URLs as input.
+<img width="1917" height="1005" alt="image" src="https://github.com/user-attachments/assets/6dbaa265-50ed-4175-875d-c5bb980f2ade" />
+<img width="661" height="446" alt="image" src="https://github.com/user-attachments/assets/fe7f352d-5eb9-4309-93bd-ea6be24ff890" />
+
+
 - **Inpaint:** mask editing and Swarm-backed edit generation.
+<img width="1463" height="908" alt="image" src="https://github.com/user-attachments/assets/54fcb6e3-7afa-430f-9567-2993a990648f" />
+
+
 - **Logs / Settings:** runtime and memory diagnostics, relay/origin configuration, appearance, desktop process controls, and a backend control room for Swarm/Comfy restart, disable, memory release, update policy, and local Git ref selection.
+<img width="1918" height="1009" alt="image" src="https://github.com/user-attachments/assets/83777616-5429-40ff-94af-43fc88fed776" />
+<img width="1919" height="1005" alt="image" src="https://github.com/user-attachments/assets/80c2d634-de02-40e4-ac1c-ebf4f2a81bce" />
+
+
 
 ## Backend control room
 
