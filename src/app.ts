@@ -409,6 +409,8 @@ export class StudioApp {
   private comfyRepoError = "";
   private nativeImageCache = new Map<string, NativeImageCacheEntry>();
   private nativeImagePending = new Map<string, Promise<NativeImageCacheEntry>>();
+  private embeddedMetadataChecked = new Set<string>();
+  private embeddedMetadataPending = new Map<string, Promise<Record<string, unknown>>>();
   private nativeImageObserver: IntersectionObserver | null = null;
   private readonly nativeImageCacheLimit = 48;
   private memoryDiagnostics: MemoryDiagnosticsSnapshot | null = null;
@@ -4744,7 +4746,10 @@ export class StudioApp {
       this.store.updateUi({ selectedOutputId: id });
       this.render();
       const output = this.outputById(id);
-      if (output && this.metadataValue(this.metadataParams(output.metadata), "prompt") == null) {
+      if (output) {
+        // History/API metadata can contain a source prompt while omitting the final resolved
+        // prompt and timing. Lazily upgrade from the image's embedded metadata whenever an
+        // output is inspected; ensureOutputMetadata deduplicates the read for this session.
         void this.ensureOutputMetadata(output).then(() => {
           if (this.store.state.ui.selectedOutputId === id) this.render();
         });
@@ -5827,6 +5832,18 @@ export class StudioApp {
     return "";
   }
 
+  private async embeddedMetadataFromDataUrl(dataUrl: string): Promise<string> {
+    if (/^data:image\/png(?:;[^,]*)?,/i.test(dataUrl)) return this.pngParametersFromDataUrl(dataUrl);
+    if (/^data:image\/jpe?g(?:;[^,]*)?,/i.test(dataUrl)) {
+      try {
+        return this.jpegUserCommentFromArrayBuffer(await this.dataUrlToBlob(dataUrl).arrayBuffer());
+      } catch {
+        return "";
+      }
+    }
+    return "";
+  }
+
   private async imageDimensionsFromDataUrl(dataUrl: string): Promise<{ width: number; height: number }> {
     return new Promise((resolve) => {
       const image = new Image();
@@ -5898,12 +5915,20 @@ export class StudioApp {
     try {
       const resolvedUrl = this.outputImageUrl(output);
       const dataUrl = resolvedUrl.startsWith("data:") ? resolvedUrl : await runtime.fetchDataUrl(resolvedUrl, this.store.state.connection.authToken);
-      const metadata = this.pngParametersFromDataUrl(dataUrl);
+      const metadata = await this.embeddedMetadataFromDataUrl(dataUrl);
       if (!metadata) return null;
       const seed = this.resolvedSeedFor({ image: output.swarmPath, metadata }, metadata, -1);
       if (seed < 0) return null;
-      this.store.updateOutput(output.id, { seed, metadata });
-      this.addLog(`Resolved latest output seed from embedded PNG metadata: ${seed}.`, "info", "api");
+      const timing = this.generationTimingFromMetadata(metadata);
+      this.store.updateOutput(output.id, {
+        seed,
+        metadata,
+        prepTimeMs: timing.prepTimeMs ?? output.prepTimeMs,
+        generationTimeMs: timing.generationTimeMs ?? output.generationTimeMs,
+        totalTimeMs: timing.totalTimeMs ?? output.totalTimeMs,
+      });
+      this.embeddedMetadataChecked.add(output.id);
+      this.addLog(`Resolved latest output seed from embedded image metadata: ${seed}.`, "info", "api");
       return seed;
     } catch (error) {
       this.addLog(`Could not read embedded output metadata: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
@@ -5916,8 +5941,8 @@ export class StudioApp {
     const path = this.normalizeSwarmPath(output.swarmPath);
     if (!path || !this.connected) return null;
     const leaf = path.split("/").pop() || "";
-    // The final PNG is the source of truth and Swarm writes its generation parameters into
-    // the embedded `parameters` text chunk. Read that first so the seed shortcut does not
+    // The final image is the source of truth and Swarm writes its generation parameters into
+    // embedded image metadata. Read that first so the seed shortcut does not
     // wait through several history polls when ListImages metadata is late or blank.
     const embeddedSeed = await this.resolveSeedFromImageFile(output);
     if (embeddedSeed != null) return embeddedSeed;
@@ -5946,26 +5971,57 @@ export class StudioApp {
   }
 
   private async ensureOutputMetadata(output: OutputRecord): Promise<Record<string, unknown>> {
-    let metadata = output.metadata || "";
-    let params = this.metadataParams(metadata);
-    const hasResolvedPrompt = this.metadataValue(params, "prompt") != null;
-    if (!hasResolvedPrompt && (output.url || output.swarmPath)) {
+    const currentParams = this.metadataParams(output.metadata || "");
+    const hasStoredSwarmImage = Boolean(output.swarmSourcePath || output.swarmPath);
+    if (!hasStoredSwarmImage || this.embeddedMetadataChecked.has(output.id)) return currentParams;
+
+    const pending = this.embeddedMetadataPending.get(output.id);
+    if (pending) return pending;
+
+    const hydration = (async (): Promise<Record<string, unknown>> => {
       try {
         const resolvedUrl = this.outputImageUrl(output);
-        const dataUrl = resolvedUrl.startsWith("data:") ? resolvedUrl : await runtime.fetchDataUrl(resolvedUrl, this.store.state.connection.authToken);
-        const embedded = this.pngParametersFromDataUrl(dataUrl);
-        if (embedded) {
-          metadata = embedded;
-          params = this.metadataParams(embedded);
-          const seed = this.resolvedSeedFor({ image: output.swarmPath, metadata: embedded }, embedded, output.seed);
-          this.store.updateOutput(output.id, { metadata: embedded, seed });
-          this.addLog("Loaded resolved generation metadata from the final PNG.", "info", "api");
+        if (!resolvedUrl) return currentParams;
+        const dataUrl = resolvedUrl.startsWith("data:")
+          ? resolvedUrl
+          : await runtime.fetchDataUrl(resolvedUrl, this.store.state.connection.authToken);
+        const embedded = await this.embeddedMetadataFromDataUrl(dataUrl);
+        this.embeddedMetadataChecked.add(output.id);
+        if (!embedded) return currentParams;
+
+        const embeddedParams = this.metadataParams(embedded);
+        if (!Object.keys(embeddedParams).length) return currentParams;
+        // The embedded image is authoritative for resolved values, but history metadata can still
+        // carry useful request-only parameters. Merge it underneath so Reuse All reproduces the
+        // rendered prompt without silently dropping advanced settings that are absent from the file.
+        const params = { ...currentParams, ...embeddedParams };
+        const seed = this.resolvedSeedFor({ image: output.swarmPath, metadata: embedded }, embedded, output.seed);
+        const timing = this.generationTimingFromMetadata(embedded);
+        const resolvedPrompt = String(this.metadataValue(params, "prompt") ?? output.prompt ?? "");
+        const resolvedNegative = String(this.metadataValue(params, "negativeprompt", "negative prompt") ?? output.negativePrompt ?? "");
+        this.store.updateOutput(output.id, {
+          metadata: embedded,
+          seed,
+          prompt: resolvedPrompt,
+          negativePrompt: resolvedNegative,
+          prepTimeMs: timing.prepTimeMs ?? output.prepTimeMs,
+          generationTimeMs: timing.generationTimeMs ?? output.generationTimeMs,
+          totalTimeMs: timing.totalTimeMs ?? output.totalTimeMs,
+        });
+        if (embedded !== output.metadata) {
+          this.addLog("Upgraded historical output metadata from the embedded image record.", "info", "api");
         }
+        return params;
       } catch (error) {
-        this.addLog(`Could not load resolved output metadata: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
+        this.addLog(`Could not load embedded output metadata: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
+        return currentParams;
+      } finally {
+        this.embeddedMetadataPending.delete(output.id);
       }
-    }
-    return params;
+    })();
+
+    this.embeddedMetadataPending.set(output.id, hydration);
+    return hydration;
   }
 
   private async reuseLatestAsVariationSeed(): Promise<void> {

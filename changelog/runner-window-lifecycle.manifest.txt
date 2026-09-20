@@ -1,6 +1,0 @@
-start.ps1
-scripts/host-control.ps1
-src-tauri/src/lib.rs
-tests/host-control-contract.mjs
-changelog/runner-window-lifecycle.md
-changelog/runner-window-lifecycle.manifest.txt

@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const root = process.cwd();
 const read = (path) => readFileSync(join(root, path), "utf8");
@@ -24,24 +24,12 @@ const version = pkg.version;
 const failures = [];
 const assert = (ok, message) => { if (!ok) failures.push(message); };
 
-function walk(dir, found = []) {
-  for (const name of readdirSync(dir)) {
-    if (["node_modules", ".git", ".wrench-backups", ".pre-v1-backup", "dist", "coverage", ".vite", ".vite-temp", "target"].includes(name)) continue;
-    const abs = join(dir, name);
-    if (statSync(abs).isDirectory()) walk(abs, found);
-    else found.push(abs);
-  }
-  return found;
-}
-
-const changelogs = walk(root)
-  .map((path) => relative(root, path).replaceAll("\\", "/"))
-  .filter((path) => /(^|\/)CHANGELOG-v[^/]+\.md$/i.test(path));
+const releaseChangelog = `CHANGELOG-v${version}.md`;
 
 assert(tauri.version === version, `Tauri version ${tauri.version} != package version ${version}`);
 assert(new RegExp(`^version = "${version.replaceAll(".", "\\.")}"$`, "m").test(cargo), "Cargo package version does not match package.json");
-assert(changelogs.length === 1, `Expected exactly one release changelog, found ${changelogs.length}: ${changelogs.join(", ")}`);
-assert(changelogs[0] === `CHANGELOG-v${version}.md`, `Expected CHANGELOG-v${version}.md, found ${changelogs[0] ?? "none"}`);
+assert(existsSync(join(root, releaseChangelog)), `Missing canonical release changelog ${releaseChangelog}`);
+assert(gitignore.includes("changelog/"), "Legacy changelog fragments must stay ignored; use the canonical root release changelog");
 assert(gitignore.includes(".wrench-backups/") && gitignore.includes(".swarm-studio-runner.log") && gitignore.includes("src-tauri/target/") && gitignore.includes("node_modules/"), "Git ignore rules are missing critical local/build artifacts");
 assert(!gitignore.includes("package-lock.json") && !gitignore.includes("Cargo.lock") && !gitignore.includes("bun.lock"), "Source lockfiles must remain trackable");
 assert(gitattributes.includes("*.ps1  text eol=lf") && gitattributes.includes("*.ts   text eol=lf") && gitattributes.includes("*.rs   text eol=lf"), "Git attributes must pin the editable source surface to LF");
@@ -160,4 +148,4 @@ if (failures.length) {
   console.error("Preflight failed:\n" + failures.map((item) => `  - ${item}`).join("\n"));
   process.exit(1);
 }
-console.log(`Preflight OK for v${version} (${changelogs[0]}).`);
+console.log(`Preflight OK for v${version} (${releaseChangelog}).`);

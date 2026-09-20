@@ -16,6 +16,9 @@ target/
 *.pid
 *.lnk
 
+# Legacy changelog fragments (release notes live in the root CHANGELOG-v*.md)
+changelog/
+
 # Local patch / recovery artifacts
 .wrench-backups/
 .pre-v1-backup/

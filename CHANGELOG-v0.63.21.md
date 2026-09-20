@@ -17,3 +17,16 @@
 - Collapsed each mobile LoRA card from three control rows to two: metadata on top, weight + trigger below, with enable/remove actions pinned at the right.
 - Reduced mobile thumbnail, control, card, selector, add-card, footer, and composer padding so larger stacks stay scannable without changing the desktop layout.
 - Added an extra narrow-phone fallback below 380px that trims icon/thumb sizing and hides the redundant Weight label while retaining the numeric control.
+
+## Post-release Studio maintenance
+
+The v0.63.21 working tree also includes the following Studio fixes and quality-of-life improvements. These remain part of the current source version rather than spawning separate changelog fragments.
+
+- Fixed inpaint mask export across browser/PWA and Tauri runtimes.
+- Added opt-in editable Studio keybinds, including Ctrl/Cmd+Enter generation and navigation shortcuts.
+- Added opt-in background generation notifications for supported PWA/browser runtimes.
+- Added a LoRA stack manager with in-place rename, edit, load, overwrite, and delete flows.
+- Restored embedded output metadata hydration for historical images, including resolved prompts, negative prompts, exact seeds, and generation timing.
+- Updated Reuse All to prefer the final embedded resolved prompt payload while preserving the original source request separately.
+
+Historical per-patch changelog fragments were intentionally retired. Git history remains the archive for older implementation notes.

@@ -1,5 +1,0 @@
-start.ps1
-scripts/host-control.ps1
-tests/host-control-contract.mjs
-changelog/ssh-remote-runner.md
-changelog/ssh-remote-runner.manifest.txt
