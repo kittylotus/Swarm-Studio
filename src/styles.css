@@ -5008,7 +5008,6 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 
 @media (max-width:760px) {
   .prompt-tabs .prompt-clear em { display:none; }
-  .canvas-toolbar > div:last-child [data-inspect-output] { display:inline-flex; }
   .canvas-toolbar > div:last-child [data-reuse-output],
   .canvas-toolbar > div:last-child [data-nav="library"] { display:none; }
   .image-card-actions { gap:4px; }
