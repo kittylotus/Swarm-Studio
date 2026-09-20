@@ -208,6 +208,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallbackDenylist: [/^\/API\//, /^\/View\//, /^\/__swarm\//, /^\/__studio\//],
+        importScripts: ["notification-sw.js"],
       }
     })
   ]

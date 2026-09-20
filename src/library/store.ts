@@ -480,6 +480,20 @@ export class StudioStore {
     return profile;
   }
 
+  updateLoraProfile(id: string, patch: { name?: string; items?: LoraStackItem[] }): LoraStackProfile | undefined {
+    const current = this.state.loraProfiles.find((profile) => profile.id === id);
+    if (!current) return undefined;
+    const updated: LoraStackProfile = {
+      ...current,
+      name: patch.name === undefined ? current.name : patch.name.trim() || "LoRA stack",
+      items: patch.items === undefined ? cloneLoraStack(current.items) : cloneLoraStack(patch.items),
+      updatedAt: Date.now(),
+    };
+    this.state.loraProfiles = this.state.loraProfiles.map((profile) => profile.id === id ? updated : profile);
+    this.save();
+    return updated;
+  }
+
   deleteLoraProfile(id: string): void {
     this.state.loraProfiles = this.state.loraProfiles.filter((profile) => profile.id !== id);
     this.save();

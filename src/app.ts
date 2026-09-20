@@ -36,6 +36,7 @@ import {
 } from "./civitai/facets";
 import { dimensionsForRatio, ratioReversedForDimensions, swapResolutionDimensions } from "./resolution";
 import { STUDIO_KEYBIND_ACTIONS, STUDIO_KEYBIND_STORAGE_KEY, defaultStudioKeybinds, eventToKeybind, keybindDisplay, keybindMatches, normalizeStudioKeybindPreferences, type StudioKeybindAction, type StudioKeybindMap } from "./keybinds";
+import { GENERATION_NOTIFICATIONS_STORAGE_KEY, generationNotificationsSupported, requestGenerationNotificationPermission, shouldShowGenerationNotification, showGenerationNotification, type GenerationNotificationPayload } from "./notifications";
 import { runtime, type RuntimeHostControlStatus, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
@@ -430,6 +431,7 @@ export class StudioApp {
   private pendingGenerationApprovalIndex = 0;
   private pendingGenerationSaveBusy = false;
   private generationMiniEnabled = true;
+  private generationNotificationsEnabled = false;
   private keybindsEnabled = false;
   private keybinds: StudioKeybindMap = defaultStudioKeybinds();
   private generationMiniX: number | null = null;
@@ -474,6 +476,11 @@ export class StudioApp {
   private loraDownloadResolveTimer = 0;
   private presetReorderModalOpen = false;
   private loraReorderModalOpen = false;
+  private loraProfileManagerOpen = false;
+  private loraProfileManagerSelectedId = "";
+  private loraProfileManagerDraftName = "";
+  private loraProfileManagerDraftItems: LoraStackItem[] = [];
+  private loraProfileManagerDeleteArmed = false;
   private stackReorderDrag: { kind: "preset" | "lora"; from: number; } | null = null;
   private serverSettings: Record<string, SwarmServerSetting> = {};
   private serverSettingsError = "";
@@ -597,6 +604,7 @@ export class StudioApp {
       this.loraShowNonMatching = localStorage.getItem("swarm-studio-lora-show-nonmatching") === "true";
       this.loraGridSize = localStorage.getItem("swarm-studio-lora-grid-size") === "compact" ? "compact" : "comfortable";
       this.generationMiniEnabled = localStorage.getItem("swarm-studio-generation-mini") !== "false";
+      this.generationNotificationsEnabled = localStorage.getItem(GENERATION_NOTIFICATIONS_STORAGE_KEY) === "true";
       this.checkpointsOpen = localStorage.getItem("swarm-studio-checkpoints-open") !== "false";
       this.libraryFiltersDocked = localStorage.getItem("swarm-studio-library-browse-docked") === "true";
       const miniX = Number(localStorage.getItem("swarm-studio-generation-mini-x"));
@@ -660,6 +668,45 @@ export class StudioApp {
       this.setExternalImageDragActive(false);
       const file = Array.from(event.dataTransfer?.files ?? []).find((item) => item.type.startsWith("image/") || /\.(png|jpe?g)$/i.test(item.name));
       if (file) void this.inspectDroppedImage(file);
+    });
+  }
+
+  private persistGenerationNotificationPreference(): void {
+    try {
+      localStorage.setItem(GENERATION_NOTIFICATIONS_STORAGE_KEY, String(this.generationNotificationsEnabled));
+    } catch {
+      // Preferences can remain session-only when storage is unavailable.
+    }
+  }
+
+  private generationNotificationPermission(): NotificationPermission | "unsupported" {
+    return generationNotificationsSupported() ? Notification.permission : "unsupported";
+  }
+
+  private async setGenerationNotificationsEnabled(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      this.generationNotificationsEnabled = false;
+      this.persistGenerationNotificationPreference();
+      if (this.view === "settings") this.render();
+      return;
+    }
+    const permission = await requestGenerationNotificationPermission();
+    this.generationNotificationsEnabled = permission === "granted";
+    this.persistGenerationNotificationPreference();
+    if (permission === "granted") {
+      this.notify("Generation notifications enabled for background renders.", "success");
+    } else if (permission === "denied") {
+      this.notify("Notifications are blocked for Studio in this browser.", "error");
+    } else {
+      this.notify("Persistent notifications need a secure PWA/browser context with service workers.", "info");
+    }
+    if (this.view === "settings") this.render();
+  }
+
+  private notifyGenerationInBackground(payload: GenerationNotificationPayload): void {
+    if (!shouldShowGenerationNotification(this.generationNotificationsEnabled, document.visibilityState, document.hasFocus())) return;
+    void showGenerationNotification(payload).catch((error) => {
+      this.addLog(`Background notification failed: ${error instanceof Error ? error.message : String(error)}`, "warn", "studio");
     });
   }
 
@@ -1678,6 +1725,7 @@ export class StudioApp {
       ${this.renderLoraDeleteModal()}
       ${this.renderStackReorderModal("preset")}
       ${this.renderStackReorderModal("lora")}
+      ${this.renderLoraProfileManagerModal()}
       ${this.renderPresetEditorModal()}
       ${this.renderRegionPresetEditorModal()}
       ${this.renderLibraryFiltersModal()}
@@ -2579,7 +2627,7 @@ export class StudioApp {
 
         <section class="rail-section lora-section">
           <div class="section-minihead stack-section-head"><span><b>LoRA stack</b><small>${draft.loras.filter((item) => item.enabled).length} enabled · ${draft.loras.length} stacked</small></span><div class="section-icon-actions"><label class="icon-button file-button" title="Import LoRA stack" aria-label="Import LoRA stack">${importSvg}<input id="lora-import" type="file" accept="application/json,.json" hidden /></label><button class="icon-button" data-action="export-lora-stack" title="Export LoRA stack" aria-label="Export LoRA stack" ${draft.loras.length ? "" : "disabled"}>${exportSvg}</button><button class="icon-button" data-action="save-lora-profile" title="Save current LoRA stack" aria-label="Save current LoRA stack" ${draft.loras.length ? "" : "disabled"}>${saveSvg}</button></div></div>
-          <label class="stack-profile-picker"><span>Stack</span><select id="lora-profile-select"><option value="">Current stack · choose a saved stack…</option>${this.store.state.loraProfiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</select></label>
+          <div class="stack-profile-picker-row"><label class="stack-profile-picker"><span>Stack</span><select id="lora-profile-select"><option value="">Current stack · choose a saved stack…</option>${this.store.state.loraProfiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</select></label><button type="button" class="ghost-button stack-manage-button" data-action="manage-lora-profiles">Manage</button></div>
           ${draft.loras.length ? `<div class="lora-stack">${draft.loras.map((item, index) => this.loraStackRow(item, index)).join("")}</div>` : `<div class="stack-empty">No LoRAs in this stack yet.</div>`}
           <details class="lora-add-card"><summary>${plusSvg}<span><b>Add LoRA</b><small>${available.length ? "Choose a matching LoRA" : "No matching LoRAs available"}</small></span></summary><div class="lora-picker"><select id="lora-add-select" ${available.length ? "" : "disabled"}><option value="">${available.length ? "Choose a matching LoRA…" : "No matching LoRAs"}</option>${available.map((lora) => this.loraOption(lora)).join("")}</select><button class="secondary-button" data-action="add-lora" ${available.length ? "" : "disabled"}>Add</button></div></details>
           <div class="stack-tools stack-tools--footer"><button class="ghost-button" data-action="open-lora-reorder" ${draft.loras.length > 1 ? "" : "disabled"}>Reorder</button><button class="ghost-button" data-action="clear-loras" ${draft.loras.length ? "" : "disabled"}>Clear</button></div>
@@ -3449,6 +3497,48 @@ export class StudioApp {
         <p class="helper-copy">Drag the rows into whatever order sparks joy. The stack updates the moment you drop.</p>
         <div class="stack-reorder-list" data-stack-reorder-list="${kind}">${items.map((item, index) => `<div class="stack-reorder-item" draggable="true" data-stack-item="${kind}" data-stack-index="${index}" data-stack-id="${escapeHtml(item.id)}"><span class="stack-grip stack-grip--large">${gripSvg}</span><div class="stack-reorder-copy"><b>${escapeHtml(item.title)}</b><small>${escapeHtml(item.subtitle)}</small></div><em>${escapeHtml(item.meta)}</em></div>`).join("") || `<div class="stack-empty stack-empty--compact">Nothing to reorder.</div>`}</div>
         <div class="form-actions"><button type="button" class="ghost-button" data-action="${closeAction}">Done</button></div>
+      </section>
+    </div>`;
+  }
+
+  private primeLoraProfileManager(profileId: string): void {
+    const profile = this.store.state.loraProfiles.find((item) => item.id === profileId);
+    this.loraProfileManagerSelectedId = profile?.id ?? "";
+    this.loraProfileManagerDraftName = profile?.name ?? "";
+    this.loraProfileManagerDraftItems = profile?.items.map((item) => ({ ...item })) ?? [];
+    this.loraProfileManagerDeleteArmed = false;
+  }
+
+  private renderLoraProfileManagerModal(): string {
+    if (!this.loraProfileManagerOpen) return "";
+    const profiles = this.store.state.loraProfiles;
+    const selected = profiles.find((profile) => profile.id === this.loraProfileManagerSelectedId);
+    const draftItems = selected ? this.loraProfileManagerDraftItems : [];
+    const available = this.loras.filter((lora) => !draftItems.some((item) => serverModelKey(item.name) === serverModelKey(lora.name)));
+    const sourceLabel = selected?.source === "lumiswarm-import" ? "Imported" : "Studio";
+    const updatedLabel = selected ? new Date(selected.updatedAt).toLocaleDateString() : "";
+    return `<div class="download-backdrop lora-profile-manager-backdrop" data-action="close-lora-profile-manager">
+      <section class="download-modal lora-profile-manager-modal" role="dialog" aria-modal="true" aria-labelledby="lora-profile-manager-title" data-lora-profile-manager-dialog>
+        <header><div><span class="panel-kicker">LORA STACKS</span><h2 id="lora-profile-manager-title">Manage saved stacks</h2></div><button class="icon-button" data-action="close-lora-profile-manager" aria-label="Close">×</button></header>
+        <div class="lora-profile-manager-body">
+          <aside class="lora-profile-manager-list" aria-label="Saved LoRA stacks">
+            <div class="lora-profile-manager-list-head"><b>Saved</b><small>${profiles.length} stack${profiles.length === 1 ? "" : "s"}</small></div>
+            <div class="lora-profile-manager-list-scroll">${profiles.map((profile) => `<button type="button" class="lora-profile-manager-item ${profile.id === selected?.id ? "is-active" : ""}" data-lora-profile-manage-select="${escapeHtml(profile.id)}"><span><b>${escapeHtml(profile.name)}</b><small>${profile.items.length} LoRA${profile.items.length === 1 ? "" : "s"}</small></span><em>${profile.source === "lumiswarm-import" ? "import" : "studio"}</em></button>`).join("") || `<div class="stack-empty stack-empty--compact">No saved stacks yet.<br />Use the save icon in the composer first.</div>`}</div>
+          </aside>
+          <div class="lora-profile-manager-editor">
+            ${selected ? `<div class="lora-profile-manager-meta"><span><b>${sourceLabel}</b><small>Updated ${escapeHtml(updatedLabel)}</small></span><button type="button" class="ghost-button" data-action="profile-use-current" ${this.store.state.draft.loras.length ? "" : "disabled"}>Use current stack</button></div>
+              <label class="field lora-profile-name-field"><span>Stack name</span><input id="lora-profile-manager-name" type="text" maxlength="120" value="${escapeHtml(this.loraProfileManagerDraftName)}" autocomplete="off" /></label>
+              <div class="lora-profile-edit-list">${draftItems.map((item) => `<div class="lora-profile-edit-row ${item.enabled ? "" : "is-disabled"}" data-lora-profile-edit-row="${escapeHtml(item.id)}">
+                <div class="lora-profile-edit-copy"><b>${escapeHtml(item.title || prettyName(item.name))}</b><small>${escapeHtml(item.name)}</small></div>
+                <label class="weight-field"><span>Weight</span><input type="number" min="-4" max="4" step="0.05" value="${item.weight}" data-lora-profile-weight="${escapeHtml(item.id)}" /></label>
+                <label class="trigger-toggle"><input type="checkbox" data-lora-profile-trigger="${escapeHtml(item.id)}" ${item.useTrigger ? "checked" : ""}/><span>Trigger</span></label>
+                <div class="stack-row-actions"><button type="button" class="icon-button" data-lora-profile-toggle="${escapeHtml(item.id)}" title="${item.enabled ? "Disable this LoRA" : "Enable this LoRA"}" aria-label="${item.enabled ? "Disable this LoRA" : "Enable this LoRA"}">${item.enabled ? eyeSvg : eyeOffSvg}</button><button type="button" class="icon-button" data-lora-profile-remove="${escapeHtml(item.id)}" title="Remove from saved stack" aria-label="Remove from saved stack">${trashSvg}</button></div>
+              </div>`).join("") || `<div class="stack-empty stack-empty--compact">This saved stack is empty.</div>`}</div>
+              <div class="lora-profile-add-row"><select id="lora-profile-manager-add" ${available.length ? "" : "disabled"}><option value="">${available.length ? "Add a LoRA to this saved stack…" : "No additional server LoRAs available"}</option>${available.map((lora) => this.loraOption(lora)).join("")}</select><button type="button" class="secondary-button" data-action="profile-add-lora" ${available.length ? "" : "disabled"}>Add</button></div>
+              <div class="lora-profile-manager-actions"><button type="button" class="danger-soft ${this.loraProfileManagerDeleteArmed ? "is-armed" : ""}" data-action="delete-lora-profile">${this.loraProfileManagerDeleteArmed ? "Confirm delete" : "Delete stack"}</button><div><button type="button" class="ghost-button" data-action="profile-load-composer">Load into composer</button><button type="button" class="primary-button" data-action="save-lora-profile-edits">Save changes</button></div></div>`
+              : `<div class="lora-profile-manager-empty"><span>${settingsRowsSvg}</span><b>Nothing to manage yet.</b><p>Save a LoRA stack from the composer and it will appear here for editing, loading, renaming, or deletion.</p></div>`}
+          </div>
+        </div>
       </section>
     </div>`;
   }
@@ -4393,7 +4483,10 @@ export class StudioApp {
           <label class="range-field"><span>Outline strength <b id="theme-border-value">${Math.round(theme.borderStrength * 100)}%</b></span><input name="borderStrength" type="range" min="0" max="0.5" step="0.01" value="${theme.borderStrength}" /></label>
           <label class="range-field"><span>Surface opacity <b id="theme-opacity-value">${Math.round(theme.surfaceOpacity * 100)}%</b></span><input name="surfaceOpacity" type="range" min="0.45" max="1" step="0.01" value="${theme.surfaceOpacity}" /></label>
         </form>
-        <div class="section-minihead settings-subhead"><b>Generation</b><span>Floating monitor</span></div><label class="check-row compact-check"><input id="generation-mini-enabled" type="checkbox" ${this.generationMiniEnabled ? "checked" : ""}/><span><b>Show generation mini-monitor</b><small>When you leave Create during a render, show a draggable live preview with sampler-step progress.</small></span></label><div class="section-minihead settings-subhead"><b>LoRA browser</b><span>Grid density</span></div>
+        <div class="section-minihead settings-subhead"><b>Generation</b><span>Background behavior</span></div>
+        <label class="check-row compact-check"><input id="generation-mini-enabled" type="checkbox" ${this.generationMiniEnabled ? "checked" : ""}/><span><b>Show generation mini-monitor</b><small>When you leave Create during a render, show a draggable live preview with sampler-step progress.</small></span></label>
+        <label class="check-row compact-check"><input id="generation-notifications-enabled" type="checkbox" ${this.generationNotificationsEnabled ? "checked" : ""} ${this.generationNotificationPermission() === "unsupported" ? "disabled" : ""}/><span><b>Notify when background generations finish</b><small>${this.generationNotificationPermission() === "granted" ? "Permission granted. Studio only pings while hidden or unfocused." : this.generationNotificationPermission() === "denied" ? "Browser permission is blocked. Re-enable notifications in site settings first." : this.generationNotificationPermission() === "unsupported" ? "Available in secure browser/PWA contexts with service-worker notifications." : "Opt in once; the browser will ask for notification permission."}</small></span></label>
+        <div class="section-minihead settings-subhead"><b>LoRA browser</b><span>Grid density</span></div>
         <label class="field"><span>Grid card size</span><select id="lora-grid-size"><option value="comfortable" ${this.loraGridSize === "comfortable" ? "selected" : ""}>Comfortable · 2 columns on mobile</option><option value="compact" ${this.loraGridSize === "compact" ? "selected" : ""}>Compact · 3 columns on mobile</option></select><small>Compact also fits more cards per row on desktop while keeping portrait previews.</small></label>
       </section>`;
 
@@ -5417,6 +5510,11 @@ export class StudioApp {
   }
 
   private bindLoraStackControls(): void {
+    this.root.querySelector<HTMLElement>("[data-action='manage-lora-profiles']")?.addEventListener("click", () => {
+      this.loraProfileManagerOpen = true;
+      this.primeLoraProfileManager(this.loraProfileManagerSelectedId || this.store.state.loraProfiles[0]?.id || "");
+      this.render();
+    });
     this.root.querySelector<HTMLElement>("[data-action='add-lora']")?.addEventListener("click", () => {
       const select = this.root.querySelector<HTMLSelectElement>("#lora-add-select");
       if (select?.value) this.addLoraToStack(select.value);
@@ -5462,6 +5560,91 @@ export class StudioApp {
       if (!profile) return;
       this.store.updateDraft({ loras: cloneStack(profile.items) });
       this.notify(`${profile.name} loaded.`, "success");
+      this.render();
+    });
+    this.bindLoraProfileManagerEvents();
+  }
+
+  private bindLoraProfileManagerEvents(): void {
+    if (!this.loraProfileManagerOpen) return;
+    this.root.querySelectorAll<HTMLElement>("[data-action='close-lora-profile-manager']").forEach((element) => element.addEventListener("click", (event) => {
+      if (element.classList.contains("download-backdrop") && (event.target as HTMLElement).closest("[data-lora-profile-manager-dialog]")) return;
+      this.loraProfileManagerOpen = false;
+      this.loraProfileManagerDeleteArmed = false;
+      this.render();
+    }));
+    this.root.querySelectorAll<HTMLElement>("[data-lora-profile-manage-select]").forEach((button) => button.addEventListener("click", () => {
+      this.primeLoraProfileManager(button.dataset.loraProfileManageSelect ?? "");
+      this.render();
+    }));
+    this.root.querySelector<HTMLInputElement>("#lora-profile-manager-name")?.addEventListener("input", (event) => {
+      this.loraProfileManagerDraftName = (event.currentTarget as HTMLInputElement).value;
+      this.loraProfileManagerDeleteArmed = false;
+    });
+    this.root.querySelectorAll<HTMLInputElement>("[data-lora-profile-weight]").forEach((input) => input.addEventListener("input", () => {
+      const id = input.dataset.loraProfileWeight ?? "";
+      this.loraProfileManagerDraftItems = this.loraProfileManagerDraftItems.map((item) => item.id === id ? { ...item, weight: asNumber(input.value, 1) } : item);
+      this.loraProfileManagerDeleteArmed = false;
+    }));
+    this.root.querySelectorAll<HTMLInputElement>("[data-lora-profile-trigger]").forEach((input) => input.addEventListener("change", () => {
+      const id = input.dataset.loraProfileTrigger ?? "";
+      this.loraProfileManagerDraftItems = this.loraProfileManagerDraftItems.map((item) => item.id === id ? { ...item, useTrigger: input.checked } : item);
+      this.loraProfileManagerDeleteArmed = false;
+    }));
+    this.root.querySelectorAll<HTMLElement>("[data-lora-profile-toggle]").forEach((button) => button.addEventListener("click", () => {
+      const id = button.dataset.loraProfileToggle ?? "";
+      this.loraProfileManagerDraftItems = this.loraProfileManagerDraftItems.map((item) => item.id === id ? { ...item, enabled: !item.enabled } : item);
+      this.loraProfileManagerDeleteArmed = false;
+      this.render();
+    }));
+    this.root.querySelectorAll<HTMLElement>("[data-lora-profile-remove]").forEach((button) => button.addEventListener("click", () => {
+      const id = button.dataset.loraProfileRemove ?? "";
+      this.loraProfileManagerDraftItems = this.loraProfileManagerDraftItems.filter((item) => item.id !== id);
+      this.loraProfileManagerDeleteArmed = false;
+      this.render();
+    }));
+    this.root.querySelector<HTMLElement>("[data-action='profile-add-lora']")?.addEventListener("click", () => {
+      const select = this.root.querySelector<HTMLSelectElement>("#lora-profile-manager-add");
+      const model = this.loras.find((item) => item.name === select?.value);
+      if (!model) return;
+      if (this.loraProfileManagerDraftItems.some((item) => serverModelKey(item.name) === serverModelKey(model.name))) return;
+      this.loraProfileManagerDraftItems = [...this.loraProfileManagerDraftItems, { id: createId(), name: model.name, title: model.title || prettyName(model.name), weight: 1, enabled: true, useTrigger: false, sourceUrl: "" }];
+      this.loraProfileManagerDeleteArmed = false;
+      this.render();
+    });
+    this.root.querySelector<HTMLElement>("[data-action='profile-use-current']")?.addEventListener("click", () => {
+      this.loraProfileManagerDraftItems = this.store.state.draft.loras.map((item) => ({ ...item }));
+      this.loraProfileManagerDeleteArmed = false;
+      this.render();
+    });
+    this.root.querySelector<HTMLElement>("[data-action='profile-load-composer']")?.addEventListener("click", () => {
+      if (!this.loraProfileManagerSelectedId) return;
+      this.store.updateDraft({ loras: cloneStack(this.loraProfileManagerDraftItems) });
+      const name = this.loraProfileManagerDraftName.trim() || "LoRA stack";
+      this.loraProfileManagerOpen = false;
+      this.loraProfileManagerDeleteArmed = false;
+      this.notify(`${name} loaded into the composer.`, "success");
+      this.render();
+    });
+    this.root.querySelector<HTMLElement>("[data-action='save-lora-profile-edits']")?.addEventListener("click", () => {
+      if (!this.loraProfileManagerSelectedId) return;
+      const updated = this.store.updateLoraProfile(this.loraProfileManagerSelectedId, { name: this.loraProfileManagerDraftName, items: this.loraProfileManagerDraftItems });
+      if (!updated) return;
+      this.primeLoraProfileManager(updated.id);
+      this.notify(`${updated.name} updated.`, "success");
+      this.render();
+    });
+    this.root.querySelector<HTMLElement>("[data-action='delete-lora-profile']")?.addEventListener("click", () => {
+      if (!this.loraProfileManagerSelectedId) return;
+      if (!this.loraProfileManagerDeleteArmed) {
+        this.loraProfileManagerDeleteArmed = true;
+        this.render();
+        return;
+      }
+      const deleted = this.store.state.loraProfiles.find((profile) => profile.id === this.loraProfileManagerSelectedId);
+      this.store.deleteLoraProfile(this.loraProfileManagerSelectedId);
+      this.primeLoraProfileManager(this.store.state.loraProfiles[0]?.id || "");
+      this.notify(`${deleted?.name || "LoRA stack"} deleted.`, "success");
       this.render();
     });
   }
@@ -6566,6 +6749,7 @@ export class StudioApp {
         this.generationPreview = "";
         this.addLog(`Generation completed with ${images.length} unsaved result${images.length === 1 ? "" : "s"}; waiting for manual approval.`, "info", "api");
         this.notify(`${images.length} result${images.length === 1 ? "" : "s"} ready for review. Nothing has been saved yet.`, "success");
+        this.notifyGenerationInBackground({ kind: "review", count: images.length });
         return;
       }
       if (!images.length && historyBefore) {
@@ -6641,10 +6825,12 @@ export class StudioApp {
       }
       this.addLog(`Generation completed with ${images.length} output${images.length === 1 ? "" : "s"}.`, "info", "api");
       this.notify(`${images.length} output${images.length === 1 ? "" : "s"} indexed in Library.`, "success");
+      this.notifyGenerationInBackground({ kind: "complete", count: images.length });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.addLog(message, "error", "api");
       this.notify(message, "error");
+      this.notifyGenerationInBackground({ kind: "error", message });
     } finally {
       if (this.generationStartedAt && !this.generationFinishedAt) this.generationFinishedAt = performance.now();
       this.generating = false;
@@ -7691,6 +7877,7 @@ export class StudioApp {
       }
       this.addLog("Inpaint completed with 1 output. Review the result before replacing the current base.", "info", "api");
       this.notify("Edited output indexed in Library. Approve it if you want to continue from the new base.", "success");
+      this.notifyGenerationInBackground({ kind: "inpaint", count: 1 });
       this.inpaintPendingResultRecord = firstRecord;
       this.inpaintResultReviewOpen = true;
       this.render();
@@ -7698,6 +7885,7 @@ export class StudioApp {
       const message = error instanceof Error ? error.message : String(error);
       this.addLog(message, "error", "api");
       this.notify(message, "error");
+      this.notifyGenerationInBackground({ kind: "error", message });
     } finally {
       this.inpaintAwaitingResult = false;
       this.generating = false;
@@ -9726,6 +9914,7 @@ export class StudioApp {
     }));
 
     this.root.querySelector<HTMLInputElement>("#generation-mini-enabled")?.addEventListener("change", (event) => { this.generationMiniEnabled = (event.currentTarget as HTMLInputElement).checked; try { localStorage.setItem("swarm-studio-generation-mini", String(this.generationMiniEnabled)); } catch {} });
+    this.root.querySelector<HTMLInputElement>("#generation-notifications-enabled")?.addEventListener("change", (event) => { void this.setGenerationNotificationsEnabled((event.currentTarget as HTMLInputElement).checked); });
 
     this.root.querySelector<HTMLSelectElement>("#lora-grid-size")?.addEventListener("change", (event) => {
       this.loraGridSize = (event.currentTarget as HTMLSelectElement).value === "compact" ? "compact" : "comfortable";
