@@ -43,6 +43,7 @@ import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, get
 import { normalizeGenerationRequest, normalizeParamKey } from "./swarm/request";
 import { swarmImageMutationPath, swarmImageViewPath } from "./swarm/history";
 import { imageMetadata } from "./swarm/image-metadata";
+import { recoverPresetParameters } from "./swarm/preset-recovery";
 import type {
   SwarmGenerationEvent,
   SwarmGenerationImage,
@@ -3055,14 +3056,21 @@ export class StudioApp {
     this.renderGenerationStage();
     try {
       const image = await this.blobToDataUrl(item.blob);
-      const response = await this.client.addImageToHistory(image, { ...item.request, images: 1 } as Record<string, unknown>);
+      // AddImageToHistory rebuilds metadata from these inputs. Sending the original
+      // preset-tag request here destroys the final prompt and can pick a new seed.
+      const finalParams = { ...this.metadataParams(item.request), ...this.metadataParams(item.metadata), seed: item.seed };
+      const knownParams = new Set(this.params.flatMap((param) => [param.id, param.name].filter((name): name is string => Boolean(name)).map(normalizeParamKey)));
+      const saveRequest = Object.fromEntries(Object.entries(finalParams).filter(([key]) => key !== "donotsave" && (key in item.request || knownParams.has(key))));
+      const response = await this.client.addImageToHistory(image, { ...saveRequest, images: 1 } as Record<string, unknown>);
       const saved = (response.images ?? []).flatMap((raw, index) => {
         const normalized = normalizeGenerationImage(raw, index);
         return normalized ? [normalized] : [];
       })[0];
       if (!saved?.image) throw new Error("Swarm saved the image but did not return its history path.");
       const path = String(saved.image);
-      const metadata = saved.metadata || response.metadata?.[0] || item.metadata || "";
+      const savedMetadata = saved.metadata || response.metadata?.[0] || "";
+      const metadata = JSON.stringify({ ...this.metadataObject(savedMetadata), ...this.metadataObject(item.metadata), sui_image_params: finalParams });
+      this.rememberOutputMetadata(path, metadata);
       const url = this.client.imageUrl(this.normalizeSwarmPath(path));
       const record = this.store.addOutput({
         url,
@@ -5871,6 +5879,11 @@ export class StudioApp {
 
   private async ensureOutputMetadata(output: OutputRecord): Promise<Record<string, unknown>> {
     const currentParams = this.metadataParams(output.metadata || "");
+    const preserved = this.preservedOutputMetadata(output.swarmSourcePath || output.swarmPath);
+    if (preserved) {
+      this.store.updateOutput(output.id, { metadata: preserved });
+      return this.metadataParams(preserved);
+    }
     const hasStoredSwarmImage = Boolean(output.swarmSourcePath || output.swarmPath);
     if (!hasStoredSwarmImage || this.embeddedMetadataChecked.has(output.id)) return currentParams;
 
@@ -5885,10 +5898,16 @@ export class StudioApp {
           ? resolvedUrl
           : await runtime.fetchDataUrl(resolvedUrl, this.store.state.connection.authToken);
         const embedded = await this.embeddedMetadataFromDataUrl(dataUrl);
-        if (!embedded) return currentParams;
+        if (!embedded) {
+          this.addLog(`No embedded Swarm metadata was found for ${output.swarmPath || output.id}. Using stored history parameters.`, "warn", "api");
+          return currentParams;
+        }
 
         const embeddedParams = this.metadataParams(embedded);
-        if (!Object.keys(embeddedParams).length) return currentParams;
+        if (!Object.keys(embeddedParams).length) {
+          this.addLog(`Embedded metadata for ${output.swarmPath || output.id} contains no readable generation parameters.`, "warn", "api");
+          return currentParams;
+        }
         this.embeddedMetadataChecked.add(output.id);
         // The embedded image is authoritative for resolved values, but history metadata can still
         // carry useful request-only parameters. Merge it underneath so Reuse All reproduces the
@@ -6431,14 +6450,32 @@ export class StudioApp {
     if (!output) return;
     const current = this.store.state.draft;
     const request = output.request ?? {};
-    const params = await this.ensureOutputMetadata(output);
+    let params = await this.ensureOutputMetadata(output);
     const resolvedSeed = output.seed >= 0 ? output.seed : await this.resolveStoredOutputSeed(output, 3);
+    let recoveredPresets = false;
+    const sourcePrompt = String(this.metadataValue(params, "prompt") ?? output.sentPrompt ?? output.prompt ?? "");
+    const sourceNegative = String(this.metadataValue(params, "negativeprompt", "negative prompt") ?? output.negativePrompt ?? "");
+    if (/<(?:preset|p):[^>]*>/i.test(sourcePrompt) || /<(?:preset|p):[^>]*>/i.test(sourceNegative)) {
+      try {
+        this.addLog(`Reuse ${output.swarmPath || output.id}: saved metadata still contains source preset tags; recovering from current Swarm preset definitions.`, "warn", "api");
+        const presets = await this.client.listPresets();
+        const recordedParams = params;
+        params = recoverPresetParameters({ ...this.metadataParams(request), ...params, prompt: sourcePrompt, negativeprompt: sourceNegative }, presets);
+        // These values survived in the file (model comes from sui_models). A
+        // preset edited since generation must not replace the recorded values.
+        for (const key of ["model", "width", "height", "seed", "loras", "loraweights"]) {
+          if (recordedParams[key] != null) params[key] = recordedParams[key];
+        }
+        recoveredPresets = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.addLog(`Reuse preset recovery failed for ${output.swarmPath || output.id}: ${message}`, "error", "api");
+        this.notify(`Could not recover the saved presets: ${message}`, "error");
+        return;
+      }
+    }
     const resolvedPrompt = String(this.metadataValue(params, "prompt") ?? output.sentPrompt ?? output.prompt ?? "");
     const resolvedNegative = String(this.metadataValue(params, "negativeprompt", "negative prompt") ?? output.negativePrompt ?? "");
-    if (/<preset:[^>]*>/i.test(resolvedPrompt) || /<preset:[^>]*>/i.test(resolvedNegative)) {
-      this.notify("The image's resolved prompt metadata could not be recovered. Reuse was left unchanged; see the API log for metadata read errors.", "error");
-      return;
-    }
     const variationSeedRaw = this.metadataValue(params, "variationseed", "variation seed") ?? request.variationseed;
     const variationStrengthRaw = this.metadataValue(params, "variationseedstrength", "variation seed strength") ?? request.variationseedstrength;
     const variationSeed = asNumber(String(variationSeedRaw ?? -1), -1);
@@ -6497,9 +6534,9 @@ export class StudioApp {
     });
     this.store.updateUi({ selectedOutputId: "", lastView: "create", mobileCreatePane: "generation" });
     this.view = "create";
-    this.notify(resolvedSeed != null && resolvedSeed >= 0
+    this.notify(recoveredPresets ? "Settings restored using current preset definitions; historical preset edits and lost random expansions cannot be recovered." : resolvedSeed != null && resolvedSeed >= 0
       ? `Resolved generation restored · seed ${resolvedSeed}.`
-      : "Resolved generation restored.", "success");
+      : "Resolved generation restored.", recoveredPresets ? "info" : "success");
     this.render();
   }
 
@@ -8042,13 +8079,34 @@ export class StudioApp {
       for (const key of ["sui_image_params", "parameters", "params", "metadata"]) {
         if (record[key] == null) continue;
         const nested = unwrap(record[key], depth + 1);
-        if (Object.keys(nested).length) return nested;
+        if (Object.keys(nested).length) {
+          const models = Array.isArray(record.sui_models) ? record.sui_models as Array<Record<string, unknown>> : [];
+          const checkpoint = models.find((model) => model.param === "model");
+          if (!nested.model && checkpoint?.name) nested.model = checkpoint.name;
+          return nested;
+        }
       }
       // Canonicalize aliases before merging API and embedded metadata so a stale
       // "Negative Prompt" cannot override the final "negativeprompt" value.
       return Object.fromEntries(Object.entries(record).map(([key, item]) => [key.toLowerCase().replace(/[^a-z0-9]+/g, ""), item]));
     };
     return unwrap(metadata);
+  }
+
+  private outputMetadataStorageKey(path: string): string {
+    return `swarm-studio-resolved-output-v1:${this.effectiveSwarmBaseUrl(this.store.state.connection)}:${this.swarmMutationPath(path)}`;
+  }
+
+  private rememberOutputMetadata(path: string, metadata: string): void {
+    if (!path || !metadata) return;
+    try { localStorage.setItem(this.outputMetadataStorageKey(path), metadata); }
+    catch { this.addLog("Could not persist resolved output metadata separately from Swarm history.", "warn", "studio"); }
+  }
+
+  private preservedOutputMetadata(path: string): string {
+    if (!path) return "";
+    try { return localStorage.getItem(this.outputMetadataStorageKey(path)) || ""; }
+    catch { return ""; }
   }
 
   private metadataValue(params: Record<string, unknown>, ...names: string[]): unknown {
@@ -8198,7 +8256,7 @@ export class StudioApp {
             const oldSwarmPath = current.swarmPath;
             const oldSourcePath = current.swarmSourcePath;
             const oldCanonical = this.normalizeSwarmPath(current.swarmSourcePath || current.swarmPath || current.url);
-            const refreshedMetadata = String(file.metadata ?? current.metadata ?? "");
+            const refreshedMetadata = this.preservedOutputMetadata(sourcePath) || String(file.metadata ?? current.metadata ?? "");
             Object.assign(current, {
               swarmPath: path,
               swarmSourcePath: sourcePath,

@@ -37,12 +37,16 @@ assert.notEqual(reuseStart, -1, 'Reuse All handler must exist');
 const reuseEnd = app.indexOf('\n  private readDraftFromForm', reuseStart);
 assert.notEqual(reuseEnd, -1, 'Reuse All boundary must remain discoverable');
 const reuse = app.slice(reuseStart, reuseEnd);
-assert.match(reuse, /const params = await this\.ensureOutputMetadata\(output\)/, 'Reuse All must await authoritative embedded metadata even if Inspect hydration is still pending');
+assert.match(reuse, /let params = await this\.ensureOutputMetadata\(output\)/, 'Reuse All must await authoritative embedded metadata even if Inspect hydration is still pending');
 assert.match(reuse, /metadataValue\(params, "prompt"\) \?\? output\.sentPrompt/, 'Reuse All must prefer the resolved embedded positive prompt over the source/tag prompt');
 assert.match(reuse, /metadataValue\(params, "negativeprompt", "negative prompt"\) \?\? output\.negativePrompt/, 'Reuse All must prefer the resolved embedded negative prompt');
 assert.match(reuse, /prompt: resolvedPrompt/, 'Reuse All must write the resolved prompt into the composer');
 assert.match(reuse, /activePresets: \[\]/, 'Reuse All must not reapply source preset/tag expansion after materializing the resolved prompt');
 assert.match(reuse, /seed: resolvedSeed != null && resolvedSeed >= 0 \? resolvedSeed/, 'Reuse All must restore the exact rendered seed for reproduction and variation-seed workflows');
+assert.match(reuse, /recoverPresetParameters/, 'Legacy approval records must recover preset tags instead of blocking reuse');
+assert.match(reuse, /Reuse preset recovery failed/, 'Recovery failures must produce a concrete log entry');
+assert.match(app, /rememberOutputMetadata\(path, metadata\)/, 'Approval saves must preserve final generation metadata independently of the history API');
+assert.match(app, /addImageToHistory\(image, \{ \.\.\.saveRequest/, 'Approval saves must send resolved parameters rather than the original preset-tag request');
 
 console.log('history metadata hydration contract: ok');
 assert.match(app, /return imageMetadata\(bytes\)/, 'Metadata must be decoded from bytes regardless of HTTP MIME type');
