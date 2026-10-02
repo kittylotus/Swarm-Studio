@@ -106,6 +106,8 @@ export interface GenerationDraft {
   scheduler: string;
   images: number;
   loras: LoraStackItem[];
+  loraStackProfileId?: string;
+  loraStackName?: string;
   activePresets: string[];
   regionalPrompt: RegionalPromptDraft;
   initImage: string;

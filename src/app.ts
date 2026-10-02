@@ -42,6 +42,7 @@ import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, 
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
 import { normalizeGenerationRequest, normalizeParamKey } from "./swarm/request";
 import { swarmImageMutationPath, swarmImageViewPath } from "./swarm/history";
+import { imageMetadata } from "./swarm/image-metadata";
 import type {
   SwarmGenerationEvent,
   SwarmGenerationImage,
@@ -2626,7 +2627,7 @@ export class StudioApp {
       if (b === "Unsorted") return 1;
       return a.localeCompare(b, undefined, { sensitivity: "base" });
     });
-    const savedProfileOptions = savedProfileFolders.map((folder) => `<optgroup label="${escapeHtml(folder)}">${this.store.state.loraProfiles.filter((profile) => (profile.folder?.trim() || "Unsorted") === folder).map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</optgroup>`).join("");
+    const savedProfileOptions = savedProfileFolders.map((folder) => `<optgroup label="${escapeHtml(folder)}">${this.store.state.loraProfiles.filter((profile) => (profile.folder?.trim() || "Unsorted") === folder).map((profile) => `<option value="${escapeHtml(profile.id)}" ${profile.id === draft.loraStackProfileId ? "selected" : ""}>${escapeHtml(profile.name)}</option>`).join("")}</optgroup>`).join("");
     return `
       <aside class="panel ${className} shared-composer">
         <div class="rail-heading"><div><span class="panel-kicker">COMPOSER</span><h2>Model & stack</h2></div></div>
@@ -3112,7 +3113,9 @@ export class StudioApp {
 
   private modelOptions(selected: string): string {
     if (!this.models.length) return `<option value="${escapeHtml(selected)}">${escapeHtml(selected || "Connect to load models")}</option>`;
-    return this.models.map((model) => `<option value="${escapeHtml(model.name)}" ${model.name === selected ? "selected" : ""}>${escapeHtml(model.title || prettyName(model.name))}</option>`).join("");
+    const unavailable = selected && !this.models.some((model) => model.name === selected)
+      ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} · unavailable</option>` : "";
+    return unavailable + this.models.map((model) => `<option value="${escapeHtml(model.name)}" ${model.name === selected ? "selected" : ""}>${escapeHtml(model.title || prettyName(model.name))}</option>`).join("");
   }
 
   private presetOptions(selected: string): string {
@@ -4149,6 +4152,10 @@ export class StudioApp {
   }
 
   private modelCivitaiUrl(model: SwarmModel): string {
+    const cached = this.storedLoraSourceUrl(model.name);
+    if (cached) return cached;
+    const facet = this.loraFacetCache.records[serverModelKey(model.name)];
+    if (facet?.modelId) return `${CIVITAI_ORIGIN}/models/${facet.modelId}${facet.versionId ? `?modelVersionId=${facet.versionId}` : ""}`;
     const serialized = this.modelMetadataSerialized(model);
     const modelId = serialized.match(/swarmstudio\.civitai_model_id[\\"':=\s]+(\d+)/i)?.[1];
     const versionId = serialized.match(/swarmstudio\.civitai_version_id[\\"':=\s]+(\d+)/i)?.[1];
@@ -4157,6 +4164,21 @@ export class StudioApp {
     if (direct) return routeCivitaiUrl(direct.replace(/\\u0026/g, "&"));
     const descriptionDirect = `${model.description || ""} ${model.usage_hint || ""}`.match(/https?:\/\/(?:www\.)?civitai\.(?:com|red)\/models\/\d+[^\s\"'<>]*/i)?.[0];
     return descriptionDirect ? routeCivitaiUrl(descriptionDirect) : "";
+  }
+
+  private loraSourceStorageKey(name: string): string {
+    return `swarm-studio-lora-source-v1:${this.effectiveSwarmBaseUrl(this.store.state.connection)}:${name.replaceAll("\\", "/").replace(/\.(safetensors|ckpt|pt)$/i, "").toLowerCase()}`;
+  }
+
+  private storedLoraSourceUrl(name: string): string {
+    try { return localStorage.getItem(this.loraSourceStorageKey(name)) || ""; }
+    catch { return ""; }
+  }
+
+  private rememberLoraSourceUrl(name: string, sourceUrl: string): void {
+    if (!sourceUrl) return;
+    try { localStorage.setItem(this.loraSourceStorageKey(name), sourceUrl); }
+    catch { /* Export can still use the resolved URL without local persistence. */ }
   }
 
   private renderModelMetadataViewer(): string {
@@ -5561,15 +5583,16 @@ export class StudioApp {
       this.render();
     });
     this.root.querySelector<HTMLElement>("[data-action='clear-loras']")?.addEventListener("click", () => {
-      this.store.updateDraft({ loras: [] });
+      this.store.updateDraft({ loras: [], loraStackProfileId: "", loraStackName: "" });
       this.render();
     });
     this.root.querySelector<HTMLInputElement>("#lora-import")?.addEventListener("change", (event) => void this.importLoraFile(event.currentTarget as HTMLInputElement));
-    this.root.querySelector<HTMLElement>("[data-action='export-lora-stack']")?.addEventListener("click", () => this.exportLoraStack());
+    this.root.querySelector<HTMLElement>("[data-action='export-lora-stack']")?.addEventListener("click", () => void this.exportLoraStack());
     this.root.querySelector<HTMLElement>("[data-action='save-lora-profile']")?.addEventListener("click", () => {
       const name = window.prompt("Stack name?", "LoRA stack");
       if (!name?.trim()) return;
-      this.store.saveLoraProfile(name, this.store.state.draft.loras, "studio");
+      const profile = this.store.saveLoraProfile(name, this.store.state.draft.loras, "studio");
+      this.store.updateDraft({ loraStackProfileId: profile.id, loraStackName: profile.name });
       this.notify("LoRA stack saved.", "success");
       this.render();
     });
@@ -5578,7 +5601,7 @@ export class StudioApp {
       if (!id) return;
       const profile = this.store.state.loraProfiles.find((item) => item.id === id);
       if (!profile) return;
-      this.store.updateDraft({ loras: cloneStack(profile.items) });
+      this.store.updateDraft({ loras: cloneStack(profile.items), loraStackProfileId: profile.id, loraStackName: profile.name });
       this.notify(`${profile.name} loaded.`, "success");
       this.render();
     });
@@ -5643,7 +5666,7 @@ export class StudioApp {
     });
     this.root.querySelector<HTMLElement>("[data-action='profile-load-composer']")?.addEventListener("click", () => {
       if (!this.loraProfileManagerSelectedId) return;
-      this.store.updateDraft({ loras: cloneStack(this.loraProfileManagerDraftItems) });
+      this.store.updateDraft({ loras: cloneStack(this.loraProfileManagerDraftItems), loraStackProfileId: this.loraProfileManagerSelectedId, loraStackName: this.loraProfileManagerDraftName.trim() || "LoRA stack" });
       const name = this.loraProfileManagerDraftName.trim() || "LoRA stack";
       this.loraProfileManagerOpen = false;
       this.loraProfileManagerDeleteArmed = false;
@@ -5719,148 +5742,9 @@ export class StudioApp {
     });
   }
 
-  private pngParametersFromDataUrl(dataUrl: string): string {
-    if (!/^data:image\/png(?:;[^,]*)?,/i.test(dataUrl)) return "";
-    try {
-      const comma = dataUrl.indexOf(",");
-      if (comma < 0) return "";
-      const header = dataUrl.slice(0, comma);
-      const body = dataUrl.slice(comma + 1);
-      const binary = /;base64/i.test(header) ? atob(body) : decodeURIComponent(body);
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-      if (bytes.length < 12 || bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47) return "";
-      const decoder = new TextDecoder("utf-8");
-      let offset = 8;
-      while (offset + 12 <= bytes.length) {
-        const length = ((bytes[offset]! << 24) | (bytes[offset + 1]! << 16) | (bytes[offset + 2]! << 8) | bytes[offset + 3]!) >>> 0;
-        const type = String.fromCharCode(...bytes.slice(offset + 4, offset + 8));
-        const start = offset + 8;
-        const end = start + length;
-        if (end + 4 > bytes.length) break;
-        if (type === "tEXt") {
-          const data = bytes.slice(start, end);
-          const nul = data.indexOf(0);
-          if (nul > 0) {
-            const keyword = decoder.decode(data.slice(0, nul));
-            if (keyword === "parameters") return decoder.decode(data.slice(nul + 1));
-          }
-        } else if (type === "iTXt") {
-          const data = bytes.slice(start, end);
-          const firstNul = data.indexOf(0);
-          if (firstNul > 0 && decoder.decode(data.slice(0, firstNul)) === "parameters") {
-            const compressionFlag = data[firstNul + 1] ?? 0;
-            let cursor = firstNul + 3;
-            const languageEnd = data.indexOf(0, cursor);
-            if (languageEnd < 0) return "";
-            cursor = languageEnd + 1;
-            const translatedEnd = data.indexOf(0, cursor);
-            if (translatedEnd < 0) return "";
-            cursor = translatedEnd + 1;
-            if (compressionFlag === 0) return decoder.decode(data.slice(cursor));
-          }
-        }
-        offset = end + 4;
-      }
-    } catch { /* image metadata fallback is best-effort */ }
-    return "";
-  }
-
-  private jpegUserCommentFromArrayBuffer(buffer: ArrayBuffer): string {
-    try {
-      const bytes = new Uint8Array(buffer);
-      if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return "";
-      let offset = 2;
-      while (offset + 4 <= bytes.length) {
-        if (bytes[offset] !== 0xff) { offset += 1; continue; }
-        const marker = bytes[offset + 1]!;
-        offset += 2;
-        if (marker === 0xd9 || marker === 0xda) break;
-        if (marker === 0x00 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
-        if (offset + 2 > bytes.length) break;
-        const segmentLength = (bytes[offset]! << 8) | bytes[offset + 1]!;
-        if (segmentLength < 2 || offset + segmentLength > bytes.length) break;
-        const segmentStart = offset + 2;
-        const segmentEnd = offset + segmentLength;
-        if (marker === 0xe1 && segmentEnd - segmentStart >= 14) {
-          const exif = bytes.slice(segmentStart, segmentEnd);
-          if (String.fromCharCode(...exif.slice(0, 6)) === "Exif\u0000\u0000") {
-            const tiffStart = 6;
-            const little = exif[tiffStart] === 0x49 && exif[tiffStart + 1] === 0x49;
-            const big = exif[tiffStart] === 0x4d && exif[tiffStart + 1] === 0x4d;
-            if (!little && !big) { offset += segmentLength; continue; }
-            const read16 = (at: number) => little
-              ? (exif[at]! | (exif[at + 1]! << 8))
-              : ((exif[at]! << 8) | exif[at + 1]!);
-            const read32 = (at: number) => little
-              ? ((exif[at]! | (exif[at + 1]! << 8) | (exif[at + 2]! << 16) | (exif[at + 3]! << 24)) >>> 0)
-              : (((exif[at]! << 24) | (exif[at + 1]! << 16) | (exif[at + 2]! << 8) | exif[at + 3]!) >>> 0);
-            if (read16(tiffStart + 2) !== 42) { offset += segmentLength; continue; }
-            const typeSize = (type: number) => ({ 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8 } as Record<number, number>)[type] ?? 1;
-            const entryData = (entryAt: number, type: number, count: number): Uint8Array => {
-              const size = typeSize(type) * count;
-              const dataAt = size <= 4 ? entryAt + 8 : tiffStart + read32(entryAt + 8);
-              if (dataAt < 0 || dataAt + size > exif.length) return new Uint8Array();
-              return exif.slice(dataAt, dataAt + size);
-            };
-            const findEntry = (ifdOffset: number, tag: number): { at: number; type: number; count: number } | null => {
-              const start = tiffStart + ifdOffset;
-              if (start < 0 || start + 2 > exif.length) return null;
-              const count = read16(start);
-              for (let index = 0; index < count; index += 1) {
-                const at = start + 2 + index * 12;
-                if (at + 12 > exif.length) break;
-                if (read16(at) === tag) return { at, type: read16(at + 2), count: read32(at + 4) };
-              }
-              return null;
-            };
-            const ifd0 = read32(tiffStart + 4);
-            const exifPointer = findEntry(ifd0, 0x8769);
-            if (exifPointer) {
-              const pointerData = entryData(exifPointer.at, exifPointer.type, exifPointer.count);
-              let exifIfd = 0;
-              if (pointerData.length >= 4) {
-                exifIfd = little
-                  ? ((pointerData[0]! | (pointerData[1]! << 8) | (pointerData[2]! << 16) | (pointerData[3]! << 24)) >>> 0)
-                  : (((pointerData[0]! << 24) | (pointerData[1]! << 16) | (pointerData[2]! << 8) | pointerData[3]!) >>> 0);
-              }
-              const comment = findEntry(exifIfd, 0x9286);
-              if (comment) {
-                let data = entryData(comment.at, comment.type, comment.count);
-                if (data.length) {
-                  const asciiPrefix = new TextDecoder("ascii").decode(data.slice(0, 8));
-                  if (asciiPrefix.startsWith("ASCII")) data = data.slice(8);
-                  else if (asciiPrefix.startsWith("UNICODE")) {
-                    data = data.slice(8);
-                    try {
-                      return new TextDecoder(little ? "utf-16le" : "utf-16be").decode(data).replace(/\u0000+$/g, "").trim();
-                    } catch { /* fall through to UTF-8 */ }
-                  }
-                  return new TextDecoder("utf-8").decode(data).replace(/\u0000+$/g, "").trim();
-                }
-              }
-            }
-          }
-        }
-        if (marker === 0xfe) {
-          const comment = new TextDecoder("utf-8").decode(bytes.slice(segmentStart, segmentEnd)).replace(/\u0000+$/g, "").trim();
-          if (/sui_image_params|"prompt"|"negativeprompt"/i.test(comment)) return comment;
-        }
-        offset += segmentLength;
-      }
-    } catch { /* JPEG metadata is best-effort. */ }
-    return "";
-  }
-
   private async embeddedMetadataFromDataUrl(dataUrl: string): Promise<string> {
-    if (/^data:image\/png(?:;[^,]*)?,/i.test(dataUrl)) return this.pngParametersFromDataUrl(dataUrl);
-    if (/^data:image\/jpe?g(?:;[^,]*)?,/i.test(dataUrl)) {
-      try {
-        return this.jpegUserCommentFromArrayBuffer(await this.dataUrlToBlob(dataUrl).arrayBuffer());
-      } catch {
-        return "";
-      }
-    }
-    return "";
+    const bytes = new Uint8Array(await this.dataUrlToBlob(dataUrl).arrayBuffer());
+    return imageMetadata(bytes);
   }
 
   private async imageDimensionsFromDataUrl(dataUrl: string): Promise<{ width: number; height: number }> {
@@ -5875,11 +5759,7 @@ export class StudioApp {
   private async inspectDroppedImage(file: File): Promise<void> {
     try {
       const dataUrl = await this.blobToDataUrl(file);
-      const lower = file.name.toLowerCase();
-      let metadata = /^data:image\/png/i.test(dataUrl) || lower.endsWith(".png") ? this.pngParametersFromDataUrl(dataUrl) : "";
-      if (!metadata && (/^data:image\/jpe?g/i.test(dataUrl) || /\.jpe?g$/i.test(lower))) {
-        metadata = this.jpegUserCommentFromArrayBuffer(await file.arrayBuffer());
-      }
+      const metadata = await this.embeddedMetadataFromDataUrl(dataUrl);
       const params = this.metadataParams(metadata);
       const dims = await this.imageDimensionsFromDataUrl(dataUrl);
       const loraNames = Array.isArray(params.loras) ? params.loras.map(String) : [];
@@ -6005,11 +5885,11 @@ export class StudioApp {
           ? resolvedUrl
           : await runtime.fetchDataUrl(resolvedUrl, this.store.state.connection.authToken);
         const embedded = await this.embeddedMetadataFromDataUrl(dataUrl);
-        this.embeddedMetadataChecked.add(output.id);
         if (!embedded) return currentParams;
 
         const embeddedParams = this.metadataParams(embedded);
         if (!Object.keys(embeddedParams).length) return currentParams;
+        this.embeddedMetadataChecked.add(output.id);
         // The embedded image is authoritative for resolved values, but history metadata can still
         // carry useful request-only parameters. Merge it underneath so Reuse All reproduces the
         // rendered prompt without silently dropping advanced settings that are absent from the file.
@@ -6019,7 +5899,7 @@ export class StudioApp {
         const resolvedPrompt = String(this.metadataValue(params, "prompt") ?? output.prompt ?? "");
         const resolvedNegative = String(this.metadataValue(params, "negativeprompt", "negative prompt") ?? output.negativePrompt ?? "");
         this.store.updateOutput(output.id, {
-          metadata: embedded,
+          metadata: JSON.stringify({ ...this.metadataObject(embedded), sui_image_params: params }),
           seed,
           prompt: resolvedPrompt,
           negativePrompt: resolvedNegative,
@@ -6432,8 +6312,8 @@ export class StudioApp {
     try {
       const imported = importLumiSwarmStack(JSON.parse(await file.text()) as unknown, this.loras);
       if (!imported.items.length) throw new Error("The stack contained no usable LoRA entries.");
-      this.store.updateDraft({ loras: imported.items });
-      this.store.saveLoraProfile(imported.name, imported.items, "lumiswarm-import");
+      const profile = this.store.saveLoraProfile(imported.name, imported.items, "lumiswarm-import");
+      this.store.updateDraft({ loras: imported.items, loraStackProfileId: profile.id, loraStackName: imported.name });
       this.addLog(`Imported LoRA stack "${imported.name}" with ${imported.items.length} items.${imported.missing.length ? ` Missing on server: ${imported.missing.join(", ")}` : ""}`, imported.missing.length ? "warn" : "info", "studio");
       this.notify(imported.missing.length
         ? `Imported ${imported.items.length} LoRAs; ${imported.missing.length} could not be matched to this server.`
@@ -6446,30 +6326,64 @@ export class StudioApp {
     }
   }
 
-  private exportLoraStack(): void {
-    const items = this.store.state.draft.loras;
+  private async exportLoraStack(): Promise<void> {
+    const draft = this.store.state.draft;
+    const items = cloneStack(draft.loras);
     if (!items.length) return;
-    const profileId = this.root.querySelector<HTMLSelectElement>("#lora-profile-select")?.value ?? "";
-    const profile = this.store.state.loraProfiles.find((item) => item.id === profileId);
-    const name = profile?.name || "LoRA stack";
-    const payload = {
-      version: 1,
-      type: "swarm_studio_lora_stack",
-      stack: {
-        name,
-        items: items.map(({ name: modelName, title, weight, enabled, useTrigger, sourceUrl }) => ({ name: modelName, title, weight, enabled, useTrigger, sourceUrl })),
-      },
-    };
-    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "lora-stack"}.json`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    this.notify(`Exported ${items.length} LoRA${items.length === 1 ? "" : "s"}.`, "success");
+    const matchingProfiles = this.store.state.loraProfiles.filter((profile) => profile.items.length === items.length && profile.items.every((item, index) => {
+      const current = items[index]!;
+      return item.name === current.name && item.weight === current.weight && item.enabled === current.enabled && item.useTrigger === current.useTrigger;
+    }));
+    const profile = this.store.state.loraProfiles.find((item) => item.id === draft.loraStackProfileId)
+      ?? (matchingProfiles.length === 1 ? matchingProfiles[0] : undefined);
+    const name = profile?.name || draft.loraStackName || "LoRA stack";
+    const button = this.root.querySelector<HTMLButtonElement>("[data-action='export-lora-stack']");
+    if (button) button.disabled = true;
+    this.notify("Resolving LoRA source URLs for export…", "info");
+    try {
+      for (const item of items) {
+        if (item.sourceUrl.trim()) continue;
+        const model = this.resolveLora(item);
+        item.sourceUrl = this.storedLoraSourceUrl(item.name) || (model ? this.modelCivitaiUrl(model) : "");
+        if (item.sourceUrl || !model) continue;
+        try {
+          const described = await this.client.describeModel(model.name, "LoRA");
+          item.sourceUrl = this.modelCivitaiUrl(described);
+        } catch { /* Hash lookup can still recover a source if DescribeModel fails. */ }
+        if (!item.sourceUrl) {
+          try { item.sourceUrl = (await this.civitaiSourceFromModelHash(model)).sourceUrl; }
+          catch (error) { this.addLog(`No export URL for ${item.name}: ${error instanceof Error ? error.message : String(error)}`, "warn", "api"); }
+        }
+        if (item.sourceUrl) this.rememberLoraSourceUrl(item.name, item.sourceUrl);
+      }
+      this.store.updateDraft({ loras: this.store.state.draft.loras.map((item) => {
+        const exported = items.find((candidate) => candidate.id === item.id && candidate.name === item.name);
+        return exported?.sourceUrl && !item.sourceUrl ? { ...item, sourceUrl: exported.sourceUrl } : item;
+      }) });
+      const payload = {
+        version: 1,
+        type: "swarm_studio_lora_stack",
+        stack: {
+          name,
+          items: items.map(({ name: modelName, title, weight, enabled, useTrigger, sourceUrl }) => ({ name: modelName, title, weight, enabled, useTrigger, sourceUrl })),
+        },
+      };
+      const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "lora-stack"}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      const missingUrls = items.filter((item) => !item.sourceUrl).length;
+      this.notify(`Exported ${name} · ${items.length} LoRA${items.length === 1 ? "" : "s"}.${missingUrls ? ` ${missingUrls} source URL${missingUrls === 1 ? "" : "s"} unavailable.` : ""}`, missingUrls ? "info" : "success");
+    } catch (error) {
+      this.notify(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      if (button) button.disabled = !this.store.state.draft.loras.length;
+    }
   }
 
   private async loadInitFile(input: HTMLInputElement): Promise<void> {
@@ -6521,12 +6435,16 @@ export class StudioApp {
     const resolvedSeed = output.seed >= 0 ? output.seed : await this.resolveStoredOutputSeed(output, 3);
     const resolvedPrompt = String(this.metadataValue(params, "prompt") ?? output.sentPrompt ?? output.prompt ?? "");
     const resolvedNegative = String(this.metadataValue(params, "negativeprompt", "negative prompt") ?? output.negativePrompt ?? "");
+    if (/<preset:[^>]*>/i.test(resolvedPrompt) || /<preset:[^>]*>/i.test(resolvedNegative)) {
+      this.notify("The image's resolved prompt metadata could not be recovered. Reuse was left unchanged; see the API log for metadata read errors.", "error");
+      return;
+    }
     const variationSeedRaw = this.metadataValue(params, "variationseed", "variation seed") ?? request.variationseed;
     const variationStrengthRaw = this.metadataValue(params, "variationseedstrength", "variation seed strength") ?? request.variationseedstrength;
     const variationSeed = asNumber(String(variationSeedRaw ?? -1), -1);
     const variationStrength = asNumber(String(variationStrengthRaw ?? current.variationSeedStrength), current.variationSeedStrength);
     const hasVariation = variationSeedRaw != null && variationSeed >= -1;
-    const source: Record<string, unknown> = Object.keys(params).length ? params : request;
+    const source: Record<string, unknown> = { ...this.metadataParams(request), ...params };
     const normalize = (key: string) => key.toLowerCase().replace(/[^a-z0-9]+/g, "");
     const core = new Set(["prompt", "negativeprompt", "model", "width", "height", "steps", "cfgscale", "seed", "variationseed", "variationseedstrength", "sampler", "scheduler", "scheduletype", "images", "loras", "loraweights", "initimage", "initimagecreativity", "studioregionalprompt"]);
     // Wildcard Seed is a resolved/transient prompt-randomization seed. Copying it out of final
@@ -6538,7 +6456,11 @@ export class StudioApp {
       const normalized = normalize(key);
       return !core.has(normalized) && !transientResolved.has(normalized);
     }));
-    const model = String(this.metadataValue(params, "model") ?? output.model ?? current.model);
+    const metadataModel = String(this.metadataValue(params, "model") || output.model || request.model || current.model);
+    const modelKey = (name: string) => name.trim().replaceAll("\\", "/").replace(/\.(safetensors|ckpt|pt)$/i, "").toLowerCase();
+    const exactModel = this.models.find((model) => modelKey(model.name) === modelKey(metadataModel));
+    const leafMatches = this.models.filter((model) => serverModelKey(model.name) === serverModelKey(metadataModel));
+    const model = exactModel?.name ?? (leafMatches.length === 1 ? leafMatches[0]!.name : metadataModel);
     const width = asNumber(String(this.metadataValue(params, "width") ?? output.width ?? current.width), current.width);
     const height = asNumber(String(this.metadataValue(params, "height") ?? output.height ?? current.height), current.height);
     const steps = asNumber(String(this.metadataValue(params, "steps") ?? request.steps ?? current.steps), current.steps);
@@ -6564,6 +6486,8 @@ export class StudioApp {
       images: asNumber(String(this.metadataValue(params, "images") ?? request.images ?? current.images), current.images),
       loras: output.loras?.length ? cloneStack(output.loras) : current.loras,
       activePresets: [],
+      loraStackProfileId: "",
+      loraStackName: "",
       extraParams,
     });
     this.store.updateOutput(output.id, {
@@ -8108,20 +8032,23 @@ export class StudioApp {
   }
 
   private metadataParams(metadata: unknown): Record<string, unknown> {
-    let parsed: unknown = metadata;
-    for (let depth = 0; depth < 3 && typeof parsed === "string" && parsed.trim(); depth += 1) {
-      try { parsed = JSON.parse(parsed); } catch { return {}; }
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const record = parsed as Record<string, unknown>;
-    for (const key of ["sui_image_params", "parameters", "params", "metadata"]) {
-      let value: unknown = record[key];
-      for (let depth = 0; depth < 3 && typeof value === "string" && value.trim(); depth += 1) {
-        try { value = JSON.parse(value); } catch { break; }
+    const unwrap = (value: unknown, depth = 0): Record<string, unknown> => {
+      if (depth > 8) return {};
+      if (typeof value === "string") {
+        try { return unwrap(JSON.parse(value), depth + 1); } catch { return {}; }
       }
-      if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
-    }
-    return record;
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+      const record = value as Record<string, unknown>;
+      for (const key of ["sui_image_params", "parameters", "params", "metadata"]) {
+        if (record[key] == null) continue;
+        const nested = unwrap(record[key], depth + 1);
+        if (Object.keys(nested).length) return nested;
+      }
+      // Canonicalize aliases before merging API and embedded metadata so a stale
+      // "Negative Prompt" cannot override the final "negativeprompt" value.
+      return Object.fromEntries(Object.entries(record).map(([key, item]) => [key.toLowerCase().replace(/[^a-z0-9]+/g, ""), item]));
+    };
+    return unwrap(metadata);
   }
 
   private metadataValue(params: Record<string, unknown>, ...names: string[]): unknown {
@@ -8799,6 +8726,8 @@ export class StudioApp {
       if (!versionId) throw new Error("Could not resolve a Civitai model version. Open a specific version or include modelVersionId in the URL.");
       const version = await this.jsonFromUrl(`${CIVITAI_ORIGIN}/api/v1/model-versions/${versionId}`);
       modelId = String(version.modelId ?? modelId);
+      sourceUrl = modelId ? `${CIVITAI_ORIGIN}/models/${modelId}?modelVersionId=${versionId}` : `${CIVITAI_ORIGIN}/api/download/models/${versionId}`;
+      metadata["modelspec.source"] = sourceUrl;
       if (!Object.keys(model).length && modelId) model = await this.jsonFromUrl(`${CIVITAI_ORIGIN}/api/v1/models/${modelId}`);
 
       const nestedModel = version.model && typeof version.model === "object" ? version.model as Record<string, unknown> : {};
@@ -8992,6 +8921,7 @@ export class StudioApp {
         if (status) status.textContent = this.loraDownloadMessage;
       }
     });
+    this.rememberLoraSourceUrl(prepared.name, prepared.sourceUrl);
     try { this.applyParameterData(await this.client.refreshInventory()); } catch (error) {
       this.addLog(`Swarm inventory refresh after download failed: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
     }
@@ -9009,6 +8939,7 @@ export class StudioApp {
       const downloaded = this.loras.find((model) => this.sanitizeLoraName(model.name).toLowerCase() === wantedKey)
         ?? this.loras.find((model) => !beforeKeys.has(this.sanitizeLoraName(model.name).toLowerCase()));
       if (downloaded) {
+        this.rememberLoraSourceUrl(downloaded.name, prepared.sourceUrl);
         await this.repairDownloadedLoraMetadata(downloaded, prepared);
         this.loras = await this.client.listModels("LoRA");
       }
@@ -9296,6 +9227,7 @@ export class StudioApp {
     const sourceUrl = modelId
       ? `${CIVITAI_ORIGIN}/models/${modelId}?modelVersionId=${versionId}`
       : `${CIVITAI_ORIGIN}/api/download/models/${versionId}`;
+    this.rememberLoraSourceUrl(model.name, sourceUrl);
     return { sourceUrl, hash };
   }
 

@@ -32,3 +32,6 @@ assert(store.includes('this.state.loraProfiles = this.state.loraProfiles.filter(
 assert(css.includes('/* saved LoRA stack manager */') && css.includes('.lora-profile-manager-modal') && css.includes('@media (max-width:760px)'), 'Saved-stack manager needs desktop and mobile layout styles.');
 
 console.log('LoRA profile manager contract OK.');
+
+assert(app.includes('profile.id === draft.loraStackProfileId') && app.includes('profile?.name || draft.loraStackName'), 'Loaded stack identity and export name must survive composer rerenders.');
+assert(app.includes('await this.civitaiSourceFromModelHash(model)') && app.includes('this.rememberLoraSourceUrl(downloaded.name, prepared.sourceUrl)'), 'Exports must resolve missing URLs by hash and retain downloader sources.');

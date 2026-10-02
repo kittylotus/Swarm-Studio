@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const app = fs.readFileSync(new URL('../src/app.ts', import.meta.url), 'utf8');
+const decoder = fs.readFileSync(new URL('../src/swarm/image-metadata.ts', import.meta.url), 'utf8');
 
 const ensureStart = app.indexOf('private async ensureOutputMetadata(output: OutputRecord)');
 assert.notEqual(ensureStart, -1, 'ensureOutputMetadata must exist');
@@ -22,8 +23,6 @@ assert.match(ensure, /generationTimeMs: timing\.generationTimeMs \?\? output\.ge
 assert.match(ensure, /totalTimeMs: timing\.totalTimeMs \?\? output\.totalTimeMs/, 'embedded timing must restore total time without erasing an existing value when absent');
 
 assert.match(app, /private async embeddedMetadataFromDataUrl\(dataUrl: string\)/, 'embedded metadata parsing must have one shared entry point');
-assert.match(app, /data:image\\\/png/, 'shared embedded metadata parsing must support PNG parameters chunks');
-assert.match(app, /data:image\\\/jpe\?g/, 'shared embedded metadata parsing must support JPEG user comments');
 assert.match(app, /const metadata = await this\.embeddedMetadataFromDataUrl\(dataUrl\)/, 'seed recovery must use the same embedded metadata parser');
 
 const inspectHandler = app.slice(
@@ -46,3 +45,8 @@ assert.match(reuse, /activePresets: \[\]/, 'Reuse All must not reapply source pr
 assert.match(reuse, /seed: resolvedSeed != null && resolvedSeed >= 0 \? resolvedSeed/, 'Reuse All must restore the exact rendered seed for reproduction and variation-seed workflows');
 
 console.log('history metadata hydration contract: ok');
+assert.match(app, /return imageMetadata\(bytes\)/, 'Metadata must be decoded from bytes regardless of HTTP MIME type');
+assert.match(decoder, /0x89504e47/, 'PNG parameters must be supported');
+assert.match(decoder, /0xffd8/, 'JPEG comments must be supported');
+assert.match(decoder, /WEBP/, 'WebP EXIF must be supported');
+assert.match(decoder, /DecompressionStream/, 'Compressed PNG metadata must be supported');

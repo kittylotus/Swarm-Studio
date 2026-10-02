@@ -33,3 +33,6 @@ The v0.63.21 working tree also includes the following Studio fixes and quality-o
 - Added lightweight saved-stack folders; existing stacks migrate to `Unsorted`, folders are created by naming them, and empty folders disappear automatically.
 
 Historical per-patch changelog fragments were intentionally retired. Git history remains the archive for older implementation notes.
+
+- Fixed Reuse All decoding for WebP EXIF, compressed PNG text, incorrect HTTP MIME labels, nested metadata wrappers, and Unicode EXIF comments. Model names now resolve to inventory names across path, case, and extension differences; unavailable names stay selected instead of falling back to the first checkpoint.
+- Kept loaded/saved/imported LoRA stack names in the persisted composer draft. Export now fills source URLs from Studio downloader records, Civitai facet records, full model metadata, or hash lookup, and reports sources that remain unavailable.
