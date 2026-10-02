@@ -481,6 +481,7 @@ export class StudioApp {
   private loraProfileManagerOpen = false;
   private loraProfileManagerSelectedId = "";
   private loraProfileManagerDraftName = "";
+  private loraProfileManagerDraftFolder = "Unsorted";
   private loraProfileManagerDraftItems: LoraStackItem[] = [];
   private loraProfileManagerDeleteArmed = false;
   private stackReorderDrag: { kind: "preset" | "lora"; from: number; } | null = null;
@@ -2620,6 +2621,12 @@ export class StudioApp {
     const checkpoint = this.currentCheckpoint();
     const checkpointFamily = modelFamily(checkpoint) || String(checkpoint?.architecture || checkpoint?.class || "model").trim();
     const available = this.compatibleLoras().filter((lora) => !draft.loras.some((item) => serverModelKey(item.name) === serverModelKey(lora.name)));
+    const savedProfileFolders = Array.from(new Set(this.store.state.loraProfiles.map((profile) => profile.folder?.trim() || "Unsorted"))).sort((a, b) => {
+      if (a === "Unsorted") return -1;
+      if (b === "Unsorted") return 1;
+      return a.localeCompare(b, undefined, { sensitivity: "base" });
+    });
+    const savedProfileOptions = savedProfileFolders.map((folder) => `<optgroup label="${escapeHtml(folder)}">${this.store.state.loraProfiles.filter((profile) => (profile.folder?.trim() || "Unsorted") === folder).map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</optgroup>`).join("");
     return `
       <aside class="panel ${className} shared-composer">
         <div class="rail-heading"><div><span class="panel-kicker">COMPOSER</span><h2>Model & stack</h2></div></div>
@@ -2629,7 +2636,7 @@ export class StudioApp {
 
         <section class="rail-section lora-section">
           <div class="section-minihead stack-section-head"><span><b>LoRA stack</b><small>${draft.loras.filter((item) => item.enabled).length} enabled · ${draft.loras.length} stacked</small></span><div class="section-icon-actions"><label class="icon-button file-button" title="Import LoRA stack" aria-label="Import LoRA stack">${importSvg}<input id="lora-import" type="file" accept="application/json,.json" hidden /></label><button class="icon-button" data-action="export-lora-stack" title="Export LoRA stack" aria-label="Export LoRA stack" ${draft.loras.length ? "" : "disabled"}>${exportSvg}</button><button class="icon-button" data-action="save-lora-profile" title="Save current LoRA stack" aria-label="Save current LoRA stack" ${draft.loras.length ? "" : "disabled"}>${saveSvg}</button></div></div>
-          <div class="stack-profile-picker-row"><label class="stack-profile-picker"><span>Stack</span><select id="lora-profile-select"><option value="">Current stack · choose a saved stack…</option>${this.store.state.loraProfiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`).join("")}</select></label><button type="button" class="ghost-button stack-manage-button" data-action="manage-lora-profiles">Manage</button></div>
+          <div class="stack-profile-picker-row"><label class="stack-profile-picker"><span>Stack</span><select id="lora-profile-select"><option value="">Current stack · choose a saved stack…</option>${savedProfileOptions}</select></label><button type="button" class="ghost-button stack-manage-button" data-action="manage-lora-profiles">Manage</button></div>
           ${draft.loras.length ? `<div class="lora-stack">${draft.loras.map((item, index) => this.loraStackRow(item, index)).join("")}</div>` : `<div class="stack-empty">No LoRAs in this stack yet.</div>`}
           <details class="lora-add-card"><summary>${plusSvg}<span><b>Add LoRA</b><small>${available.length ? "Choose a matching LoRA" : "No matching LoRAs available"}</small></span></summary><div class="lora-picker"><select id="lora-add-select" ${available.length ? "" : "disabled"}><option value="">${available.length ? "Choose a matching LoRA…" : "No matching LoRAs"}</option>${available.map((lora) => this.loraOption(lora)).join("")}</select><button class="secondary-button" data-action="add-lora" ${available.length ? "" : "disabled"}>Add</button></div></details>
           <div class="stack-tools stack-tools--footer"><button class="ghost-button" data-action="open-lora-reorder" ${draft.loras.length > 1 ? "" : "disabled"}>Reorder</button><button class="ghost-button" data-action="clear-loras" ${draft.loras.length ? "" : "disabled"}>Clear</button></div>
@@ -3507,6 +3514,7 @@ export class StudioApp {
     const profile = this.store.state.loraProfiles.find((item) => item.id === profileId);
     this.loraProfileManagerSelectedId = profile?.id ?? "";
     this.loraProfileManagerDraftName = profile?.name ?? "";
+    this.loraProfileManagerDraftFolder = profile?.folder?.trim() || "Unsorted";
     this.loraProfileManagerDraftItems = profile?.items.map((item) => ({ ...item })) ?? [];
     this.loraProfileManagerDeleteArmed = false;
   }
@@ -3515,6 +3523,12 @@ export class StudioApp {
     if (!this.loraProfileManagerOpen) return "";
     const profiles = this.store.state.loraProfiles;
     const selected = profiles.find((profile) => profile.id === this.loraProfileManagerSelectedId);
+    const folderNames = Array.from(new Set(profiles.map((profile) => profile.folder?.trim() || "Unsorted"))).sort((a, b) => {
+      if (a === "Unsorted") return -1;
+      if (b === "Unsorted") return 1;
+      return a.localeCompare(b, undefined, { sensitivity: "base" });
+    });
+    const profileGroups = folderNames.map((folder) => ({ folder, profiles: profiles.filter((profile) => (profile.folder?.trim() || "Unsorted") === folder) }));
     const draftItems = selected ? this.loraProfileManagerDraftItems : [];
     const available = this.loras.filter((lora) => !draftItems.some((item) => serverModelKey(item.name) === serverModelKey(lora.name)));
     const sourceLabel = selected?.source === "lumiswarm-import" ? "Imported" : "Studio";
@@ -3525,11 +3539,12 @@ export class StudioApp {
         <div class="lora-profile-manager-body">
           <aside class="lora-profile-manager-list" aria-label="Saved LoRA stacks">
             <div class="lora-profile-manager-list-head"><b>Saved</b><small>${profiles.length} stack${profiles.length === 1 ? "" : "s"}</small></div>
-            <div class="lora-profile-manager-list-scroll">${profiles.map((profile) => `<button type="button" class="lora-profile-manager-item ${profile.id === selected?.id ? "is-active" : ""}" data-lora-profile-manage-select="${escapeHtml(profile.id)}"><span><b>${escapeHtml(profile.name)}</b><small>${profile.items.length} LoRA${profile.items.length === 1 ? "" : "s"}</small></span><em>${profile.source === "lumiswarm-import" ? "import" : "studio"}</em></button>`).join("") || `<div class="stack-empty stack-empty--compact">No saved stacks yet.<br />Use the save icon in the composer first.</div>`}</div>
+            <div class="lora-profile-manager-list-scroll">${profileGroups.map((group) => `<section class="lora-profile-manager-folder"><div class="lora-profile-manager-folder-head"><span>${folderSvg}<b>${escapeHtml(group.folder)}</b></span><small>${group.profiles.length}</small></div>${group.profiles.map((profile) => `<button type="button" class="lora-profile-manager-item ${profile.id === selected?.id ? "is-active" : ""}" data-lora-profile-manage-select="${escapeHtml(profile.id)}"><span><b>${escapeHtml(profile.name)}</b><small>${profile.items.length} LoRA${profile.items.length === 1 ? "" : "s"}</small></span><em>${profile.source === "lumiswarm-import" ? "import" : "studio"}</em></button>`).join("")}</section>`).join("") || `<div class="stack-empty stack-empty--compact">No saved stacks yet.<br />Use the save icon in the composer first.</div>`}</div>
           </aside>
           <div class="lora-profile-manager-editor">
             ${selected ? `<div class="lora-profile-manager-meta"><span><b>${sourceLabel}</b><small>Updated ${escapeHtml(updatedLabel)}</small></span><button type="button" class="ghost-button" data-action="profile-use-current" ${this.store.state.draft.loras.length ? "" : "disabled"}>Use current stack</button></div>
-              <label class="field lora-profile-name-field"><span>Stack name</span><input id="lora-profile-manager-name" type="text" maxlength="120" value="${escapeHtml(this.loraProfileManagerDraftName)}" autocomplete="off" /></label>
+              <div class="lora-profile-manager-fields"><label class="field lora-profile-name-field"><span>Stack name</span><input id="lora-profile-manager-name" type="text" maxlength="120" value="${escapeHtml(this.loraProfileManagerDraftName)}" autocomplete="off" /></label><label class="field lora-profile-folder-field"><span>Folder</span><input id="lora-profile-manager-folder" type="text" maxlength="80" list="lora-profile-folder-options" value="${escapeHtml(this.loraProfileManagerDraftFolder)}" placeholder="Unsorted" autocomplete="off" /><datalist id="lora-profile-folder-options">${folderNames.map((folder) => `<option value="${escapeHtml(folder)}"></option>`).join("")}</datalist></label></div>
+              <p class="helper-copy lora-profile-folder-helper">Choose an existing folder or type a new name. Empty folders disappear automatically.</p>
               <div class="lora-profile-edit-list">${draftItems.map((item) => `<div class="lora-profile-edit-row ${item.enabled ? "" : "is-disabled"}" data-lora-profile-edit-row="${escapeHtml(item.id)}">
                 <div class="lora-profile-edit-copy"><b>${escapeHtml(item.title || prettyName(item.name))}</b><small>${escapeHtml(item.name)}</small></div>
                 <label class="weight-field"><span>Weight</span><input type="number" min="-4" max="4" step="0.05" value="${item.weight}" data-lora-profile-weight="${escapeHtml(item.id)}" /></label>
@@ -5586,6 +5601,10 @@ export class StudioApp {
       this.loraProfileManagerDraftName = (event.currentTarget as HTMLInputElement).value;
       this.loraProfileManagerDeleteArmed = false;
     });
+    this.root.querySelector<HTMLInputElement>("#lora-profile-manager-folder")?.addEventListener("input", (event) => {
+      this.loraProfileManagerDraftFolder = (event.currentTarget as HTMLInputElement).value;
+      this.loraProfileManagerDeleteArmed = false;
+    });
     this.root.querySelectorAll<HTMLInputElement>("[data-lora-profile-weight]").forEach((input) => input.addEventListener("input", () => {
       const id = input.dataset.loraProfileWeight ?? "";
       this.loraProfileManagerDraftItems = this.loraProfileManagerDraftItems.map((item) => item.id === id ? { ...item, weight: asNumber(input.value, 1) } : item);
@@ -5633,7 +5652,7 @@ export class StudioApp {
     });
     this.root.querySelector<HTMLElement>("[data-action='save-lora-profile-edits']")?.addEventListener("click", () => {
       if (!this.loraProfileManagerSelectedId) return;
-      const updated = this.store.updateLoraProfile(this.loraProfileManagerSelectedId, { name: this.loraProfileManagerDraftName, items: this.loraProfileManagerDraftItems });
+      const updated = this.store.updateLoraProfile(this.loraProfileManagerSelectedId, { name: this.loraProfileManagerDraftName, folder: this.loraProfileManagerDraftFolder, items: this.loraProfileManagerDraftItems });
       if (!updated) return;
       this.primeLoraProfileManager(updated.id);
       this.notify(`${updated.name} updated.`, "success");

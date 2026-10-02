@@ -29,5 +29,7 @@ The v0.63.21 working tree also includes the following Studio fixes and quality-o
 - Restored embedded output metadata hydration for historical images, including resolved prompts, negative prompts, exact seeds, and generation timing.
 - Updated Reuse All to prefer the final embedded resolved prompt payload while preserving the original source request separately.
 - Fixed mobile Current Output Inspect text alignment by removing an unnecessary flex display override.
+- Fixed the saved LoRA stack manager so its list/editor stay viewport-bounded and independently scrollable.
+- Added lightweight saved-stack folders; existing stacks migrate to `Unsorted`, folders are created by naming them, and empty folders disappear automatically.
 
 Historical per-patch changelog fragments were intentionally retired. Git history remains the archive for older implementation notes.

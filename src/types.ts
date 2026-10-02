@@ -57,6 +57,7 @@ export interface LoraStackItem {
 export interface LoraStackProfile {
   id: string;
   name: string;
+  folder: string;
   items: LoraStackItem[];
   source: "studio" | "lumiswarm-import";
   createdAt: number;

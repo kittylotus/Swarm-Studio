@@ -83,6 +83,10 @@ const defaultUi: StudioUiState = {
 
 
 
+function normalizeLoraProfileFolder(value: unknown): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "Unsorted";
+}
+
 function cloneLoraStack(items: LoraStackItem[] | undefined): LoraStackItem[] {
   if (!Array.isArray(items)) return [];
   return items.flatMap((item) => {
@@ -171,6 +175,7 @@ function safeParse(value: string | null): PersistedStudioState {
       })) : [],
       loraProfiles: Array.isArray(parsed.loraProfiles) ? parsed.loraProfiles.map((profile) => ({
         ...profile,
+        folder: normalizeLoraProfileFolder(profile.folder),
         items: cloneLoraStack(profile.items),
       })) : [],
       ui: {
@@ -465,11 +470,12 @@ export class StudioStore {
     this.save();
   }
 
-  saveLoraProfile(name: string, items: LoraStackItem[], source: LoraStackProfile["source"]): LoraStackProfile {
+  saveLoraProfile(name: string, items: LoraStackItem[], source: LoraStackProfile["source"], folder = "Unsorted"): LoraStackProfile {
     const now = Date.now();
     const profile: LoraStackProfile = {
       id: createId(),
       name: name.trim() || "LoRA stack",
+      folder: normalizeLoraProfileFolder(folder),
       items: cloneLoraStack(items),
       source,
       createdAt: now,
@@ -480,12 +486,13 @@ export class StudioStore {
     return profile;
   }
 
-  updateLoraProfile(id: string, patch: { name?: string; items?: LoraStackItem[] }): LoraStackProfile | undefined {
+  updateLoraProfile(id: string, patch: { name?: string; folder?: string; items?: LoraStackItem[] }): LoraStackProfile | undefined {
     const current = this.state.loraProfiles.find((profile) => profile.id === id);
     if (!current) return undefined;
     const updated: LoraStackProfile = {
       ...current,
       name: patch.name === undefined ? current.name : patch.name.trim() || "LoRA stack",
+      folder: patch.folder === undefined ? normalizeLoraProfileFolder(current.folder) : normalizeLoraProfileFolder(patch.folder),
       items: patch.items === undefined ? cloneLoraStack(current.items) : cloneLoraStack(patch.items),
       updatedAt: Date.now(),
     };
