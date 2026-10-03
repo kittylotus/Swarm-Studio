@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const app = fs.readFileSync(new URL('../src/app.ts', import.meta.url), 'utf8');
+const decoder = fs.readFileSync(new URL('../src/swarm/image-metadata.ts', import.meta.url), 'utf8');
 
 const ensureStart = app.indexOf('private async ensureOutputMetadata(output: OutputRecord)');
 assert.notEqual(ensureStart, -1, 'ensureOutputMetadata must exist');
@@ -22,8 +23,6 @@ assert.match(ensure, /generationTimeMs: timing\.generationTimeMs \?\? output\.ge
 assert.match(ensure, /totalTimeMs: timing\.totalTimeMs \?\? output\.totalTimeMs/, 'embedded timing must restore total time without erasing an existing value when absent');
 
 assert.match(app, /private async embeddedMetadataFromDataUrl\(dataUrl: string\)/, 'embedded metadata parsing must have one shared entry point');
-assert.match(app, /data:image\\\/png/, 'shared embedded metadata parsing must support PNG parameters chunks');
-assert.match(app, /data:image\\\/jpe\?g/, 'shared embedded metadata parsing must support JPEG user comments');
 assert.match(app, /const metadata = await this\.embeddedMetadataFromDataUrl\(dataUrl\)/, 'seed recovery must use the same embedded metadata parser');
 
 const inspectHandler = app.slice(
@@ -38,11 +37,20 @@ assert.notEqual(reuseStart, -1, 'Reuse All handler must exist');
 const reuseEnd = app.indexOf('\n  private readDraftFromForm', reuseStart);
 assert.notEqual(reuseEnd, -1, 'Reuse All boundary must remain discoverable');
 const reuse = app.slice(reuseStart, reuseEnd);
-assert.match(reuse, /const params = await this\.ensureOutputMetadata\(output\)/, 'Reuse All must await authoritative embedded metadata even if Inspect hydration is still pending');
+assert.match(reuse, /let params = await this\.ensureOutputMetadata\(output\)/, 'Reuse All must await authoritative embedded metadata even if Inspect hydration is still pending');
 assert.match(reuse, /metadataValue\(params, "prompt"\) \?\? output\.sentPrompt/, 'Reuse All must prefer the resolved embedded positive prompt over the source/tag prompt');
 assert.match(reuse, /metadataValue\(params, "negativeprompt", "negative prompt"\) \?\? output\.negativePrompt/, 'Reuse All must prefer the resolved embedded negative prompt');
 assert.match(reuse, /prompt: resolvedPrompt/, 'Reuse All must write the resolved prompt into the composer');
 assert.match(reuse, /activePresets: \[\]/, 'Reuse All must not reapply source preset/tag expansion after materializing the resolved prompt');
 assert.match(reuse, /seed: resolvedSeed != null && resolvedSeed >= 0 \? resolvedSeed/, 'Reuse All must restore the exact rendered seed for reproduction and variation-seed workflows');
+assert.match(reuse, /recoverPresetParameters/, 'Legacy approval records must recover preset tags instead of blocking reuse');
+assert.match(reuse, /Reuse preset recovery failed/, 'Recovery failures must produce a concrete log entry');
+assert.match(app, /rememberOutputMetadata\(path, metadata\)/, 'Approval saves must preserve final generation metadata independently of the history API');
+assert.match(app, /addImageToHistory\(image, \{ \.\.\.saveRequest/, 'Approval saves must send resolved parameters rather than the original preset-tag request');
 
 console.log('history metadata hydration contract: ok');
+assert.match(app, /return imageMetadata\(bytes\)/, 'Metadata must be decoded from bytes regardless of HTTP MIME type');
+assert.match(decoder, /0x89504e47/, 'PNG parameters must be supported');
+assert.match(decoder, /0xffd8/, 'JPEG comments must be supported');
+assert.match(decoder, /WEBP/, 'WebP EXIF must be supported');
+assert.match(decoder, /DecompressionStream/, 'Compressed PNG metadata must be supported');

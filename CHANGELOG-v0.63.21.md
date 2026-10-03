@@ -29,5 +29,11 @@ The v0.63.21 working tree also includes the following Studio fixes and quality-o
 - Restored embedded output metadata hydration for historical images, including resolved prompts, negative prompts, exact seeds, and generation timing.
 - Updated Reuse All to prefer the final embedded resolved prompt payload while preserving the original source request separately.
 - Fixed mobile Current Output Inspect text alignment by removing an unnecessary flex display override.
+- Fixed the saved LoRA stack manager so its list/editor stay viewport-bounded and independently scrollable.
+- Added lightweight saved-stack folders; existing stacks migrate to `Unsorted`, folders are created by naming them, and empty folders disappear automatically.
 
 Historical per-patch changelog fragments were intentionally retired. Git history remains the archive for older implementation notes.
+
+- Fixed Reuse All decoding for WebP EXIF, compressed PNG text, incorrect HTTP MIME labels, nested metadata wrappers, and Unicode EXIF comments. Model names now resolve to inventory names across path, case, and extension differences; unavailable names stay selected instead of falling back to the first checkpoint.
+- Kept loaded/saved/imported LoRA stack names in the persisted composer draft. Export now fills source URLs from Studio downloader records, Civitai facet records, full model metadata, or hash lookup, and reports sources that remain unavailable.
+- Fixed review-before-save metadata loss: approval saves now send the final prompt and seed and preserve the complete generation metadata locally across history refreshes. Reuse recovers legacy preset-tag records from current Swarm presets, reads missing checkpoint names from `sui_models`, and logs recovery failures explicitly. Older records cannot recover preset definitions edited since generation or random expansions already overwritten by the history save API.

@@ -57,6 +57,7 @@ export interface LoraStackItem {
 export interface LoraStackProfile {
   id: string;
   name: string;
+  folder: string;
   items: LoraStackItem[];
   source: "studio" | "lumiswarm-import";
   createdAt: number;
@@ -105,6 +106,8 @@ export interface GenerationDraft {
   scheduler: string;
   images: number;
   loras: LoraStackItem[];
+  loraStackProfileId?: string;
+  loraStackName?: string;
   activePresets: string[];
   regionalPrompt: RegionalPromptDraft;
   initImage: string;

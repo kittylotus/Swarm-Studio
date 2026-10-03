@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(fileURLToPath(new URL('..', import.meta.url)));
 const app = readFileSync(join(root, 'src/app.ts'), 'utf8');
 const store = readFileSync(join(root, 'src/library/store.ts'), 'utf8');
+const types = readFileSync(join(root, 'src/types.ts'), 'utf8');
 const css = readFileSync(join(root, 'src/styles.css'), 'utf8');
 
 function assert(condition, message) {
@@ -19,9 +20,18 @@ assert(app.includes("[data-action='save-lora-profile-edits']") && app.includes('
 assert(app.includes('cloneStack(this.loraProfileManagerDraftItems)'), 'Loading an edited saved stack into the composer must clone item ids instead of aliasing profile state.');
 assert(app.includes('loraProfileManagerDeleteArmed') && app.includes('Confirm delete'), 'Saved-stack deletion must require an explicit second action.');
 assert(store.includes('updateLoraProfile(id: string') && store.includes('updatedAt: Date.now()'), 'Store must update saved stacks in place and refresh updatedAt.');
+assert(types.includes('folder: string;'), 'Saved LoRA stacks must carry lightweight folder metadata.');
+assert(store.includes('normalizeLoraProfileFolder') && store.includes('folder: normalizeLoraProfileFolder(profile.folder)'), 'Persisted stacks must migrate missing folders into Unsorted.');
+assert(app.includes('loraProfileManagerDraftFolder') && app.includes('lora-profile-folder-options') && app.includes('profileGroups'), 'Stack manager must expose editable folders and render grouped saved stacks.');
+assert(app.includes('folder: this.loraProfileManagerDraftFolder'), 'Saving stack edits must persist folder moves.');
+assert(app.includes('savedProfileOptions') && app.includes('<optgroup label=\"${escapeHtml(folder)}\">'), 'The composer saved-stack picker must preserve folder grouping outside the manager.');
+assert(css.includes('height:min(760px,calc(100dvh - 36px))') && css.includes('overscroll-behavior:contain'), 'Stack manager must stay viewport-bounded and scroll internally.');
 assert(store.includes('patch.items === undefined ? cloneLoraStack(current.items) : cloneLoraStack(patch.items)'), 'Saved profile updates must clone LoRA items rather than aliasing editor state.');
 assert(store.includes('this.state.loraProfiles = this.state.loraProfiles.map((profile) => profile.id === id ? updated : profile)'), 'Saved profile update must preserve the existing record position/id instead of inserting a duplicate.');
 assert(store.includes('this.state.loraProfiles = this.state.loraProfiles.filter((profile) => profile.id !== id)'), 'Saved profile deletion must remove the persisted record.');
 assert(css.includes('/* saved LoRA stack manager */') && css.includes('.lora-profile-manager-modal') && css.includes('@media (max-width:760px)'), 'Saved-stack manager needs desktop and mobile layout styles.');
 
 console.log('LoRA profile manager contract OK.');
+
+assert(app.includes('profile.id === draft.loraStackProfileId') && app.includes('profile?.name || draft.loraStackName'), 'Loaded stack identity and export name must survive composer rerenders.');
+assert(app.includes('await this.civitaiSourceFromModelHash(model)') && app.includes('this.rememberLoraSourceUrl(downloaded.name, prepared.sourceUrl)'), 'Exports must resolve missing URLs by hash and retain downloader sources.');

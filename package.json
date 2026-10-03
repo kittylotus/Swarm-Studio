@@ -32,7 +32,8 @@
     "test:mask-export": "node tests/inpaint-mask-export-contract.mjs",
     "test:notifications": "node --no-warnings --experimental-strip-types tests/generation-notifications-contract.mjs",
     "test:lora-profiles": "node tests/lora-profile-manager-contract.mjs",
-    "test:history-metadata": "node tests/history-metadata-hydration-contract.mjs"
+    "test:history-metadata": "node tests/history-metadata-hydration-contract.mjs",
+    "test:preset-recovery": "node --no-warnings --experimental-strip-types tests/preset-recovery-contract.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0"
