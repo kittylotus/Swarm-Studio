@@ -44,6 +44,8 @@ import { normalizeGenerationRequest, normalizeParamKey } from "./swarm/request";
 import { swarmImageMutationPath, swarmImageViewPath } from "./swarm/history";
 import { imageMetadata } from "./swarm/image-metadata";
 import { recoverPresetParameters } from "./swarm/preset-recovery";
+import type { ExpressionStudio } from "./expressions/studio";
+import type { NodeSchema } from "./expressions/pipeline";
 import type {
   SwarmGenerationEvent,
   SwarmGenerationImage,
@@ -354,6 +356,7 @@ interface PendingGenerationApproval {
 }
 
 export class StudioApp {
+  private expressionStudio: ExpressionStudio | null = null;
 
   private readonly root: HTMLElement;
   private readonly store = new StudioStore();
@@ -1688,6 +1691,7 @@ export class StudioApp {
           </button>
           <nav class="utility-nav utility-nav--desktop" aria-label="Studio sections">
             ${this.navButton("create", "Create", tabCreateSvg)}
+            ${this.navButton("expressions", "Expressions", tabIdentitiesSvg)}
             ${this.navButton("library", "Library", tabLibrarySvg)}
             ${this.navButton("identities", "Identities", tabIdentitiesSvg)}
             ${this.navButton("models", "Models", tabModelsSvg)}
@@ -1792,7 +1796,7 @@ export class StudioApp {
 
   private mobileSection(): "create" | "visuals" | "library" | "settings" {
     if (this.view === "create") return "create";
-    if (this.view === "identities" || this.view === "models" || this.view === "civitai") return "visuals";
+    if (this.view === "expressions" || this.view === "identities" || this.view === "models" || this.view === "civitai") return "visuals";
     if (this.view === "library") return "library";
     return "settings";
   }
@@ -1812,8 +1816,9 @@ export class StudioApp {
         <button class="${pane === "output" ? "is-active" : ""}" data-mobile-pane="output"><span>${tabOutputSvg}</span>Output</button>
         <button class="${pane === "tune" ? "is-active" : ""}" data-mobile-pane="tune"><span>${tabTuneSvg}</span>Tune</button>`;
     } else if (section === "visuals") {
-      count = 3;
+      count = 4;
       tabs = `<button class="${this.view === "identities" ? "is-active" : ""}" data-nav="identities"><span>${tabIdentitiesSvg}</span>Identities</button>
+        <button class="${this.view === "expressions" ? "is-active" : ""}" data-nav="expressions"><span>${tabIdentitiesSvg}</span>Expressions</button>
         <button class="${this.view === "models" ? "is-active" : ""}" data-nav="models"><span>${tabModelsSvg}</span>Models</button>
         <button class="${this.view === "civitai" ? "is-active" : ""}" data-nav="civitai"><span>${tabSearchSvg}</span>CivitAI</button>`;
     } else if (section === "library") {
@@ -1898,7 +1903,7 @@ export class StudioApp {
       return;
     }
     if (section === "visuals") {
-      const options: StudioView[] = ["identities", "models", "civitai"];
+      const options: StudioView[] = ["identities", "expressions", "models", "civitai"];
       const current = Math.max(0, options.indexOf(this.view));
       this.view = options[(current + direction + options.length) % options.length]!;
       this.lastNonSettingsView = this.view;
@@ -1932,6 +1937,7 @@ export class StudioApp {
   private viewLabel(): string {
     return ({
       create: "Prompt workspace",
+      expressions: "Reference-guided character expression sheets",
       library: "Your Swarm assets",
       identities: "Reusable visual profiles",
       models: "Server inventory",
@@ -1944,6 +1950,7 @@ export class StudioApp {
   private viewTitle(): string {
     return ({
       create: "Create",
+      expressions: "Expression studio",
       library: "Library",
       identities: "Identity library",
       models: "Models and LoRAs",
@@ -2280,6 +2287,7 @@ export class StudioApp {
   private renderView(): string {
     switch (this.view) {
       case "create": return this.renderCreate();
+      case "expressions": return '<div id="expression-studio-host"></div>';
       case "library": return this.renderLibrary();
       case "identities": return this.renderIdentities();
       case "models": return this.renderModels();
@@ -5124,12 +5132,68 @@ export class StudioApp {
 
   private bindViewEvents(): void {
     if (this.view === "create") this.bindCreateEvents();
+    if (this.view === "expressions") void this.bindExpressionStudio().catch((error) => this.notify(`Could not open Expression Studio: ${String(error)}`, "error"));
     if (this.view === "library") this.bindLibraryEvents();
     if (this.view === "identities") this.bindIdentityEvents();
     if (this.view === "models") this.bindModelEvents();
     if (this.view === "civitai") this.bindCivitaiEvents();
     if (this.view === "logs") this.bindLogEvents();
     if (this.view === "settings") this.bindSettingsEvents();
+  }
+
+  private async bindExpressionStudio(): Promise<void> {
+    const host = this.root.querySelector<HTMLElement>("#expression-studio-host");
+    if (!host) return;
+    const { ExpressionStudio } = await import("./expressions/studio");
+    this.expressionStudio ??= new ExpressionStudio({
+      models: () => this.models,
+      params: () => this.params,
+      busy: () => this.generating,
+      connected: () => this.connected,
+      notify: (message, error) => { this.addLog(message, error ? "error" : "info", "studio"); this.notify(message, error ? "error" : "info"); },
+      save: async (data, name) => { await runtime.saveDataUrl(data, name); },
+      probe: async () => {
+        if (!this.connected) throw new Error("Connect to Swarm first.");
+        const url = this.client.imageUrl("ComfyBackendDirect/object_info");
+        return JSON.parse(await runtime.getText(url, this.store.state.connection.authToken)) as Record<string, NodeSchema>;
+      },
+      captureLoras: (model) => {
+        const checkpoint = this.models.find((item) => item.name === model);
+        return cloneStack(this.store.state.draft.loras.filter((item) => item.enabled)).map((item) => {
+          const name = resolveLoraModelName(item.name, this.loras.map((entry) => entry.name));
+          if (!name) throw new Error(`LoRA is unavailable: ${item.name}`);
+          const lora = this.loras.find((entry) => entry.name === name);
+          if (lora && loraCompatibility(lora, checkpoint) === "incompatible") throw new Error(`LoRA ${item.name} is incompatible with the expression checkpoint.`);
+          return { ...item, name };
+        });
+      },
+      generate: async (request, loras, progress) => {
+        if (!this.connected || this.generating) throw new Error("Swarm is disconnected or another generation is running.");
+        if (loras.length) {
+          request.loras = loras.map((item) => item.name);
+          request.loraweights = loras.map((item) => String(item.weight));
+        }
+        const normalized = normalizeGenerationRequest(request, this.params).request;
+        let finalMetadata = "";
+        this.addLog(`Expression render: ${request.model} · seed ${request.seed} · ${request.width}×${request.height}`, "info", "api");
+        const images = await this.client.generateStream(normalized, (event) => {
+          const fraction = Number(event.gen_progress?.current_percent ?? event.gen_progress?.overall_percent ?? 0);
+          progress(Math.max(0, Math.min(1, fraction > 1 ? fraction / 100 : fraction)));
+          const metadata = this.metadataFromGenerationPayload(event);
+          if (metadata) finalMetadata = metadata;
+        });
+        const output = images[0];
+        if (!output?.image) throw new Error("Swarm returned no expression image.");
+        const path = output.image;
+        const source = this.client.imageUrl(path);
+        const image = source.startsWith("data:") ? source : await runtime.fetchDataUrl(source, this.store.state.connection.authToken);
+        const metadata = output.metadata || finalMetadata;
+        const seed = this.resolvedSeedFor(output, metadata, request.seed);
+        this.store.addOutput({ url: source, swarmPath: path.startsWith("data:") ? "" : path, swarmSourcePath: path.startsWith("data:") ? "" : this.swarmMutationPath(path), prompt: request.prompt, sentPrompt: request.prompt, negativePrompt: request.negativeprompt, model: request.model, width: request.width, height: request.height, seed, metadata: metadata || "", request: { ...normalized, promptimages: undefined, initimage: undefined, comfyworkflowraw: undefined }, loras: cloneStack(loras), presets: [] });
+        return { image, path, seed };
+      },
+    });
+    void this.expressionStudio.mount(host);
   }
 
   private persistDraftFromForm(immediate = false): void {
@@ -6699,7 +6763,7 @@ export class StudioApp {
   }
 
   private async generate(draftOverride?: GenerationDraft, options: { allowPendingApprovals?: boolean; focusNewestApproval?: boolean } = {}): Promise<void> {
-    if (this.generating) return;
+    if (this.generating || this.expressionStudio?.busy) return;
     if (this.pendingGenerationApprovals.length && !options.allowPendingApprovals) {
       this.notify("Save or review the pending result before starting another batch.", "info");
       return;
@@ -7736,7 +7800,7 @@ export class StudioApp {
   }
 
   private async generateInpaint(): Promise<void> {
-    if (this.generating) return;
+    if (this.generating || this.expressionStudio?.busy) return;
     if (!this.inpaintPrompt.trim()) {
       this.notify("Give the masked area a prompt first.", "error");
       return;

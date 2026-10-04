@@ -33,7 +33,8 @@
     "test:notifications": "node --no-warnings --experimental-strip-types tests/generation-notifications-contract.mjs",
     "test:lora-profiles": "node tests/lora-profile-manager-contract.mjs",
     "test:history-metadata": "node tests/history-metadata-hydration-contract.mjs",
-    "test:preset-recovery": "node --no-warnings --experimental-strip-types tests/preset-recovery-contract.mjs"
+    "test:preset-recovery": "node --no-warnings --experimental-strip-types tests/preset-recovery-contract.mjs",
+    "test:expressions": "node --no-warnings --experimental-strip-types tests/expression-pipeline-contract.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0"

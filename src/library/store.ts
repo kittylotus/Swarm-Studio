@@ -118,7 +118,7 @@ function cloneDefaults(): PersistedStudioState {
 }
 
 function validView(value: unknown): StudioView {
-  return ["create", "library", "identities", "models", "civitai", "logs", "settings"].includes(String(value))
+  return ["create", "expressions", "library", "identities", "models", "civitai", "logs", "settings"].includes(String(value))
     ? value as StudioView
     : "create";
 }
