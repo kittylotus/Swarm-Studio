@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { defaultSheet, expressionTiles, expressionRequest, normalizeSheet, isAdapterModel, livePortraitWorkflow, ipAdapterWorkflow } from '../src/expressions/pipeline.ts';
 import { zipStore } from '../src/expressions/zip.ts';
+import { expressionFailure } from '../src/expressions/errors.ts';
 const params=[{id:'useipadapter',values:['None','PLUS (high strength)']}];
 const project={...defaultSheet(),model:'portrait.safetensors',reference:'data:image/png;base64,aGVsbG8='};
 const tile=expressionTiles(1)[0];
@@ -43,4 +44,8 @@ assert.equal(view.getUint32(0,true),0x04034b50);
 assert.equal(view.getUint32(14,true),0x3610a686); // Known CRC-32 of 'hello'.
 assert.equal(view.getUint32(bytes.length-22,true),0x06054b50);
 assert.equal(view.getUint16(bytes.length-12,true),1);
+const mismatch=expressionFailure('Resampler: size mismatch for proj_in.weight [1280, 1280] / [1280, 1664]');
+assert.equal(mismatch.stop,true);assert.equal(mismatch.setup,true);assert.match(mismatch.message,/actual CLIP-ViT-H/);
+assert.equal(expressionFailure('CUDA out of memory').stop,true);
+assert.deepEqual(expressionFailure('unrelated error'),{message:'unrelated error',stop:false,setup:false});
 console.log('expression pipeline contracts: ok');

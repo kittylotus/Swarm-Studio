@@ -5218,7 +5218,7 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 #expression-studio-host { min-width:0; width:100%; }
 .expression-studio { max-width:1700px; margin:0 auto; padding:10px 4px 40px; }
 .expression-hero { display:flex; justify-content:space-between; align-items:center; gap:26px; padding:16px 4px 26px; border-bottom:1px solid var(--line); margin-bottom:22px; }
-.expression-hero h1 { font-size:clamp(24px,3vw,42px); letter-spacing:-.045em; line-height:1.12; margin:10px 0; color:var(--text); }
+.expression-hero h1 { font-size:22px; letter-spacing:-.02em; line-height:1.3; margin:0; color:var(--text); }
 .expression-hero p { color:var(--muted); font-size:12px; margin:0; line-height:1.7; }
 .expression-hero-actions { display:flex; flex-wrap:wrap; gap:7px; max-width:330px; justify-content:flex-end; }
 .expression-hero-actions button,.expression-hero-actions label { font-size:10px; }
@@ -5271,7 +5271,7 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 @keyframes expression-pulse { 50% { opacity:.3; } }
 @media (max-width:1200px) { .expression-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }.expression-layout { grid-template-columns:270px minmax(0,1fr); gap:16px; }.expression-toolbar { align-items:start; flex-direction:column; }.expression-toolbar-actions { justify-content:flex-start; } }
 @media (max-width:900px) { .expression-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }.expression-hero { align-items:start; flex-direction:column; }.expression-hero-actions { justify-content:flex-start; max-width:none; } }
-@media (max-width:650px) { .expression-layout { grid-template-columns:1fr; }.expression-controls { display:grid; grid-template-columns:1fr; }.expression-hero h1 { font-size:30px; }.expression-run-status small { width:100%; margin-left:14px; }.expression-card-actions button { padding:6px; }.expression-studio { padding-inline:0; } }
+@media (max-width:650px) { .expression-layout { grid-template-columns:1fr; }.expression-controls { display:grid; grid-template-columns:1fr; }.expression-hero h1 { font-size:20px; }.expression-run-status small { width:100%; margin-left:14px; }.expression-card-actions button { padding:6px; }.expression-studio { padding-inline:0; } }
 @media (prefers-reduced-motion:reduce) { .expression-run-status > span.is-running { animation:none; } }
 .expression-variants { display:flex; gap:5px; overflow:auto; }
 .expression-variants button { width:38px; height:38px; flex-shrink:0; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:5px; background:var(--surface-soft); cursor:pointer; }
@@ -5302,3 +5302,9 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 .expression-help-links { display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; }
 .expression-help-links a { color:var(--purple); }
 @media (max-width:650px) { .expression-help-dialog { width:calc(100vw - 20px); max-height:calc(100dvh - 24px); }.expression-help-dialog > header,.expression-help-dialog > footer,.expression-help-content { padding:16px; }.expression-help-dialog h2 { font-size:19px; }.expression-heading { gap:8px; } }
+
+.expression-studio [data-pipeline-part][hidden] { display:none; }
+.expression-studio [data-pipeline-part="adapter"]:not([hidden]) { display:grid; gap:12px; }
+.expression-error-setup { font-size:11px; color:var(--purple); }
+.expression-error-details { font-size:10px; color:var(--muted); overflow-wrap:anywhere; }
+.expression-heading { margin-bottom:8px; }

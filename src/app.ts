@@ -1678,7 +1678,7 @@ export class StudioApp {
     const previousVisualWindowScrollY = preserveVisualScroll ? window.scrollY : null;
     this.applyTheme();
     this.nativeImageObserver?.disconnect();
-    const compactHeader = this.view === "create" ? "" : `
+    const compactHeader = this.view === "create" || this.view === "expressions" ? "" : `
       <header class="section-header">
         <div><p class="eyebrow">${this.viewLabel()}</p><h1>${this.viewTitle()}</h1></div>
       </header>`;
