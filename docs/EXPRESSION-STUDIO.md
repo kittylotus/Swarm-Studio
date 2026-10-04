@@ -1,6 +1,6 @@
 # Expression Studio (staging)
 
-Open **Expressions** in desktop navigation, or **Visuals → Expressions** on mobile.
+Open **Expressions** in desktop navigation, or **Visuals → Expressions** on mobile. Click the circle-help button beside the heading for the in-app usage guide.
 
 ## Machine and pipeline choice
 

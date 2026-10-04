@@ -1,3 +1,4 @@
+import { circleHelpIcon, openExpressionHelp } from './help';
 import { defaultSheet, normalizeSheet, expressionTiles, emptyMotion, motionLimits, expressionRequest, livePortraitWorkflow, ipAdapterWorkflow, advertisedValues, isAdapterModel, type SheetProject, type ExpressionTile, type NodeSchema, type ExpressionMotion } from './pipeline';
 import type { LoraStackItem } from '../types';
 import type { SwarmGenerationRequest, SwarmModel, SwarmParamDefinition } from '../swarm/types';
@@ -72,7 +73,7 @@ export class ExpressionStudio {
         const options = (values: string[], chosen: string) => Array.from(new Set([chosen, ...values])).filter(Boolean).map(v => `<option ${v === chosen ? 'selected' : ''} value="${esc(v)}">${esc(v)}</option>`).join('');
         const field = (label: string, key: keyof SheetProject, min: number, max: number, step: number = 1) => `<label class="field"><span>${label}</span><input data-setting="${key}" type="number" min="${min}" max="${max}" step="${step}" value="${p[key]}" ${disabled}/></label>`;
         this.host.innerHTML = `<div class="expression-studio">
-   <header class="expression-hero"><div><span class="panel-kicker">CHARACTER LAB / EXPRESSIONS</span><h1>One character. Every feeling.</h1><p>Keep the identity, direct the emotion, and build a sheet one portrait at a time.</p></div><div class="expression-hero-actions"><label class="secondary-button file-button">Open project<input data-project-import type="file" accept="application/json,.json" hidden ${disabled}/></label><button data-command="project-export" class="secondary-button">Save project</button><button data-command="sheet-export" class="primary-button">Export sheet PNG</button><button data-command="pack-export" class="secondary-button">Export portrait pack</button></div></header>
+   <header class="expression-hero"><div><span class="panel-kicker">CHARACTER LAB / EXPRESSIONS</span><div class="expression-heading"><h1>One character. Every feeling.</h1><button type="button" class="expression-help-button" data-command="help" title="Expression sheet usage guide" aria-label="Expression sheet usage guide" aria-haspopup="dialog">${circleHelpIcon}</button></div><p>Keep the identity, direct the emotion, and build a sheet one portrait at a time.</p></div><div class="expression-hero-actions"><label class="secondary-button file-button">Open project<input data-project-import type="file" accept="application/json,.json" hidden ${disabled}/></label><button data-command="project-export" class="secondary-button">Save project</button><button data-command="sheet-export" class="primary-button">Export sheet PNG</button><button data-command="pack-export" class="secondary-button">Export portrait pack</button></div></header>
    <div class="expression-layout"><aside class="expression-controls">
     <section class="expression-section"><div class="expression-section-head"><b>01 / Identity</b><small>One clean reference</small></div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
     <div class="expression-reference">${p.reference ? `<img src="${esc(p.reference)}" alt="Character reference"/><span>${esc(p.referenceName)}</span>` : `<div class="expression-reference-empty"><b>＋</b><span>Add a face reference</span><small>Front-facing, neutral expression, clear eyes</small></div>`}</div>
@@ -165,6 +166,10 @@ export class ExpressionStudio {
     }
     private async command(command: string): Promise<void> {
         try {
+            if (command === 'help') {
+                openExpressionHelp();
+                return;
+            }
             if (command === 'stop') {
                 this.stopped = true;
                 this.status = 'Stopping after the current portrait finishes.';
