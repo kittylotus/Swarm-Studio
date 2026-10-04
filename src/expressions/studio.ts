@@ -1,7 +1,7 @@
 import { circleHelpIcon, openExpressionHelp } from './help';
 import { expressionFailure } from './errors';
 import { defaultSheet, normalizeSheet, expressionTiles, emptyMotion, motionLimits, expressionRequest, livePortraitWorkflow, ipAdapterWorkflow, advertisedValues, isAdapterModel, type SheetProject, type ExpressionTile, type NodeSchema, type ExpressionMotion } from './pipeline';
-import type { LoraStackItem } from '../types';
+import type { ExpressionLora } from './loras';
 import type { SwarmGenerationRequest, SwarmModel, SwarmParamDefinition } from '../swarm/types';
 const esc = (value: unknown) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
 export interface ExpressionHost {
@@ -9,8 +9,8 @@ export interface ExpressionHost {
     params(): SwarmParamDefinition[];
     busy(): boolean;
     connected(): boolean;
-    captureLoras(model: string): LoraStackItem[];
-    generate(request: SwarmGenerationRequest, loras: LoraStackItem[], progress: (n: number) => void): Promise<{
+    captureLoras(model: string): ExpressionLora[];
+    generate(request: SwarmGenerationRequest, loras: ExpressionLora[], progress: (n: number) => void): Promise<{
         image: string;
         path: string;
         seed: number;

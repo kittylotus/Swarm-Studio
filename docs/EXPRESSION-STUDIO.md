@@ -19,7 +19,7 @@ Default: **IPAdapter → SDXL**, semirealism preset, adapter PLUS, strength 0.65
 1. Upload a clean front-facing portrait. It is resized to at most 1024 pixels on its longest side. Alternatively generate a neutral card in Prompt only mode, then use its **Ref** action.
 2. Choose the compatible checkpoint and a semireal, realistic, or illustrated style. Edit the shared character/framing description and negative prompt.
 3. Choose 6, 12, or 24 expression presets, or add custom cards. Each card has an editable label and expression prompt. LivePortrait/Hybrid additionally exposes face controls.
-4. Optionally enable composer LoRAs. Studio checks model compatibility and snapshots the enabled stack at the start of the queue, so composer changes cannot alter later cards.
+4. Optionally enable composer LoRAs. Studio checks model compatibility and snapshots the enabled stack at the start of the queue, so composer changes cannot alter later cards. Enabled Trigger toggles also append the LoRA trigger phrases to each expression prompt.
 5. Render missing cards. Every expression starts with the shared seed; a card reroll changes only its own seed offset. Lock approved portraits. Up to eight previous takes remain available as thumbnails.
 6. Change order, exclude unwanted expressions, choose columns/gutter/paper color, and export a labeled PNG sheet.
 7. Export a ZIP portrait pack for individual PNGs, the sheet (if all selected cards are complete), and the project manifest. Save/open project JSON to transfer reference images, expressions, settings, outputs, and previous takes.

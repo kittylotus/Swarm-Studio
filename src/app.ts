@@ -5,6 +5,7 @@ import { normalizeLibraryFolderSelection, shouldAutoSyncLibraryHistory } from ".
 import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
 import { importLumiSwarmStack } from "./lora/import";
 import { loraRequestValue, resolveLoraModelName } from "./lora/request";
+import { applyExpressionLoras } from "./expressions/loras";
 import {
   REGION_LAYOUT_PRESETS,
   applyRegionLayoutPreset,
@@ -5164,15 +5165,12 @@ export class StudioApp {
           if (!name) throw new Error(`LoRA is unavailable: ${item.name}`);
           const lora = this.loras.find((entry) => entry.name === name);
           if (lora && loraCompatibility(lora, checkpoint) === "incompatible") throw new Error(`LoRA ${item.name} is incompatible with the expression checkpoint.`);
-          return { ...item, name };
+          return { ...item, name, triggerPhrase: String(lora?.trigger_phrase ?? "") };
         });
       },
       generate: async (request, loras, progress) => {
         if (!this.connected || this.generating) throw new Error("Swarm is disconnected or another generation is running.");
-        if (loras.length) {
-          request.loras = loras.map((item) => item.name);
-          request.loraweights = loras.map((item) => String(item.weight));
-        }
+        request = applyExpressionLoras(request, loras);
         const normalized = normalizeGenerationRequest(request, this.params).request;
         let finalMetadata = "";
         this.addLog(`Expression render: ${request.model} · seed ${request.seed} · ${request.width}×${request.height}`, "info", "api");
