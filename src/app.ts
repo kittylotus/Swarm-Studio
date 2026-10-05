@@ -1,6 +1,7 @@
 import { createId } from "./id";
 import { builtInThemes, isLightTheme, themeFontOptions, themeFontStack } from "./theme";
 import { StudioStore, folderIds, PERSISTED_OUTPUT_CACHE_LIMIT } from "./library/store";
+import { nonFavoriteTargets, readSwarmFavorites } from "./library/cleanup";
 import { normalizeLibraryFolderSelection, shouldAutoSyncLibraryHistory } from "./library/session";
 import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
 import { importLumiSwarmStack } from "./lora/import";
@@ -3326,6 +3327,50 @@ export class StudioApp {
     });
   }
 
+  private async deleteNonFavoriteOutputs(): Promise<void> {
+    if (!this.connected || this.libraryBatchBusy || this.librarySyncing) return;
+    const matching = this.libraryVisibleOutputs();
+    const scope = this.libraryFilterSummary();
+    this.libraryBatchBusy = true;
+    this.render();
+    let deleted = 0, failed = 0, preserved = 0;
+    const progress = (message: string) => { const button = this.root.querySelector<HTMLElement>("[data-action='delete-nonfavorite-outputs']"); if (button) button.textContent = message; };
+    progress("Checking Swarm favorites…");
+    try {
+      const limit = await this.client.imageHistoryLimit();
+      const favorites = await readSwarmFavorites((path, depth) => this.client.listImageDirectory(path, depth), limit, (parent, child) => this.joinSwarmHistoryPath(parent, child));
+      const targets = nonFavoriteTargets(matching, this.store.state.outputs, favorites, output => this.outputMutationPath(output));
+      if (!targets.length) { this.notify("No non-favorited Swarm outputs to delete in this scope.", "info"); return; }
+      if (!window.confirm(`Delete ${targets.length} non-favorited Swarm image${targets.length === 1 ? "" : "s"}?\n\nScope: ${scope}\nIncludes all matching indexed outputs, including those below Load more. Favorites are preserved.\n\nThis cannot be undone.`)) return;
+      for (let offset = 0; offset < targets.length; offset += 6) {
+        progress(`Deleting ${offset}/${targets.length}…`);
+        const removed = new Set<string>();
+        await Promise.all(targets.slice(offset, offset + 6).map(async target => {
+          if (this.store.state.outputs.some(output => target.ids.includes(output.id) && output.starred)) { preserved++; return; }
+          try {
+            await this.client.deleteImage(target.path);
+            target.ids.forEach(id => removed.add(id));
+            deleted++;
+          } catch (error) {
+            failed++;
+            this.addLog(`Could not delete ${target.path}: ${error instanceof Error ? error.message : String(error)}`, "error", "api");
+          }
+        }));
+        this.store.state.outputs = this.store.state.outputs.filter(output => !removed.has(output.id));
+        for (const id of removed) this.librarySelected.delete(id);
+        this.store.save();
+        await this.yieldLibrarySync();
+      }
+      this.clearNativeImageCache();
+      this.notify(`Deleted ${deleted} non-favorited image${deleted === 1 ? "" : "s"}${preserved ? ` · ${preserved} newly favorited preserved` : ""}${failed ? ` · ${failed} failed and kept in Library` : ""}.`, failed ? "info" : "success");
+    } catch (error) {
+      this.notify(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      this.libraryBatchBusy = false;
+      this.render();
+    }
+  }
+
   private renderLibrarySelectionRail(): string {
     if (this.view !== "library" || !this.librarySelectMode || this.librarySyncing) return "";
     const selectedCount = this.librarySelected.size;
@@ -3346,11 +3391,11 @@ export class StudioApp {
     const outputs = allOutputs.slice(0, this.libraryRenderLimit);
     const selectedCount = this.librarySelected.size;
     const remaining = Math.max(0, allOutputs.length - outputs.length);
-    const syncDisabled = !this.connected;
+    const syncDisabled = !this.connected || this.libraryBatchBusy;
     return `<div class="library-layout library-layout--single"><section class="library-main ${this.librarySelectMode ? "is-selecting" : ""}">
       <div class="library-toolbar library-toolbar--simple">
         <div class="library-toolbar-count"><b>${allOutputs.length}</b> matching output${allOutputs.length === 1 ? "" : "s"}<small>${outputs.length < allOutputs.length ? ` · ${outputs.length} mounted` : ""}${selectedCount ? ` · ${selectedCount} selected` : ""}</small></div>
-        <div class="library-toolbar-actions"><button class="secondary-button" data-action="open-library-filters">⌕ Browse</button><button class="icon-button library-select-toggle ${this.librarySelectMode ? "is-active" : ""}" data-action="toggle-library-selection" title="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}" aria-label="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}">${batchSelectSvg}<small>${this.librarySelectMode ? selectedCount : "Select"}</small></button><button class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button><button class="primary-button" data-nav="create">Generate</button></div>
+        <div class="library-toolbar-actions"><button class="secondary-button" data-action="open-library-filters">⌕ Browse</button><button class="danger-soft" data-action="delete-nonfavorite-outputs" ${!syncDisabled && allOutputs.some(output => !output.starred) ? "" : "disabled"}>Delete all non-favorited</button><button class="icon-button library-select-toggle ${this.librarySelectMode ? "is-active" : ""}" data-action="toggle-library-selection" title="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}" aria-label="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}">${batchSelectSvg}<small>${this.librarySelectMode ? selectedCount : "Select"}</small></button><button class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button><button class="primary-button" data-nav="create">Generate</button></div>
       </div>
       <div class="library-filter-readout"><span>${escapeHtml(this.libraryFilterSummary())}</span>${this.librarySelectMode ? `<b>Selection active · Shift-click for ranges</b>` : ""}</div>
       ${outputs.length ? `<div class="image-grid ${this.librarySelectMode ? "is-selecting" : ""}">${outputs.map((output) => this.outputCard(output.id)).join("")}</div>${remaining ? `<div class="library-load-more"><button class="secondary-button" data-action="load-more-library">Load ${Math.min(240, remaining)} more</button><small>${remaining} still indexed, not mounted</small></div><div class="library-scroll-runway" aria-hidden="true"></div>` : ""}` : `<div class="panel empty-state"><span>▦</span><h2>No outputs match.</h2><p>Open Browse to change folders, dates, checkpoint, or search.</p><div><button class="secondary-button" data-action="open-library-filters">Browse</button><button class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button></div></div>`}
@@ -8200,6 +8245,7 @@ export class StudioApp {
   }
 
   private async syncSwarmHistory(): Promise<void> {
+    if (this.libraryBatchBusy) return;
     if (!this.connected || this.librarySyncing) return;
     this.librarySyncing = true;
     this.librarySyncDone = 0;
@@ -8516,6 +8562,7 @@ export class StudioApp {
     };
 
     this.root.querySelectorAll<HTMLElement>("[data-action='sync-swarm-history']").forEach((button) => button.addEventListener("click", () => void this.syncSwarmHistory()));
+    this.root.querySelector<HTMLElement>("[data-action='delete-nonfavorite-outputs']")?.addEventListener("click", () => void this.deleteNonFavoriteOutputs());
     this.root.querySelector<HTMLElement>("[data-action='load-more-library']")?.addEventListener("click", () => { this.libraryRenderLimit += 240; this.render(); });
     this.root.querySelectorAll<HTMLElement>("[data-action='open-library-filters']").forEach((button) => button.addEventListener("click", () => { this.libraryFiltersOpen = true; this.libraryBrowseScrollTop = 0; this.render(); }));
 
@@ -8701,7 +8748,7 @@ export class StudioApp {
       event.stopPropagation();
       const id = button.dataset.star ?? "";
       const output = this.store.state.outputs.find((item) => item.id === id);
-      if (!output || button.disabled) return;
+      if (!output || button.disabled || this.libraryBatchBusy) return;
       button.disabled = true;
       try {
         const state = await this.client.toggleImageStarred(this.outputMutationPath(output));
@@ -8717,7 +8764,7 @@ export class StudioApp {
     this.root.querySelectorAll<HTMLElement>("[data-delete-output]").forEach((button) => button.addEventListener("click", async () => {
       const id = button.dataset.deleteOutput ?? "";
       const output = this.store.state.outputs.find((item) => item.id === id);
-      if (!output || !window.confirm("Delete this image from Swarm history? This cannot be undone.")) return;
+      if (!output || this.libraryBatchBusy || !window.confirm("Delete this image from Swarm history? This cannot be undone.")) return;
       try {
         await this.client.deleteImage(this.outputMutationPath(output));
         this.store.deleteOutput(id);

@@ -1,4 +1,5 @@
 import { runtime } from "../runtime";
+import { historyListingLimit } from "../library/cleanup";
 import { studioSwarmRelayUrl } from "../runtime/relay";
 import type {
   SwarmApiErrorShape,
@@ -238,6 +239,11 @@ export class SwarmClient {
 
   async deletePreset(title: string): Promise<void> {
     await this.call<SwarmApiErrorShape>("DeletePreset", { preset: title });
+  }
+
+  async imageHistoryLimit(): Promise<number> {
+    const payload = await this.call<SwarmApiErrorShape & { settings?: Record<string, unknown> }>("GetUserSettings", {});
+    return historyListingLimit(payload.settings ?? {});
   }
 
   async deleteImage(path: string): Promise<void> {
