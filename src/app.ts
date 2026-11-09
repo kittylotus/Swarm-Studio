@@ -1,9 +1,14 @@
 import { createId } from "./id";
+import { actionMenu, bindActionMenus } from "./ui/action-menu";
+import { openLoraFilters, type LoraFilterSelection } from "./models/filters";
+import "./models/library-controls.css";
+import { normalizeModelPath, modelFolderPaths, modelInFolder, folderDepth } from "./models/folders";
 import { openPromptEnhancer } from "./llm/enhancer";
 import { llmSettingsMarkup, bindLlmSettings } from "./llm/settings";
 import { validateMossComposition } from "./llm/prompts";
 import { builtInThemes, isLightTheme, themeFontOptions, themeFontStack } from "./theme";
 import { StudioStore, folderIds, PERSISTED_OUTPUT_CACHE_LIMIT } from "./library/store";
+import { identityThumbnail } from "./library/avatars";
 import { nonFavoriteTargets, readSwarmFavorites } from "./library/cleanup";
 import { normalizeLibraryFolderSelection, shouldAutoSyncLibraryHistory } from "./library/session";
 import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
@@ -48,6 +53,7 @@ import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, get
 import { normalizeGenerationRequest, normalizeParamKey } from "./swarm/request";
 import { swarmImageMutationPath, swarmImageViewPath } from "./swarm/history";
 import { imageMetadata } from "./swarm/image-metadata";
+import { generationTiming, historyCreatedAt, compareOutputDates } from "./swarm/history-metadata";
 import { recoverPresetParameters } from "./swarm/preset-recovery";
 import type { ExpressionStudio } from "./expressions/studio";
 import type { NodeSchema } from "./expressions/pipeline";
@@ -457,6 +463,11 @@ export class StudioApp {
   private loraShowNonMatching = false;
   private loraFolderPath = "";
   private loraFolderTreeOpen = false;
+  private checkpointFolderPath = "";
+  private checkpointFolderTreeOpen = false;
+  private loraFolderDepth = 0;
+  private checkpointFolderDepth = 20;
+  private collapsedModelFolders = { lora: new Set<string>(), checkpoint: new Set<string>() };
   private loraBatchMode = false;
   private loraBatchSelected = new Set<string>();
   private loraOrphanMode = false;
@@ -466,9 +477,6 @@ export class StudioApp {
   private loraFacetFamily = "";
   private loraFacetMetadata: LoraFacetMetadataFilter = "all";
   private loraFacetSort: LoraFacetSort = "name";
-  private loraFacetTagsOpen = false;
-  private loraFacetTagQuery = "";
-  private loraFacetMobileOpen = false;
   private loraFacetEnriching = false;
   private loraFacetEnrichMode: FacetEnrichmentMode | null = null;
   private loraFacetEnrichDone = 0;
@@ -543,6 +551,10 @@ export class StudioApp {
   private modelMetadataViewer: SwarmModel | null = null;
   private modelMetadataViewerLoading = false;
   private identityEditingId = "";
+  private identityEditorEpoch = 0;
+  private identityPictureReading = false;
+  private identitySaveBusy = false;
+  private identityFormDraft: (Pick<IdentityRecord, "id" | "name" | "folderId" | "positivePrompt" | "negativePrompt" | "model" | "notes" | "avatarUrl"> & { bindLoras: boolean; avatarDirty: boolean }) | null = null;
   private checkpointsOpen = true;
   private librarySyncing = false;
   private librarySyncDone = 0;
@@ -619,6 +631,8 @@ export class StudioApp {
       this.generationMiniEnabled = localStorage.getItem("swarm-studio-generation-mini") !== "false";
       this.generationNotificationsEnabled = localStorage.getItem(GENERATION_NOTIFICATIONS_STORAGE_KEY) === "true";
       this.checkpointsOpen = localStorage.getItem("swarm-studio-checkpoints-open") !== "false";
+      this.loraFolderDepth = folderDepth(localStorage.getItem("swarm-studio-lora-folder-depth"), 0);
+      this.checkpointFolderDepth = folderDepth(localStorage.getItem("swarm-studio-checkpoint-folder-depth"), 20);
       this.libraryFiltersDocked = localStorage.getItem("swarm-studio-library-browse-docked") === "true";
       const miniX = Number(localStorage.getItem("swarm-studio-generation-mini-x"));
       const miniY = Number(localStorage.getItem("swarm-studio-generation-mini-y"));
@@ -750,7 +764,7 @@ export class StudioApp {
     if (!this.keybindsEnabled || event.defaultPrevented || event.repeat || this.inpaintOpen) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     const editing = Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
-    const blockingDialog = Boolean(this.root.querySelector("[role='dialog'][aria-modal='true'], .modal-backdrop:not([hidden]), .download-backdrop:not([hidden]), .quicknav-overlay.is-open"));
+    const blockingDialog = Boolean(document.querySelector("dialog[open]")) || Boolean(this.root.querySelector("[role='dialog'][aria-modal='true'], .modal-backdrop:not([hidden]), .download-backdrop:not([hidden]), .quicknav-overlay.is-open"));
     if (blockingDialog) return;
     for (const definition of STUDIO_KEYBIND_ACTIONS) {
       if (!keybindMatches(this.keybinds[definition.id], event)) continue;
@@ -1015,11 +1029,15 @@ export class StudioApp {
     });
     this.addLog(`Swarm Studio ${runtime.kind === "tauri" ? "desktop" : "PWA"} started.`, "info", "studio");
     this.render();
-    const persistenceWarning = this.store.consumePersistenceWarning();
-    if (persistenceWarning) {
-      this.addLog(persistenceWarning, "warn", "studio");
-      this.notify(persistenceWarning, "info");
-    }
+    void this.store.initializeIdentityAvatars().then(warning => {
+      if (this.view === "identities") this.render();
+      if (warning) this.notify(warning, "error");
+      const persistenceWarning = this.store.consumePersistenceWarning();
+      if (persistenceWarning) {
+        this.addLog(persistenceWarning, "warn", "studio");
+        this.notify(persistenceWarning, "info");
+      }
+    });
     void this.refreshProcessStatus(false);
     void this.refreshHostControlStatus(false).then(() => {
       if (runtime.kind === "browser") {
@@ -1732,7 +1750,6 @@ export class StudioApp {
       ${this.renderLoraDownloadModal()}
       ${this.renderCivitaiDetailModal()}
       ${this.renderCivitaiMobileFiltersModal()}
-      ${this.renderLoraFacetMobileModal()}
       ${this.renderModelMetadataEditor()}
       ${this.renderModelMetadataViewer()}
       ${this.renderLoraMoveModal()}
@@ -3338,7 +3355,7 @@ export class StudioApp {
     this.libraryBatchBusy = true;
     this.render();
     let deleted = 0, failed = 0, preserved = 0;
-    const progress = (message: string) => { const button = this.root.querySelector<HTMLElement>("[data-action='delete-nonfavorite-outputs']"); if (button) button.textContent = message; };
+    const progress = (message: string) => { const button = this.root.querySelector<HTMLElement>("[data-action='delete-nonfavorite-outputs']"); if (button) (button.querySelector("#library-delete-name") ?? button).textContent = message; };
     progress("Checking Swarm favorites…");
     try {
       const limit = await this.client.imageHistoryLimit();
@@ -3399,7 +3416,10 @@ export class StudioApp {
     return `<div class="library-layout library-layout--single"><section class="library-main ${this.librarySelectMode ? "is-selecting" : ""}">
       <div class="library-toolbar library-toolbar--simple">
         <div class="library-toolbar-count"><b>${allOutputs.length}</b> matching output${allOutputs.length === 1 ? "" : "s"}<small>${outputs.length < allOutputs.length ? ` · ${outputs.length} mounted` : ""}${selectedCount ? ` · ${selectedCount} selected` : ""}</small></div>
-        <div class="library-toolbar-actions"><button class="secondary-button" data-action="open-library-filters">⌕ Browse</button><button class="danger-soft" data-action="delete-nonfavorite-outputs" ${!syncDisabled && allOutputs.some(output => !output.starred) ? "" : "disabled"}>Delete all non-favorited</button><button class="icon-button library-select-toggle ${this.librarySelectMode ? "is-active" : ""}" data-action="toggle-library-selection" title="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}" aria-label="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}">${batchSelectSvg}<small>${this.librarySelectMode ? selectedCount : "Select"}</small></button><button class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button><button class="primary-button" data-nav="create">Generate</button></div>
+        <div class="library-toolbar-actions library-toolbar-actions--grouped">
+          <div class="library-browse-actions"><button type="button" class="secondary-button" data-action="open-library-filters">${filterSvg} Browse</button><button type="button" class="secondary-button library-select-toggle ${this.librarySelectMode ? "is-active" : ""}" data-action="toggle-library-selection" aria-pressed="${this.librarySelectMode}" aria-label="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}">${batchSelectSvg}<span>${this.librarySelectMode ? "Done selecting" : "Select"}</span></button></div>
+          <div class="library-maintenance-actions">${actionMenu("library-tools-menu", "Tools", "Library tools", `<div class="studio-menu-section"><button type="button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}<small>Reconcile the index with files saved in Swarm.</small></button></div><div class="studio-menu-section"><small>CLEAN UP CURRENT RESULTS</small><button type="button" class="danger-soft" aria-labelledby="library-delete-name" aria-describedby="library-delete-help" data-action="delete-nonfavorite-outputs" ${!syncDisabled && allOutputs.some(output => !output.starred) ? "" : "disabled"}><span id="library-delete-name">Delete all non-favorited</span><small id="library-delete-help">Favorites are preserved. Review the count before confirming.</small></button></div>`)}<button type="button" class="primary-button library-generate-action" data-nav="create">Generate</button></div>
+        </div>
       </div>
       <div class="library-filter-readout"><span>${escapeHtml(this.libraryFilterSummary())}</span>${this.librarySelectMode ? `<b>Selection active · Shift-click for ranges</b>` : ""}</div>
       ${outputs.length ? `<div class="image-grid ${this.librarySelectMode ? "is-selecting" : ""}">${outputs.map((output) => this.outputCard(output.id)).join("")}</div>${remaining ? `<div class="library-load-more"><button class="secondary-button" data-action="load-more-library">Load ${Math.min(240, remaining)} more</button><small>${remaining} still indexed, not mounted</small></div><div class="library-scroll-runway" aria-hidden="true"></div>` : ""}` : `<div class="panel empty-state"><span>▦</span><h2>No outputs match.</h2><p>Open Browse to change folders, dates, checkpoint, or search.</p><div><button class="secondary-button" data-action="open-library-filters">Browse</button><button class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button></div></div>`}
@@ -3425,16 +3445,17 @@ export class StudioApp {
   private renderIdentities(): string {
     const draft = this.store.state.draft;
     const editing = this.store.state.identities.find((item) => item.id === this.identityEditingId);
-    const source = editing ?? ({ name: "", folderId: folderIds.unfiled, positivePrompt: "", negativePrompt: "", model: "", notes: "", loraStack: [] as LoraStackItem[], avatarUrl: "" } as IdentityRecord);
+    const source = this.identityFormDraft ?? editing ?? ({ name: "", folderId: folderIds.unfiled, positivePrompt: "", negativePrompt: "", model: "", notes: "", loraStack: [] as LoraStackItem[], avatarUrl: "" } as IdentityRecord);
+    const avatar = this.identityFormDraft?.avatarDirty ? source.avatarUrl : editing?.avatarUrl || source.avatarUrl;
     return `
       <div class="identity-toolbar"><div><span class="panel-kicker">LIBRARY</span><b>${this.store.state.identities.length} identities</b></div><button class="primary-button" data-action="new-identity">＋ New identity</button></div>
       <div class="identity-layout ${this.store.state.ui.identityEditorOpen ? "editor-open" : ""}">
         <section class="panel identity-editor">
-          <div class="panel-heading"><div><span class="panel-kicker">PROFILE</span><h2>${editing ? `Edit ${escapeHtml(editing.name)}` : "New identity"}</h2></div><button class="icon-button identity-editor-close" data-action="close-identity-editor">×</button></div>
+          <div class="panel-heading"><div><span class="panel-kicker">PROFILE</span><h2>${editing ? `Edit ${escapeHtml(editing.name)}` : "New identity"}</h2></div><button class="icon-button identity-editor-close" data-action="close-identity-editor" aria-label="Close identity editor">×</button></div>
           <form id="identity-form">
             <input type="hidden" name="id" value="${escapeHtml(editing?.id || "")}" />
-            <input type="hidden" name="avatarUrl" value="${escapeHtml(source.avatarUrl || "")}" />
-            <div class="identity-editor-avatar">${source.avatarUrl ? `<img src="${escapeHtml(source.avatarUrl)}" alt="" />` : `<span>${escapeHtml((source.name || "?").slice(0, 1).toUpperCase())}</span>`}<div><button type="button" class="secondary-button" data-action="choose-identity-picture">Choose picture</button>${source.avatarUrl ? `<button type="button" class="ghost-button" data-action="clear-identity-picture">Remove</button>` : ""}</div><input id="identity-picture-input" type="file" accept="image/*" hidden /></div>
+            <input type="hidden" name="avatarUrl" value="${escapeHtml(avatar || "")}" />
+            <div class="identity-editor-avatar">${avatar ? `<img src="${escapeHtml(avatar)}" alt="" />` : `<span>${escapeHtml((source.name || "?").slice(0, 1).toUpperCase())}</span>`}<div><button type="button" class="secondary-button" data-action="choose-identity-picture">Choose picture</button><button type="button" class="ghost-button" data-action="clear-identity-picture" ${avatar ? "" : "hidden"}>Remove picture</button></div><input id="identity-picture-input" type="file" accept="image/*" hidden /></div>
             <div class="field-grid field-grid--2">
               <label class="field"><span>Name</span><input name="name" required value="${escapeHtml(source.name)}" placeholder="Hugo, Lycaon, Scenery…" /></label>
               <label class="field"><span>Folder</span><select name="folderId">${this.identityFolderOptions(source.folderId)}</select></label>
@@ -3442,9 +3463,9 @@ export class StudioApp {
             <label class="field"><span>Base positive</span><textarea name="positivePrompt" rows="5" placeholder="Reusable subject and style tags…">${escapeHtml(source.positivePrompt)}</textarea></label>
             <label class="field"><span>Base negative</span><textarea name="negativePrompt" rows="3" placeholder="Identity-specific exclusions…">${escapeHtml(source.negativePrompt)}</textarea></label>
             <label class="field"><span>Default checkpoint</span><select name="model"><option value="">Follow current</option>${this.modelOptions(source.model)}</select></label>
-            <label class="check-row"><input type="checkbox" name="bindLoras" ${editing ? (source.loraStack.length ? "checked" : "") : (draft.loras.length ? "checked" : "")}/><span><b>Bind LoRA stack</b><small>${editing ? source.loraStack.length : draft.loras.length} LoRA${(editing ? source.loraStack.length : draft.loras.length) === 1 ? "" : "s"} currently attached.</small></span></label>
+            <label class="check-row"><input type="checkbox" name="bindLoras" ${this.identityFormDraft ? (this.identityFormDraft.bindLoras ? "checked" : "") : editing ? (editing.loraStack.length ? "checked" : "") : (draft.loras.length ? "checked" : "")}/><span><b>Bind LoRA stack</b><small>${editing ? editing.loraStack.length : draft.loras.length} LoRA${(editing ? editing.loraStack.length : draft.loras.length) === 1 ? "" : "s"} currently attached.</small></span></label>
             <label class="field"><span>Notes</span><textarea name="notes" rows="3" placeholder="Reference notes, clothing rules, trigger reminders…">${escapeHtml(source.notes)}</textarea></label>
-            <button class="primary-button" type="submit">${editing ? "Save changes" : "Save identity"} <b>♡</b></button>
+            <button class="primary-button" type="submit" ${this.identityPictureReading || this.identitySaveBusy ? "disabled" : ""}>${editing ? "Save changes" : "Save identity"} <b>♡</b></button>
           </form>
         </section>
         <section class="identity-list">
@@ -3466,12 +3487,12 @@ export class StudioApp {
       <article class="panel identity-card">
         <div class="identity-avatar">${identity.avatarUrl ? `<img src="${escapeHtml(identity.avatarUrl)}" alt="" />` : escapeHtml(identity.name.slice(0, 1).toUpperCase())}</div>
         <div class="identity-card-copy"><span class="tiny-tag">${escapeHtml(folder)}</span><h3>${escapeHtml(identity.name)}</h3><p>${escapeHtml(identity.positivePrompt || "No base prompt yet.")}</p><div class="card-meta"><span>${escapeHtml(identity.model ? prettyName(identity.model) : "Current checkpoint")}</span><span>${identity.loraStack.length} LoRA${identity.loraStack.length === 1 ? "" : "s"}</span></div></div>
-        <div class="identity-card-actions"><button class="secondary-button" data-apply-identity="${identity.id}">Use in Create</button><details class="identity-menu"><summary class="icon-button" title="Identity actions">…</summary><div><button data-edit-identity="${identity.id}">Edit</button><button data-picture-identity="${identity.id}">Picture</button><button class="danger-soft" data-delete-identity="${identity.id}">Delete</button></div></details><input type="file" accept="image/*" hidden data-identity-picture-input="${identity.id}" /></div>
+        <div class="identity-card-actions"><button class="secondary-button" data-apply-identity="${identity.id}">Use in Create</button><details class="identity-menu"><summary class="icon-button" title="Identity actions" aria-label="Actions for ${escapeHtml(identity.name)}">…</summary><div><button data-edit-identity="${identity.id}" aria-label="Edit identity ${escapeHtml(identity.name)}">Edit</button><button data-picture-identity="${identity.id}" aria-label="Change picture for ${escapeHtml(identity.name)}">Picture</button><button class="danger-soft" data-delete-identity="${identity.id}" aria-label="Delete identity ${escapeHtml(identity.name)}">Delete</button></div></details><input type="file" accept="image/*" hidden data-identity-picture-input="${identity.id}" /></div>
       </article>`;
   }
 
   private normalizeLoraPath(value: string): string {
-    return String(value ?? "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/");
+    return normalizeModelPath(value);
   }
 
   private loraFolderOf(modelName: string): string {
@@ -3487,33 +3508,73 @@ export class StudioApp {
   }
 
   private loraFolderPaths(): string[] {
-    const folders = new Set<string>();
-    for (const model of this.loras) {
-      const folder = this.loraFolderOf(model.name);
-      if (!folder) continue;
-      const parts = folder.split("/");
-      for (let i = 1; i <= parts.length; i += 1) folders.add(parts.slice(0, i).join("/"));
-    }
-    return [...folders].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+    return modelFolderPaths(this.loras);
   }
 
   private loraInCurrentFolder(model: SwarmModel): boolean {
-    const current = this.normalizeLoraPath(this.loraFolderPath);
-    return this.loraFolderOf(model.name) === current;
+    return modelInFolder(model.name, this.loraFolderPath, this.loraFolderDepth);
+  }
+
+  private modelFolderDepthMarkup(kind: "checkpoint" | "lora"): string {
+    const label = kind === "checkpoint" ? "Checkpoint" : "LoRA";
+    const depth = kind === "checkpoint" ? this.checkpointFolderDepth : this.loraFolderDepth;
+    return `<label class="model-folder-depth"><span>Depth</span><input id="${kind}-folder-depth" data-model-folder-depth="${kind}" type="number" min="0" max="20" step="1" value="${depth}" aria-label="${label} folder depth" aria-describedby="${kind}-depth-help" /></label><small class="model-depth-help" id="${kind}-depth-help">0 = this folder · 1 = one level below · up to 20</small>`;
+  }
+
+  private modelFolderTreeMarkup(kind: "checkpoint" | "lora"): string {
+    const models = kind === "checkpoint" ? this.models : this.loras;
+    const current = kind === "checkpoint" ? this.checkpointFolderPath : this.loraFolderPath;
+    const open = kind === "checkpoint" ? this.checkpointFolderTreeOpen : this.loraFolderTreeOpen;
+    const label = kind === "checkpoint" ? "Checkpoint" : "LoRA";
+    const folders = modelFolderPaths(models);
+    const collapsed = this.collapsedModelFolders[kind];
+    const homeIcon = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8M5 10v10h14V10M9 20v-7h6v7"/></svg>`;
+    const chevronIcon = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>`;
+    const checkIcon = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>`;
+    const closeIcon = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>`;
+    const indexes = new Map(folders.map((folder, index) => [folder, index + 1]));
+    const children = new Map<string, string[]>();
+    const counts = new Map<string, number>();
+    for (const model of models) { const parent = this.loraFolderOf(model.name); counts.set(parent, (counts.get(parent) || 0) + 1); }
+    for (const folder of folders) {
+      const parent = folder.split("/").slice(0, -1).join("/");
+      const siblings = children.get(parent) || [];
+      siblings.push(folder);
+      children.set(parent, siblings);
+    }
+    const row = (folder: string, index: number): string => {
+      const expandable = children.has(folder);
+      const expanded = !collapsed.has(folder);
+      const id = `${kind}-folder-children-${index}`;
+      const active = current === folder;
+      const count = counts.get(folder) || 0;
+      const fileLabel = kind === "lora" ? (count === 1 ? "LoRA" : "LoRAs") : (count === 1 ? "checkpoint" : "checkpoints");
+      const toggle = expandable
+        ? `<button type="button" class="model-folder-branch" data-folder-branch="${escapeHtml(folder)}" data-folder-kind="${kind}" aria-label="${expanded ? "Collapse" : "Expand"} ${label.toLowerCase()} folder ${escapeHtml(folder || label + " root")}" aria-expanded="${expanded}" aria-controls="${id}">${chevronIcon}</button>`
+        : '<span class="model-folder-spacer" aria-hidden="true"></span>';
+      return `<div class="model-folder-node">${toggle}
+        <button type="button" class="lora-tree-row ${active ? "is-active" : ""}" data-${kind}-folder="${escapeHtml(folder)}" ${active ? 'aria-current="true"' : ""} title="${escapeHtml(folder || label + " root")}">
+          <span class="model-folder-icon" aria-hidden="true">${folder ? folderTreeSvg : homeIcon}</span>
+          <span class="model-folder-name">${escapeHtml(folder.split("/").pop() || label + " root")}</span>
+          <small class="model-folder-count" aria-label="${count} ${fileLabel} in this folder">${count}</small>
+          ${active ? `<span class="model-folder-selected" aria-hidden="true">${checkIcon}</span>` : ""}
+        </button></div>
+        ${expandable ? `<ul id="${id}" ${expanded ? "" : "hidden"}>${(children.get(folder) || []).map(child => `<li>${row(child, indexes.get(child)!)}</li>`).join("")}</ul>` : ""}`;
+    };
+    return `<nav id="${kind}-folder-navigator" class="lora-folder-popover ${open ? "is-open" : ""}" aria-label="${label} folders">
+      <div class="lora-folder-popover-head">
+        <span class="model-folder-emblem" aria-hidden="true">${folderTreeSvg}<span>✧</span></span>
+        <div><span class="panel-kicker">YOUR COLLECTION</span><b>${kind === "lora" ? "LoRA" : "Checkpoint"} folders</b><small>${folders.length} folder${folders.length === 1 ? "" : "s"} · ${models.length} model${models.length === 1 ? "" : "s"}</small></div>
+        <button type="button" class="icon-button model-folder-close" data-action="close-${kind}-tree" aria-label="Close ${label.toLowerCase()} folder navigator">${closeIcon}</button>
+      </div>
+      <div class="lora-folder-tree"><ul><li>${row("", 0)}</li></ul>${folders.length ? "" : '<div class="lora-tree-empty">No subfolders indexed yet.</div>'}</div>
+      ${kind === "lora" ? `<div class="model-folder-options">${this.modelFolderDepthMarkup("lora")}</div>` : ""}
+      <div class="model-folder-footnote"><span aria-hidden="true">✦</span><small>Counts show files in each folder.</small></div>
+    </nav>`;
   }
 
   private loraFolderTreeMarkup(): string {
-    const folders = this.loraFolderPaths();
-    const countIn = (folder: string) => this.loras.filter((model) => this.loraFolderOf(model.name) === folder).length;
-    const rows = folders.map((folder) => {
-      const depth = folder.split("/").length - 1;
-      const leaf = folder.split("/").pop() ?? folder;
-      return `<button class="lora-tree-row ${this.loraFolderPath === folder ? "is-active" : ""}" style="--tree-depth:${depth}" data-lora-folder="${escapeHtml(folder)}"><span class="lora-tree-branch">⌞</span><span>${escapeHtml(leaf)}</span><small>${countIn(folder)}</small></button>`;
-    }).join("");
-    return `<div class="lora-folder-popover ${this.loraFolderTreeOpen ? "is-open" : ""}">
-      <div class="lora-folder-popover-head"><div><span class="panel-kicker">SWARM FOLDERS</span><b>${escapeHtml(this.loraFolderPath || "LoRA root")}</b></div><button class="icon-button" data-action="close-lora-tree" aria-label="Close folder navigator">×</button></div>
-      <div class="lora-folder-tree"><button class="lora-tree-row ${!this.loraFolderPath ? "is-active" : ""}" data-lora-folder=""><span class="lora-tree-root">⌂</span><span>LoRA root</span><small>${countIn("")}</small></button>${rows || `<div class="lora-tree-empty">No subfolders indexed yet.</div>`}</div>
-    </div>`;
+    return this.modelFolderTreeMarkup("lora");
   }
 
   private renderLoraMoveModal(): string {
@@ -3659,6 +3720,8 @@ export class StudioApp {
     this.loraFacetFamily = "";
     this.loraFacetMetadata = "all";
     this.loraFacetSort = "name";
+    this.loraShowNonMatching = false;
+    try { localStorage.setItem("swarm-studio-lora-show-nonmatching", "false"); } catch { /* session preference */ }
     this.persistLoraFacetPreferences();
   }
 
@@ -3669,66 +3732,47 @@ export class StudioApp {
     return source.filter((model) => this.loraInCurrentFolder(model));
   }
 
-  private loraFacetSummaryMarkup(models: SwarmModel[]): string {
-    const counts = buildLoraFacetCounts(models, this.loraFacetCache);
-    const active = this.loraFacetTags.size + Number(Boolean(this.loraFacetCreator)) + Number(Boolean(this.loraFacetFamily)) + Number(this.loraFacetMetadata !== "all") + Number(this.loraFacetSort !== "name");
-    const selectedTagKeys = new Set([...this.loraFacetTags].map((tag) => tag.toLowerCase()));
-    const tagRows = counts.tags.slice(0, 160).map(({ name, count }) => {
-      const checked = selectedTagKeys.has(name.toLowerCase());
-      return `<label class="lora-facet-check" data-lora-facet-tag-row="${escapeHtml(name.toLowerCase())}"><input type="checkbox" data-lora-facet-tag="${escapeHtml(name)}" ${checked ? "checked" : ""}/><span>${escapeHtml(name)}</span><small>${count}</small></label>`;
-    }).join("");
-    const creatorOptions = counts.creators.map(({ name, count }) => `<option value="${escapeHtml(name)}" ${name.toLowerCase() === this.loraFacetCreator.toLowerCase() ? "selected" : ""}>${escapeHtml(name)} · ${count}</option>`).join("");
-    const familyOptions = counts.families.map(({ name, count }) => `<option value="${escapeHtml(name)}" ${name.toLowerCase() === this.loraFacetFamily.toLowerCase() ? "selected" : ""}>${escapeHtml(name)} · ${count}</option>`).join("");
-    const activeChips = [...this.loraFacetTags].map((tag) => `<button type="button" class="lora-facet-chip" data-remove-lora-facet-tag="${escapeHtml(tag)}">${escapeHtml(tag)} ×</button>`).join("");
-    const classificationRunning = this.loraFacetEnriching && this.loraFacetEnrichMode === "classification";
-    const statsRunning = this.loraFacetEnriching && this.loraFacetEnrichMode === "stats";
-    const progress = `${this.loraFacetEnrichDone}/${this.loraFacetEnrichTotal}`;
-    return `<div class="lora-facet-toolbar lora-facet-toolbar--desktop">
-      <details class="lora-facet-tags" ${this.loraFacetTagsOpen ? "open" : ""}>
-        <summary>${filterSvg}<span>Tags${this.loraFacetTags.size ? ` · ${this.loraFacetTags.size}` : ""}</span></summary>
-        <div class="lora-facet-popover">
-          <label class="lora-facet-tag-search"><span>Search tags</span><input id="lora-facet-tag-search" value="${escapeHtml(this.loraFacetTagQuery)}" placeholder="clothing, pose, style…" autocomplete="off" /></label>
-          <div class="lora-facet-tag-list">${tagRows || `<div class="compact-empty">No tags indexed in this folder yet.</div>`}</div>
-        </div>
-      </details>
-      <label class="lora-facet-field"><span>Creator</span><select id="lora-facet-creator"><option value="">All creators</option>${creatorOptions}</select></label>
-      <label class="lora-facet-field"><span>Family</span><select id="lora-facet-family"><option value="">All families</option>${familyOptions}</select></label>
-      <label class="lora-facet-field"><span>Metadata</span><select id="lora-facet-metadata"><option value="all" ${this.loraFacetMetadata === "all" ? "selected" : ""}>All</option><option value="tagged" ${this.loraFacetMetadata === "tagged" ? "selected" : ""}>Tagged · ${counts.tagged}</option><option value="matched" ${this.loraFacetMetadata === "matched" ? "selected" : ""}>CivitAI matched · ${counts.matched}</option><option value="unclassified" ${this.loraFacetMetadata === "unclassified" ? "selected" : ""}>Unclassified · ${counts.unclassified}</option><option value="stats-uncached" ${this.loraFacetMetadata === "stats-uncached" ? "selected" : ""}>CivitAI stats uncached · ${counts.statsUncached}</option></select></label>
-      <label class="lora-facet-field"><span>Sort</span><select id="lora-facet-sort"><option value="name" ${this.loraFacetSort === "name" ? "selected" : ""}>Name</option><option value="creator" ${this.loraFacetSort === "creator" ? "selected" : ""}>Creator</option><option value="tag-count" ${this.loraFacetSort === "tag-count" ? "selected" : ""}>Tag count</option><option value="downloads" ${this.loraFacetSort === "downloads" ? "selected" : ""}>CivitAI downloads</option><option value="rating" ${this.loraFacetSort === "rating" ? "selected" : ""}>CivitAI rating</option><option value="newest" ${this.loraFacetSort === "newest" ? "selected" : ""}>CivitAI newest</option></select></label>
-      <div class="lora-facet-enrichment-actions">
-        <button class="secondary-button lora-facet-enrich" data-action="enrich-lora-classification" ${this.loraFacetEnriching || !counts.unclassifiedLookupDue ? "disabled" : ""} title="Resolve up to 24 unclassified LoRAs by Swarm hash. Existing local tags stay authoritative.">${classificationRunning ? `Enriching ${progress}` : counts.unclassifiedLookupDue ? `Enrich unclassified · ${counts.unclassifiedLookupDue}` : `Unclassified checked`}</button>
-        <button class="ghost-button lora-facet-enrich" data-action="fetch-lora-civitai-stats" ${this.loraFacetEnriching || !counts.statsUncached ? "disabled" : ""} title="Fetch CivitAI popularity and version metadata for up to 24 LoRAs, prioritizing the current visible result set.">${statsRunning ? `Fetching ${progress}` : `Fetch stats · ${counts.statsUncached}`}</button>
-      </div>
-      ${active ? `<button class="ghost-button lora-facet-clear" data-action="clear-lora-facets">Clear</button>` : ""}
-      ${activeChips ? `<div class="lora-facet-active">${activeChips}</div>` : ""}
-      <small class="lora-facet-status">${counts.tags.length} local tags · ${counts.tagged}/${models.length} classified · ${counts.statsUncached} CivitAI stats uncached</small>
-    </div>`;
+  private loraFilterCount(): number {
+    return this.loraFacetTags.size + Number(Boolean(this.loraFacetCreator)) + Number(Boolean(this.loraFacetFamily)) + Number(this.loraFacetMetadata !== "all") + Number(this.loraFacetSort !== "name") + Number(this.loraShowNonMatching);
   }
 
-  private renderLoraFacetMobileModal(): string {
-    if (!this.loraFacetMobileOpen) return "";
-    const models = this.loraFacetBaseScope();
+  private loraFilterReadout(): string {
+    const tags = [...this.loraFacetTags].map(tag => `<button type="button" class="lora-facet-chip" data-remove-lora-facet-tag="${escapeHtml(tag)}" aria-label="Remove tag filter ${escapeHtml(tag)}">${escapeHtml(tag)} <span aria-hidden="true">×</span></button>`).join("");
+    const labels = [this.loraShowNonMatching ? "All checkpoint families" : "", this.loraFacetCreator, this.loraFacetFamily, this.loraFacetMetadata !== "all" ? this.loraFacetMetadata.replaceAll("-", " ") : "", this.loraFacetSort !== "name" ? "Sort: " + this.loraFacetSort.replaceAll("-", " ") : ""].filter(Boolean);
+    return this.loraFilterCount() || this.loraOrphanMode ? `<div class="lora-toolbar-readout">${this.loraOrphanMode ? '<button type="button" class="lora-facet-chip" data-action="exit-orphaned-loras">Orphaned only ×</button>' : ""}${tags}${labels.map(label => `<span class="lora-facet-chip">${escapeHtml(label)}</span>`).join("")}${this.loraFilterCount() ? '<button type="button" class="ghost-button" data-action="clear-lora-facets">Clear filters</button>' : ""}</div>` : "";
+  }
+
+  private loraToolsMarkup(models: SwarmModel[]): string {
+    if (this.loraBatchMode) return `<button type="button" class="secondary-button is-active" data-action="toggle-lora-batch">Done organizing · ${this.loraBatchSelected.size}</button>`;
     const counts = buildLoraFacetCounts(models, this.loraFacetCache);
-    const selectedTagKeys = new Set([...this.loraFacetTags].map((tag) => tag.toLowerCase()));
-    const tagRows = counts.tags.slice(0, 160).map(({ name, count }) => `<label class="lora-facet-check" data-lora-facet-tag-row="${escapeHtml(name.toLowerCase())}"><input type="checkbox" data-lora-facet-tag="${escapeHtml(name)}" ${selectedTagKeys.has(name.toLowerCase()) ? "checked" : ""}/><span>${escapeHtml(name)}</span><small>${count}</small></label>`).join("");
-    const creatorOptions = counts.creators.map(({ name, count }) => `<option value="${escapeHtml(name)}" ${name.toLowerCase() === this.loraFacetCreator.toLowerCase() ? "selected" : ""}>${escapeHtml(name)} · ${count}</option>`).join("");
-    const familyOptions = counts.families.map(({ name, count }) => `<option value="${escapeHtml(name)}" ${name.toLowerCase() === this.loraFacetFamily.toLowerCase() ? "selected" : ""}>${escapeHtml(name)} · ${count}</option>`).join("");
-    return `<div class="download-backdrop lora-facet-mobile-backdrop" data-action="close-lora-facet-mobile"><section class="download-modal lora-facet-mobile-modal" data-lora-facet-mobile-dialog role="dialog" aria-modal="true" aria-labelledby="lora-facet-mobile-title">
-      <header><div><span class="panel-kicker">LOCAL LORA FACETS</span><h2 id="lora-facet-mobile-title">Filter installed LoRAs</h2></div><button class="icon-button" data-action="close-lora-facet-mobile" aria-label="Close">×</button></header>
-      <div class="lora-facet-mobile-body">
-        <label class="lora-facet-field"><span>Creator</span><select id="lora-facet-mobile-creator"><option value="">All creators</option>${creatorOptions}</select></label>
-        <label class="lora-facet-field"><span>Family</span><select id="lora-facet-mobile-family"><option value="">All families</option>${familyOptions}</select></label>
-        <label class="lora-facet-field"><span>Metadata</span><select id="lora-facet-mobile-metadata"><option value="all" ${this.loraFacetMetadata === "all" ? "selected" : ""}>All</option><option value="tagged" ${this.loraFacetMetadata === "tagged" ? "selected" : ""}>Tagged · ${counts.tagged}</option><option value="matched" ${this.loraFacetMetadata === "matched" ? "selected" : ""}>CivitAI matched · ${counts.matched}</option><option value="unclassified" ${this.loraFacetMetadata === "unclassified" ? "selected" : ""}>Unclassified · ${counts.unclassified}</option><option value="stats-uncached" ${this.loraFacetMetadata === "stats-uncached" ? "selected" : ""}>CivitAI stats uncached · ${counts.statsUncached}</option></select></label>
-        <label class="lora-facet-field"><span>Sort</span><select id="lora-facet-mobile-sort"><option value="name" ${this.loraFacetSort === "name" ? "selected" : ""}>Name</option><option value="creator" ${this.loraFacetSort === "creator" ? "selected" : ""}>Creator</option><option value="tag-count" ${this.loraFacetSort === "tag-count" ? "selected" : ""}>Tag count</option><option value="downloads" ${this.loraFacetSort === "downloads" ? "selected" : ""}>CivitAI downloads</option><option value="rating" ${this.loraFacetSort === "rating" ? "selected" : ""}>CivitAI rating</option><option value="newest" ${this.loraFacetSort === "newest" ? "selected" : ""}>CivitAI newest</option></select></label>
-        <div class="lora-facet-mobile-tags"><div><b>Tags</b><small>OR within tags; AND with the fields above.</small></div><label class="lora-facet-tag-search"><input id="lora-facet-mobile-tag-search" value="${escapeHtml(this.loraFacetTagQuery)}" placeholder="Search local tags…" autocomplete="off" /></label><div class="lora-facet-tag-list">${tagRows || `<div class="compact-empty">No tags indexed here yet.</div>`}</div></div>
-        <div class="lora-facet-enrichment-actions lora-facet-enrichment-actions--mobile">
-          <button class="secondary-button" data-action="enrich-lora-classification" ${this.loraFacetEnriching || !counts.unclassifiedLookupDue ? "disabled" : ""}>${this.loraFacetEnriching && this.loraFacetEnrichMode === "classification" ? `Enriching ${this.loraFacetEnrichDone}/${this.loraFacetEnrichTotal}` : counts.unclassifiedLookupDue ? `Enrich unclassified · ${counts.unclassifiedLookupDue}` : `Unclassified checked`}</button>
-          <button class="ghost-button" data-action="fetch-lora-civitai-stats" ${this.loraFacetEnriching || !counts.statsUncached ? "disabled" : ""}>${this.loraFacetEnriching && this.loraFacetEnrichMode === "stats" ? `Fetching ${this.loraFacetEnrichDone}/${this.loraFacetEnrichTotal}` : `Fetch CivitAI stats · ${counts.statsUncached}`}</button>
-          <small>${counts.tags.length} local tags · ${counts.tagged}/${models.length} classified · ${counts.statsUncached} stats uncached</small>
-        </div>
-      </div>
-      <footer class="form-actions"><button class="ghost-button" data-action="clear-lora-facets">Clear filters</button><button class="primary-button" data-action="close-lora-facet-mobile">Done</button></footer>
-    </section></div>`;
+    return actionMenu("lora-tools-menu", "Manage", "LoRA collection", `
+      <div class="studio-menu-section"><button type="button" data-action="toggle-lora-batch">Organize LoRAs<small>Select models to move or delete in a batch.</small></button></div>
+      <div class="studio-menu-section"><small>DISPLAY</small><button type="button" data-action="toggle-lora-view">${this.loraMobileGrid ? "Switch to list view" : "Switch to grid view"}<small>Choose how installed LoRAs are displayed.</small></button></div>
+      <div class="studio-menu-section"><small>METADATA</small>
+        <button type="button" data-action="enrich-lora-classification" ${this.loraFacetEnriching || !counts.unclassifiedLookupDue ? "disabled" : ""}>Enrich unclassified · ${counts.unclassifiedLookupDue}<small>Resolve unclassified models by their Swarm hash.</small></button>
+        <button type="button" data-action="fetch-lora-civitai-stats" ${this.loraFacetEnriching || !counts.statsUncached ? "disabled" : ""}>Fetch CivitAI stats · ${counts.statsUncached}<small>Downloads, ratings and version information.</small></button>
+        <small>${counts.tagged}/${models.length} classified · ${counts.statsUncached} CivitAI stats uncached</small>
+      </div>`);
+  }
+
+  private showLoraFilters(): void {
+    this.closeModelFolderNavigators();
+    const all = (this.loraOrphanMode ? this.orphanedLoras() : this.loras).filter(model => this.loraInCurrentFolder(model));
+    const matching = new Set(this.compatibleLoras().map(model => model.name));
+    const scoped = (value: LoraFilterSelection) => all.filter(model => this.loraOrphanMode || value.showNonMatching || matching.has(model.name));
+    openLoraFilters({ models: all, cache: this.loraFacetCache, value: { ...this.loraFacetFilters(), showNonMatching: this.loraShowNonMatching }, orphaned: this.loraOrphanMode,
+      count: value => applyLoraFacetView(scoped(value), this.loraFacetCache, value).filter(model => {
+        const facet = effectiveFacetMetadata(model, this.loraFacetCache);
+        return !this.loraSearch.trim() || [model.name, model.title, model.author, model.description, model.trigger_phrase, facet.creator, facet.family, ...facet.tags].filter(Boolean).join(" ").toLowerCase().includes(this.loraSearch.trim().toLowerCase());
+      }).length,
+      apply: value => {
+        this.loraFacetTags = new Set(value.tags); this.loraFacetCreator = value.creator; this.loraFacetFamily = value.family;
+        this.loraFacetMetadata = value.metadata; this.loraFacetSort = value.sort; this.loraShowNonMatching = value.showNonMatching;
+        this.persistLoraFacetPreferences();
+        try { localStorage.setItem("swarm-studio-lora-show-nonmatching", String(this.loraShowNonMatching)); } catch { /* session preference */ }
+        this.render();
+      },
+    });
   }
 
   private facetRecordFromCivitai(model: SwarmModel, hash: string, version: Record<string, unknown>, detail: Record<string, unknown>): CivitaiFacetRecord {
@@ -3857,6 +3901,7 @@ export class StudioApp {
 
   private renderModels(): string {
     const checkpoint = this.currentCheckpoint();
+    const visibleCheckpoints = this.models.filter(model => modelInFolder(model.name, this.checkpointFolderPath, this.checkpointFolderDepth));
     const matching = this.compatibleLoras();
     const orphaned = this.orphanedLoras();
     const sourceLoras = this.loraOrphanMode ? orphaned : (this.loraShowNonMatching ? this.loras : matching);
@@ -3868,7 +3913,6 @@ export class StudioApp {
       return !search || [model.name, model.title, model.author, model.description, model.trigger_phrase, facet.creator, facet.family, ...facet.tags].filter(Boolean).join(" ").toLowerCase().includes(search);
     };
     const visibleCount = browsedLoras.filter(matchesSearch).length;
-    const selectedCount = this.loraBatchSelected.size;
     const folderLabel = this.loraFolderPath || "LoRA root";
     return `
       <div class="models-composer-layout">
@@ -3882,27 +3926,28 @@ export class StudioApp {
             <button class="secondary-button" data-action="refresh-models">Refresh</button>
           </section>
           <section class="checkpoint-section ${this.checkpointsOpen ? "is-open" : ""}">
-            <button class="section-heading checkpoint-collapse" data-action="toggle-checkpoints" aria-expanded="${this.checkpointsOpen}"><div><span class="panel-kicker">MODELS · ${this.models.length}</span><h2>Checkpoints</h2></div><span>${this.checkpointsOpen ? "⌃" : "⌄"}</span></button>
-            ${this.checkpointsOpen ? ((this.models.length || this.loras.length) ? `<div class="model-grid"><article class="model-card orphan-model-card ${this.loraOrphanMode ? "is-active" : ""}"><div class="model-preview orphan-model-preview"><span>∅</span></div><div class="model-card-copy"><span class="tiny-tag">LIBRARY VIEW</span><h3>Orphaned LoRAs</h3><p>${orphaned.length} LoRA${orphaned.length === 1 ? "" : "s"} match none of the installed checkpoints.</p></div><button class="ghost-button" data-action="show-orphaned-loras">${this.loraOrphanMode ? "Viewing" : "Browse"}</button></article>${this.models.map((model) => this.modelCard(model, false)).join("")}</div>` : this.inventoryEmpty("Connect to browse checkpoints directly from SwarmUI.")) : ""}
+            <button class="section-heading checkpoint-collapse" data-action="toggle-checkpoints" aria-expanded="${this.checkpointsOpen}" aria-controls="checkpoint-browser"><div><span class="panel-kicker">MODELS · ${this.models.length}</span><h2>Checkpoints</h2></div><span>${this.checkpointsOpen ? "⌃" : "⌄"}</span></button>
+            <div id="checkpoint-browser" ${this.checkpointsOpen ? "" : "hidden"}>
+            <div class="panel checkpoint-folder-toolbar"><button type="button" class="secondary-button lora-organizer-action" data-action="toggle-checkpoint-tree" aria-expanded="${this.checkpointFolderTreeOpen}" aria-controls="checkpoint-folder-navigator">${folderTreeSvg}<span>Folders</span></button><b class="model-folder-location">${escapeHtml(this.checkpointFolderPath || "Checkpoint root")} · ${visibleCheckpoints.length}</b>${this.modelFolderDepthMarkup("checkpoint")}</div>
+            <div class="lora-library-browser">${this.modelFolderTreeMarkup("checkpoint")}
+            ${this.checkpointsOpen ? ((this.models.length || this.loras.length) ? `<div class="model-grid"><article class="model-card orphan-model-card ${this.loraOrphanMode ? "is-active" : ""}"><div class="model-preview orphan-model-preview"><span>∅</span></div><div class="model-card-copy"><span class="tiny-tag">LIBRARY VIEW</span><h3>Orphaned LoRAs</h3><p>${orphaned.length} LoRA${orphaned.length === 1 ? "" : "s"} match none of the installed checkpoints.</p></div><button class="ghost-button" data-action="show-orphaned-loras">${this.loraOrphanMode ? "Viewing" : "Browse"}</button></article>${visibleCheckpoints.map((model) => this.modelCard(model, false)).join("")}</div>` : this.inventoryEmpty("Connect to browse checkpoints directly from SwarmUI.")) : ""}
+            ${this.checkpointsOpen && this.models.length && !visibleCheckpoints.length ? this.inventoryEmpty("No checkpoints at this folder depth.") : ""}
+            </div></div>
           </section>
           <section class="lora-library-section">
             <div class="section-heading lora-library-heading"><div><span class="panel-kicker">${this.loraOrphanMode ? "ORPHANED LORAS" : this.loraShowNonMatching ? "SERVER LORAS" : "MATCHING LORAS"} · ${escapeHtml(folderLabel)}</span><h2>${this.loraOrphanMode ? "No installed checkpoint match" : escapeHtml(checkpoint?.title || prettyName(this.store.state.draft.model) || "Select a checkpoint")}</h2></div></div>
-            <div class="lora-library-toolbar panel">
-              <div class="lora-library-search-row">
-                <label class="library-search"><span>⌕</span><input id="lora-library-search" value="${escapeHtml(this.loraSearch)}" placeholder="Search this folder…" autocomplete="off" /></label>
-                ${this.loraOrphanMode ? `<button class="lora-match-toggle lora-orphan-pill" data-action="exit-orphaned-loras" title="Return to the current checkpoint"><span>∅ Orphaned only</span></button>` : `<label class="lora-match-toggle" title="Show every indexed LoRA, including incompatible or incorrectly classified models"><input id="lora-show-nonmatching" type="checkbox" ${this.loraShowNonMatching ? "checked" : ""} /><span>Show non-matching</span></label>`}
-                <div class="lora-library-view-tools">
-                  <button class="icon-button lora-facet-mobile-button" data-action="open-lora-facet-mobile" title="Filter and sort installed LoRAs" aria-label="Filter and sort installed LoRAs">${filterSvg}<small>Filters</small></button>
-                  <button class="icon-button mobile-lora-view-toggle" data-action="toggle-lora-view" title="${this.loraMobileGrid ? "Switch to list view" : "Switch to grid view"}" aria-label="${this.loraMobileGrid ? "Switch to list view" : "Switch to grid view"}">${this.loraMobileGrid ? "☷" : "▦"}<small>${this.loraMobileGrid ? "List" : "Grid"}</small></button>
+            <div class="lora-library-toolbar lora-library-toolbar--grouped panel">
+              <div class="lora-toolbar-main">
+                <label class="library-search lora-search-field"><span aria-hidden="true">⌕</span><input id="lora-library-search" aria-label="Search LoRAs" value="${escapeHtml(this.loraSearch)}" placeholder="Search this folder…" autocomplete="off"/><small data-lora-result-count>${visibleCount} result${visibleCount === 1 ? "" : "s"}</small></label>
+                <div class="lora-toolbar-actions">
+                  <button type="button" class="secondary-button lora-organizer-action" data-action="toggle-lora-tree" aria-expanded="${this.loraFolderTreeOpen}" aria-controls="lora-folder-navigator">${folderTreeSvg}<span>Folders</span></button>
+                  <button type="button" class="secondary-button lora-filter-trigger" data-action="open-lora-filters" aria-haspopup="dialog">${filterSvg}<span>Filters</span>${this.loraFilterCount() ? `<b>${this.loraFilterCount()}</b>` : ""}</button>
+                  ${this.loraToolsMarkup(folderLoras)}
+                  ${actionMenu("lora-add-menu", "Add", "Add LoRAs", '<div class="studio-menu-section"><button type="button" data-nav="civitai">Search CivitAI<small>Find and install a new LoRA.</small></button><button type="button" data-action="open-lora-download" ' + (this.connected ? "" : "disabled") + '>Download from URL<small>Import a model using its download link.</small></button></div>', true)}
                 </div>
               </div>
-              ${this.loraFacetSummaryMarkup(folderLoras)}
-              <div class="lora-library-actions">
-                <button class="secondary-button lora-organizer-action" data-action="toggle-lora-tree" title="Browse Swarm LoRA folders">${folderTreeSvg}<span>Folders</span></button>
-                <button class="secondary-button lora-organizer-action ${this.loraBatchMode ? "is-active" : ""}" data-action="toggle-lora-batch" title="${this.loraBatchMode ? "Finish organizing LoRAs" : "Select and move LoRAs into folders"}">${batchSelectSvg}<span>${this.loraBatchMode ? "Done" : "Organize"}</span>${this.loraBatchMode ? `<b>${selectedCount}</b>` : ""}</button>
-                <button class="secondary-button" data-nav="civitai">⌕ Search CivitAI</button>
-                <button class="primary-button" data-action="open-lora-download" ${this.connected ? "" : "disabled"}>↓ URL download</button>
-              </div>
+              ${this.loraFilterReadout()}
+              ${this.loraFacetEnriching ? `<small class="lora-tool-progress" role="status">${this.loraFacetEnrichMode === "stats" ? "Fetching stats" : "Enriching classification"} · ${this.loraFacetEnrichDone}/${this.loraFacetEnrichTotal}</small>` : ""}
             </div>
             <div class="lora-library-browser">
               ${this.loraFolderTreeMarkup()}
@@ -4652,6 +4697,7 @@ export class StudioApp {
   }
 
   private bindGlobalEvents(): void {
+    bindActionMenus(this.root);
     this.bindStudioUpdateEvents();
     this.root.querySelector<HTMLElement>("[data-action='hide-generation-mini']")?.addEventListener("click", () => { this.generationMiniEnabled = false; try { localStorage.setItem("swarm-studio-generation-mini", "false"); } catch {} this.root.querySelector<HTMLElement>("[data-generation-mini]")?.remove(); });
     const mini = this.root.querySelector<HTMLElement>("[data-generation-mini]");
@@ -8106,13 +8152,6 @@ export class StudioApp {
     return fallback;
   }
 
-  private outputDateFromPath(path: string): number | null {
-    const match = String(path ?? "").match(/(?:^|\/)(\d{4})-(\d{2})-(\d{2})(?:\/|$)/);
-    if (!match) return null;
-    const time = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12, 0, 0).getTime();
-    return Number.isFinite(time) ? time : null;
-  }
-
   private metadataObject(metadata: unknown): Record<string, unknown> {
     let parsed: unknown = metadata;
     for (let depth = 0; depth < 4 && typeof parsed === "string" && parsed.trim(); depth += 1) {
@@ -8122,56 +8161,14 @@ export class StudioApp {
   }
 
   private generationTimingFromMetadata(metadata: unknown): Pick<OutputRecord, "prepTimeMs" | "generationTimeMs" | "totalTimeMs"> {
-    const rawText = typeof metadata === "string" ? metadata : (() => { try { return JSON.stringify(metadata ?? ""); } catch { return ""; } })();
-    const root = this.metadataObject(metadata);
-    const extraRaw = root.sui_extra_data ?? root.suiExtraData;
-    const extra = this.metadataObject(extraRaw);
-    const normalizedEntries = (record: Record<string, unknown>) => new Map(Object.entries(record).map(([key, value]) => [key.toLowerCase().replace(/[^a-z0-9]+/g, ""), value]));
-    const rootEntries = normalizedEntries(root);
-    const extraEntries = normalizedEntries(extra);
-    const read = (...names: string[]): unknown => {
-      for (const name of names) {
-        const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "");
-        const value = extraEntries.get(key) ?? rootEntries.get(key);
-        if (value != null) return value;
-      }
-      return undefined;
-    };
-    const seconds = (value: unknown): number | undefined => {
-      if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
-      if (typeof value === "string") {
-        const match = value.match(/-?\d+(?:\.\d+)?/);
-        const number = match ? Number(match[0]) : NaN;
-        if (Number.isFinite(number) && number >= 0) return number;
-      }
-      return undefined;
-    };
-    let prepSeconds = seconds(read("prep_time", "preptime", "prepare_time", "preparation_time"));
-    let generationSeconds = seconds(read("generation_time", "generationtime", "gen_time", "gentime"));
-    let totalSeconds = seconds(read("total_time", "totaltime"));
-
-    const combined = rawText.match(/(\d+(?:\.\d+)?)\s*\(prep\)\s*(?:and|\+)\s*(\d+(?:\.\d+)?)\s*\((?:gen|generation)\)\s*seconds?/i);
-    if (combined) {
-      prepSeconds ??= Number(combined[1]);
-      generationSeconds ??= Number(combined[2]);
-    }
-    const prepOnly = rawText.match(/(?:prep(?:aration)?[_\s-]*time|prepping)[^0-9]{0,12}(\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?/i);
-    const genOnly = rawText.match(/(?:generation[_\s-]*time|generating|gen[_\s-]*time)[^0-9]{0,12}(\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?/i);
-    if (prepOnly) prepSeconds ??= Number(prepOnly[1]);
-    if (genOnly) generationSeconds ??= Number(genOnly[1]);
-    if (totalSeconds == null && prepSeconds != null && generationSeconds != null) totalSeconds = prepSeconds + generationSeconds;
-    return {
-      prepTimeMs: prepSeconds != null && Number.isFinite(prepSeconds) ? Math.max(0, prepSeconds * 1000) : undefined,
-      generationTimeMs: generationSeconds != null && Number.isFinite(generationSeconds) ? Math.max(0, generationSeconds * 1000) : undefined,
-      totalTimeMs: totalSeconds != null && Number.isFinite(totalSeconds) ? Math.max(0, totalSeconds * 1000) : undefined,
-    };
+    return generationTiming(metadata);
   }
 
   private outputTiming(output: OutputRecord): Pick<OutputRecord, "prepTimeMs" | "generationTimeMs" | "totalTimeMs"> {
     const metadataTiming = this.generationTimingFromMetadata(output.metadata);
-    const prepTimeMs = Number.isFinite(Number(output.prepTimeMs)) ? Number(output.prepTimeMs) : metadataTiming.prepTimeMs;
-    const generationTimeMs = Number.isFinite(Number(output.generationTimeMs)) ? Number(output.generationTimeMs) : metadataTiming.generationTimeMs;
-    const totalTimeMs = Number.isFinite(Number(output.totalTimeMs)) ? Number(output.totalTimeMs) : metadataTiming.totalTimeMs ?? (prepTimeMs != null && generationTimeMs != null ? prepTimeMs + generationTimeMs : undefined);
+    const prepTimeMs = metadataTiming.prepTimeMs ?? (Number.isFinite(Number(output.prepTimeMs)) ? Number(output.prepTimeMs) : undefined);
+    const generationTimeMs = metadataTiming.generationTimeMs ?? (Number.isFinite(Number(output.generationTimeMs)) ? Number(output.generationTimeMs) : undefined);
+    const totalTimeMs = metadataTiming.totalTimeMs ?? (Number.isFinite(Number(output.totalTimeMs)) ? Number(output.totalTimeMs) : (prepTimeMs != null && generationTimeMs != null ? prepTimeMs + generationTimeMs : undefined));
     return { prepTimeMs, generationTimeMs, totalTimeMs };
   }
 
@@ -8393,6 +8390,7 @@ export class StudioApp {
               swarmSourcePath: sourcePath,
               url: this.client.imageUrl(path),
               metadata: refreshedMetadata,
+              createdAt: historyCreatedAt(sourcePath, refreshedMetadata, current.createdAt),
               ...this.generationTimingFromMetadata(refreshedMetadata),
             });
             existingByPath.set(path, current);
@@ -8417,7 +8415,7 @@ export class StudioApp {
               sourceUrl: "",
             } satisfies LoraStackItem;
           });
-          const historicDate = this.outputDateFromPath(sourcePath);
+          const historicDate = historyCreatedAt(sourcePath, file.metadata);
           const hydrated: OutputRecord = {
             id: createId(),
             url: this.client.imageUrl(path),
@@ -8432,7 +8430,7 @@ export class StudioApp {
             height: asNumber(String(this.metadataValue(params, "height") ?? 0), 0),
             seed: asNumber(String(this.metadataValue(params, "seed") ?? -1), -1),
             starred: leaf ? starredLeaves.has(leaf) : false,
-            createdAt: historicDate ?? Date.now(),
+            createdAt: historicDate,
             metadata: String(file.metadata ?? ""),
             request,
             loras,
@@ -8503,7 +8501,7 @@ export class StudioApp {
         }
       }
 
-      outputs.sort((a, b) => b.createdAt - a.createdAt);
+      outputs.sort(compareOutputDates);
       this.store.save();
       this.clearNativeImageCache();
       this.libraryRenderLimit = 240;
@@ -8800,23 +8798,107 @@ export class StudioApp {
   }
 
   private bindIdentityEvents(): void {
-    this.root.querySelector<HTMLElement>("[data-action='new-identity']")?.addEventListener("click", () => { this.identityEditingId = ""; this.store.updateUi({ identityEditorOpen: true }); this.render(); });
-    this.root.querySelector<HTMLElement>("[data-action='close-identity-editor']")?.addEventListener("click", () => { this.identityEditingId = ""; this.store.updateUi({ identityEditorOpen: false }); this.render(); });
-    this.root.querySelectorAll<HTMLElement>("[data-edit-identity]").forEach((button) => button.addEventListener("click", () => { this.identityEditingId = button.dataset.editIdentity ?? ""; this.store.updateUi({ identityEditorOpen: true }); this.render(); }));
-    const readPicture = (file: File, id: string | null) => { const reader = new FileReader(); reader.onload = () => { const avatarUrl = String(reader.result ?? ""); if (id) { const identity = this.store.state.identities.find((item) => item.id === id); if (identity) this.store.saveIdentity({ ...identity, id, avatarUrl }); } else { const input = this.root.querySelector<HTMLInputElement>("#identity-form input[name='avatarUrl']"); if (input) input.value = avatarUrl; } this.render(); }; reader.readAsDataURL(file); };
+    this.root.querySelector<HTMLElement>("[data-action='new-identity']")?.addEventListener("click", () => { this.identityEditingId = ""; this.identityFormDraft = null; this.identityPictureReading = false; this.identitySaveBusy = false; this.identityEditorEpoch++; this.store.updateUi({ identityEditorOpen: true }); this.render(); });
+    this.root.querySelector<HTMLElement>("[data-action='close-identity-editor']")?.addEventListener("click", () => { this.identityEditingId = ""; this.identityFormDraft = null; this.identityPictureReading = false; this.identitySaveBusy = false; this.identityEditorEpoch++; this.store.updateUi({ identityEditorOpen: false }); this.render(); });
+    this.root.querySelectorAll<HTMLElement>("[data-edit-identity]").forEach((button) => button.addEventListener("click", () => { this.identityEditingId = button.dataset.editIdentity ?? ""; this.identityFormDraft = null; this.identityPictureReading = false; this.identitySaveBusy = false; this.identityEditorEpoch++; this.store.updateUi({ identityEditorOpen: true }); this.render(); }));
+    const captureDraft = () => {
+      const form = this.root.querySelector<HTMLFormElement>("#identity-form");
+      if (!form) return;
+      const data = new FormData(form);
+      this.identityFormDraft = {
+        id: String(data.get("id") ?? ""), name: String(data.get("name") ?? ""),
+        folderId: String(data.get("folderId") ?? folderIds.unfiled),
+        positivePrompt: String(data.get("positivePrompt") ?? ""), negativePrompt: String(data.get("negativePrompt") ?? ""),
+        model: String(data.get("model") ?? ""), notes: String(data.get("notes") ?? ""),
+        avatarUrl: String(data.get("avatarUrl") ?? ""), bindLoras: data.get("bindLoras") === "on",
+        avatarDirty: this.identityFormDraft?.avatarDirty ?? false,
+      };
+    };
+    const updateEditorPicture = (url: string) => {
+      const input = this.root.querySelector<HTMLInputElement>("#identity-form input[name='avatarUrl']");
+      if (!input) return;
+      input.value = url;
+      captureDraft();
+      if (this.identityFormDraft) this.identityFormDraft.avatarDirty = true;
+      const preview = this.root.querySelector(".identity-editor-avatar > img, .identity-editor-avatar > span");
+      if (preview) preview.outerHTML = url ? `<img src="${escapeHtml(url)}" alt="" />` : `<span>${escapeHtml((this.identityFormDraft?.name || "?").slice(0, 1).toUpperCase())}</span>`;
+      const remove = this.root.querySelector<HTMLButtonElement>("[data-action='clear-identity-picture']");
+      if (remove) remove.hidden = !url;
+    };
+    const readPicture = async (file: File, id: string | null) => {
+      const epoch = this.identityEditorEpoch;
+      const picker = id ? this.root.querySelector<HTMLInputElement>(`[data-identity-picture-input="${CSS.escape(id)}"]`) : this.root.querySelector<HTMLInputElement>("#identity-picture-input");
+      if (picker) picker.disabled = true;
+      if (!id) {
+        this.identityPictureReading = true;
+        const submit = this.root.querySelector<HTMLButtonElement>("#identity-form [type='submit']");
+        if (submit) submit.disabled = true;
+      }
+      try {
+        const thumbnail = await identityThumbnail(file);
+        const avatarUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result ?? ""));
+          reader.onerror = () => reject(new Error("Could not read the identity picture."));
+          reader.readAsDataURL(thumbnail);
+        });
+        if (id) {
+          const identity = this.store.state.identities.find(item => item.id === id);
+          if (identity) { await this.store.saveIdentity({ ...identity, id, avatarUrl }); this.render(); }
+        } else if (epoch === this.identityEditorEpoch && this.store.state.ui.identityEditorOpen) updateEditorPicture(avatarUrl);
+      } catch (error) { this.notify(error instanceof Error ? error.message : String(error), "error"); }
+      finally {
+        if (picker) { picker.disabled = false; picker.value = ""; }
+        if (!id && epoch === this.identityEditorEpoch) {
+          this.identityPictureReading = false;
+          const submit = this.root.querySelector<HTMLButtonElement>("#identity-form [type='submit']");
+          if (submit) submit.disabled = this.identitySaveBusy;
+        }
+      }
+    };
     this.root.querySelector<HTMLElement>("[data-action='choose-identity-picture']")?.addEventListener("click", () => this.root.querySelector<HTMLInputElement>("#identity-picture-input")?.click());
-    this.root.querySelector<HTMLInputElement>("#identity-picture-input")?.addEventListener("change", (event) => { const file = (event.currentTarget as HTMLInputElement).files?.[0]; if (file) readPicture(file, null); });
-    this.root.querySelector<HTMLElement>("[data-action='clear-identity-picture']")?.addEventListener("click", () => { const input = this.root.querySelector<HTMLInputElement>("#identity-form input[name='avatarUrl']"); if (input) input.value = ""; const current = this.store.state.identities.find((item) => item.id === this.identityEditingId); if (current) this.store.saveIdentity({ ...current, id: current.id, avatarUrl: "" }); this.render(); });
-    this.root.querySelectorAll<HTMLElement>("[data-picture-identity]").forEach((button) => button.addEventListener("click", () => this.root.querySelector<HTMLInputElement>(`[data-identity-picture-input="${button.dataset.pictureIdentity}"]`)?.click()));
-    this.root.querySelectorAll<HTMLInputElement>("[data-identity-picture-input]").forEach((input) => input.addEventListener("change", () => { const file = input.files?.[0]; const id = input.dataset.identityPictureInput ?? ""; if (file && id) readPicture(file, id); }));
+    this.root.querySelector<HTMLInputElement>("#identity-picture-input")?.addEventListener("change", event => { const file = (event.currentTarget as HTMLInputElement).files?.[0]; if (file) void readPicture(file, null); });
+    this.root.querySelector<HTMLElement>("[data-action='clear-identity-picture']")?.addEventListener("click", () => updateEditorPicture(""));
+    this.root.querySelectorAll<HTMLElement>("[data-picture-identity]").forEach(button => button.addEventListener("click", () => this.root.querySelector<HTMLInputElement>(`[data-identity-picture-input="${CSS.escape(button.dataset.pictureIdentity || "")}"]`)?.click()));
+    this.root.querySelectorAll<HTMLInputElement>("[data-identity-picture-input]").forEach(input => input.addEventListener("change", () => { const file = input.files?.[0]; const id = input.dataset.identityPictureInput ?? ""; if (file && id) void readPicture(file, id); }));
     const form = this.root.querySelector<HTMLFormElement>("#identity-form");
-    form?.addEventListener("submit", (event) => {
-      event.preventDefault(); const data = new FormData(form); const bindLoras = data.get("bindLoras") === "on"; const id = String(data.get("id") ?? ""); const existing = this.store.state.identities.find((item) => item.id === id);
-      this.store.saveIdentity({ id: id || undefined, name: String(data.get("name") ?? ""), folderId: String(data.get("folderId") ?? folderIds.unfiled), positivePrompt: String(data.get("positivePrompt") ?? ""), negativePrompt: String(data.get("negativePrompt") ?? ""), model: String(data.get("model") ?? ""), notes: String(data.get("notes") ?? ""), avatarUrl: String(data.get("avatarUrl") ?? existing?.avatarUrl ?? ""), loraStack: bindLoras ? cloneStack(existing?.loraStack.length ? existing.loraStack : this.store.state.draft.loras) : [] });
-      this.identityEditingId = ""; this.store.updateUi({ identityEditorOpen: false }); this.notify("Identity saved to the library.", "success"); this.render();
+    form?.addEventListener("input", captureDraft);
+    form?.addEventListener("change", captureDraft);
+    form?.addEventListener("submit", async event => {
+      event.preventDefault();
+      if (this.identitySaveBusy || this.identityPictureReading) return;
+      captureDraft();
+      const draft = this.identityFormDraft!;
+      const epoch = this.identityEditorEpoch;
+      this.identitySaveBusy = true;
+      form.dataset.saving = "true";
+      form.setAttribute("aria-busy", "true");
+      const submit = form.querySelector<HTMLButtonElement>("[type='submit']");
+      if (submit) submit.disabled = true;
+      try {
+        await this.store.initializeIdentityAvatars();
+        const existing = this.store.state.identities.find(item => item.id === draft.id);
+        await this.store.saveIdentity({ ...draft, id: draft.id || undefined,
+          avatarUrl: draft.avatarDirty ? draft.avatarUrl : existing?.avatarUrl ?? draft.avatarUrl,
+          loraStack: draft.bindLoras ? cloneStack(existing?.loraStack.length ? existing.loraStack : this.store.state.draft.loras) : [],
+        });
+        if (epoch === this.identityEditorEpoch) {
+          this.identityEditingId = ""; this.identityFormDraft = null; this.identitySaveBusy = false; this.identityEditorEpoch++;
+          this.store.updateUi({ identityEditorOpen: false }); this.render();
+        }
+        this.notify("Identity saved to the library.", "success");
+      } catch (error) { this.notify(error instanceof Error ? error.message : String(error), "error"); }
+      finally {
+        delete form.dataset.saving; form.removeAttribute("aria-busy");
+        if (epoch === this.identityEditorEpoch) {
+          this.identitySaveBusy = false;
+          const currentSubmit = this.root.querySelector<HTMLButtonElement>("#identity-form [type='submit']");
+          if (currentSubmit) currentSubmit.disabled = this.identityPictureReading;
+        }
+      }
     });
     this.root.querySelectorAll<HTMLElement>("[data-apply-identity]").forEach((button) => button.addEventListener("click", () => { const identity = this.store.state.identities.find((item) => item.id === button.dataset.applyIdentity); if (!identity) return; const current = this.store.state.draft; this.store.updateDraft({ prompt: [identity.positivePrompt, current.prompt].filter(Boolean).join(", "), negativePrompt: [identity.negativePrompt, current.negativePrompt].filter(Boolean).join(", "), model: identity.model || current.model, loras: identity.loraStack.length ? cloneStack(identity.loraStack) : current.loras }); this.view = "create"; this.store.updateUi({ lastView: "create" }); this.render(); this.notify(`${identity.name} applied to Create.`, "success"); }));
-    this.root.querySelectorAll<HTMLElement>("[data-delete-identity]").forEach((button) => button.addEventListener("click", () => { if (window.confirm("Delete this identity?")) { this.store.deleteIdentity(button.dataset.deleteIdentity ?? ""); this.render(); } }));
+    this.root.querySelectorAll<HTMLElement>("[data-delete-identity]").forEach((button) => button.addEventListener("click", async () => { if (window.confirm("Delete this identity?")) { try { await this.store.deleteIdentity(button.dataset.deleteIdentity ?? ""); this.render(); } catch (error) { this.notify(error instanceof Error ? error.message : String(error), "error"); } } }));
   }
 
   private loraArchitectureForFamily(family: string): string {
@@ -9605,21 +9687,72 @@ export class StudioApp {
     this.render();
   }
 
+  private closeModelFolderNavigators(): void {
+    this.loraFolderTreeOpen = false;
+    this.checkpointFolderTreeOpen = false;
+    for (const kind of ["checkpoint", "lora"]) {
+      this.root.querySelector(`#${kind}-folder-navigator`)?.classList.remove("is-open");
+      this.root.querySelector(`[data-action='toggle-${kind}-tree']`)?.setAttribute("aria-expanded", "false");
+    }
+  }
+
   private bindLoraOrganizerEvents(): void {
-    this.root.querySelector<HTMLElement>("[data-action='toggle-lora-tree']")?.addEventListener("click", () => {
-      this.loraFolderTreeOpen = !this.loraFolderTreeOpen;
-      this.render();
-    });
-    this.root.querySelector<HTMLElement>("[data-action='close-lora-tree']")?.addEventListener("click", () => {
-      this.loraFolderTreeOpen = false;
-      this.render();
-    });
-    this.root.querySelectorAll<HTMLElement>("[data-lora-folder]").forEach((button) => button.addEventListener("click", () => {
-      this.loraFolderPath = this.normalizeLoraPath(button.dataset.loraFolder ?? "");
-      this.loraFolderTreeOpen = false;
-      this.loraBatchSelected.clear();
-      this.render();
+    this.root.querySelectorAll<HTMLElement>(".studio-action-menu").forEach(menu => menu.addEventListener("beforetoggle", event => {
+      if ((event as ToggleEvent).newState === "open") this.closeModelFolderNavigators();
     }));
+    for (const kind of ["checkpoint", "lora"] as const) {
+      const label = kind === "checkpoint" ? "checkpoint" : "LoRA";
+      const trigger = this.root.querySelector<HTMLButtonElement>(`[data-action='toggle-${kind}-tree']`);
+      const navigator = this.root.querySelector<HTMLElement>(`#${kind}-folder-navigator`);
+      const setOpen = (open: boolean, focus = true) => {
+        if (open) {
+          this.closeModelFolderNavigators();
+          this.root.querySelectorAll<HTMLElement>(".studio-action-menu:popover-open").forEach(menu => menu.hidePopover());
+        }
+        if (kind === "checkpoint") this.checkpointFolderTreeOpen = open; else this.loraFolderTreeOpen = open;
+        navigator?.classList.toggle("is-open", open);
+        trigger?.setAttribute("aria-expanded", String(open));
+        if (focus) { if (open) navigator?.querySelector<HTMLButtonElement>("[aria-current='true']")?.focus(); else trigger?.focus(); }
+      };
+      trigger?.addEventListener("click", () => setOpen(!navigator?.classList.contains("is-open")));
+      this.root.querySelector(`[data-action='close-${kind}-tree']`)?.addEventListener("click", () => setOpen(false));
+      navigator?.addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); } });
+      this.root.querySelectorAll<HTMLButtonElement>(`[data-${kind}-folder]`).forEach(button => button.addEventListener("click", () => {
+        const path = normalizeModelPath(button.getAttribute(`data-${kind}-folder`) || "");
+        if (kind === "checkpoint") this.checkpointFolderPath = path;
+        else { this.loraFolderPath = path; this.loraBatchSelected.clear(); }
+        setOpen(false, false);
+        this.render();
+        this.root.querySelector<HTMLButtonElement>(`[data-action='toggle-${kind}-tree']`)?.focus({ preventScroll: true });
+      }));
+      navigator?.querySelectorAll<HTMLButtonElement>("[data-folder-branch]").forEach(button => button.addEventListener("click", () => {
+        const folder = button.dataset.folderBranch || "";
+        const expanded = button.getAttribute("aria-expanded") !== "true";
+        const children = document.getElementById(button.getAttribute("aria-controls") || "");
+        if (children) children.hidden = !expanded;
+        if (expanded) this.collapsedModelFolders[kind].delete(folder); else this.collapsedModelFolders[kind].add(folder);
+        button.setAttribute("aria-expanded", String(expanded));
+        button.setAttribute("aria-label", `${expanded ? "Collapse" : "Expand"} ${label} folder ${folder || label + " root"}`);
+      }));
+      this.root.querySelector<HTMLInputElement>(`#${kind}-folder-depth`)?.addEventListener("change", event => {
+        const input = event.currentTarget as HTMLInputElement;
+        const previous = kind === "checkpoint" ? this.checkpointFolderDepth : this.loraFolderDepth;
+        const value = folderDepth(input.value, previous);
+        if (kind === "checkpoint") this.checkpointFolderDepth = value; else { this.loraFolderDepth = value; this.loraBatchSelected.clear(); }
+        try { localStorage.setItem(`swarm-studio-${kind}-folder-depth`, String(value)); } catch { /* Keep the preference for this session. */ }
+        // Let Tab/click finish moving focus before replacing the inventory. Restoring the input
+        // unconditionally here would pull keyboard users back into a field they just left.
+        window.setTimeout(() => {
+          if (this.view !== "models") return;
+          const focused = document.activeElement;
+          const attribute = focused?.getAttributeNames().find(name => name === "id")
+            ?? focused?.getAttributeNames().find(name => name.startsWith("data-") || name === "name");
+          const selector = attribute && focused ? `${focused.tagName.toLowerCase()}[${attribute}="${CSS.escape(focused.getAttribute(attribute) || "")}"]` : "";
+          this.render();
+          if (selector) this.root.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+        }, 0);
+      });
+    }
     this.root.querySelector<HTMLElement>("[data-action='toggle-lora-batch']")?.addEventListener("click", () => {
       this.loraBatchMode = !this.loraBatchMode;
       if (!this.loraBatchMode) this.loraBatchSelected.clear();
@@ -9731,27 +9864,6 @@ export class StudioApp {
     this.root.querySelectorAll<HTMLElement>("[data-edit-model-metadata]").forEach((button) => button.addEventListener("click", () => {
       void this.openModelMetadataEditor(button.dataset.editModelMetadata ?? "");
     }));
-    const bindFacetSelect = (selector: string, assign: (value: string) => void) => {
-      this.root.querySelectorAll<HTMLSelectElement>(selector).forEach((select) => select.addEventListener("change", (event) => {
-        assign((event.currentTarget as HTMLSelectElement).value);
-        this.persistLoraFacetPreferences();
-        this.render();
-      }));
-    };
-    bindFacetSelect("#lora-facet-creator,#lora-facet-mobile-creator", (value) => { this.loraFacetCreator = value; });
-    bindFacetSelect("#lora-facet-family,#lora-facet-mobile-family", (value) => { this.loraFacetFamily = value; });
-    bindFacetSelect("#lora-facet-metadata,#lora-facet-mobile-metadata", (value) => { this.loraFacetMetadata = value as LoraFacetMetadataFilter; });
-    bindFacetSelect("#lora-facet-sort,#lora-facet-mobile-sort", (value) => { this.loraFacetSort = value as LoraFacetSort; });
-    this.root.querySelectorAll<HTMLInputElement>("[data-lora-facet-tag]").forEach((input) => input.addEventListener("change", (event) => {
-      const target = event.currentTarget as HTMLInputElement;
-      const tag = target.dataset.loraFacetTag || "";
-      if (!tag) return;
-      if (target.checked) this.loraFacetTags.add(tag);
-      else this.loraFacetTags = new Set([...this.loraFacetTags].filter((value) => value.toLowerCase() !== tag.toLowerCase()));
-      this.loraFacetTagsOpen = true;
-      this.persistLoraFacetPreferences();
-      this.render();
-    }));
     this.root.querySelectorAll<HTMLElement>("[data-remove-lora-facet-tag]").forEach((button) => button.addEventListener("click", () => {
       const tag = button.dataset.removeLoraFacetTag || "";
       this.loraFacetTags = new Set([...this.loraFacetTags].filter((value) => value.toLowerCase() !== tag.toLowerCase()));
@@ -9764,20 +9876,7 @@ export class StudioApp {
     }));
     this.root.querySelectorAll<HTMLElement>("[data-action='enrich-lora-classification']").forEach((button) => button.addEventListener("click", () => void this.enrichLoraFacets("classification")));
     this.root.querySelectorAll<HTMLElement>("[data-action='fetch-lora-civitai-stats']").forEach((button) => button.addEventListener("click", () => void this.enrichLoraFacets("stats")));
-    this.root.querySelector<HTMLElement>("[data-action='open-lora-facet-mobile']")?.addEventListener("click", () => { this.loraFacetMobileOpen = true; this.render(); });
-    this.root.querySelectorAll<HTMLElement>("[data-action='close-lora-facet-mobile']").forEach((element) => element.addEventListener("click", (event) => {
-      if (element.classList.contains("download-backdrop") && (event.target as HTMLElement).closest("[data-lora-facet-mobile-dialog]")) return;
-      this.loraFacetMobileOpen = false;
-      this.render();
-    }));
-    this.root.querySelector<HTMLDetailsElement>(".lora-facet-tags")?.addEventListener("toggle", (event) => { this.loraFacetTagsOpen = (event.currentTarget as HTMLDetailsElement).open; });
-    const bindTagSearch = (selector: string) => this.root.querySelector<HTMLInputElement>(selector)?.addEventListener("input", (event) => {
-      const query = (event.currentTarget as HTMLInputElement).value.trim().toLowerCase();
-      this.loraFacetTagQuery = (event.currentTarget as HTMLInputElement).value;
-      this.root.querySelectorAll<HTMLElement>("[data-lora-facet-tag-row]").forEach((row) => { row.hidden = Boolean(query) && !(row.dataset.loraFacetTagRow || "").includes(query); });
-    });
-    bindTagSearch("#lora-facet-tag-search");
-    bindTagSearch("#lora-facet-mobile-tag-search");
+    this.root.querySelector<HTMLElement>("[data-action='open-lora-filters']")?.addEventListener("click", () => this.showLoraFilters());
     this.root.querySelector<HTMLInputElement>("#lora-library-search")?.addEventListener("input", (event) => {
       const input = event.currentTarget as HTMLInputElement;
       this.loraSearch = input.value;
@@ -9789,19 +9888,14 @@ export class StudioApp {
       });
       const empty = this.root.querySelector<HTMLElement>("#lora-search-empty");
       if (empty) empty.hidden = visible > 0;
+      const count = this.root.querySelector<HTMLElement>("[data-lora-result-count]");
+      if (count) count.textContent = `${visible} result${visible === 1 ? "" : "s"}`;
     });
     this.root.querySelector<HTMLElement>("[data-action='toggle-lora-view']")?.addEventListener("click", () => {
       this.loraMobileGrid = !this.loraMobileGrid;
       try {
         localStorage.setItem("swarm-studio-lora-view", this.loraMobileGrid ? "grid" : "list");
       } catch { /* layout preference can remain session-only */ }
-      this.render();
-    });
-    this.root.querySelector<HTMLInputElement>("#lora-show-nonmatching")?.addEventListener("change", (event) => {
-      this.loraShowNonMatching = (event.currentTarget as HTMLInputElement).checked;
-      try {
-        localStorage.setItem("swarm-studio-lora-show-nonmatching", String(this.loraShowNonMatching));
-      } catch { /* visibility preference can remain session-only */ }
       this.render();
     });
     this.root.querySelector<HTMLElement>("[data-action='open-lora-download']")?.addEventListener("click", () => {

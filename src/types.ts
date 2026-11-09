@@ -164,6 +164,8 @@ export interface IdentityRecord {
   notes: string;
   loraStack: LoraStackItem[];
   avatarUrl: string;
+  /** Durable IndexedDB asset key; avatarUrl is a transient display URL when present. */
+  avatarKey?: string;
   createdAt: number;
   updatedAt: number;
 }

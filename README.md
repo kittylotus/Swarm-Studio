@@ -22,6 +22,8 @@ Browser/PWA Swarm traffic is relayed through Studio on port 1420. The relay now 
 
 If a Studio-owned Swarm/Comfy process tree starts crash-looping, use the **Swarm Studio - Emergency Stop** desktop shortcut or run `.\start.ps1 -EmergencyStop`. The panic path only acts on the PID recorded by Studio's managed launcher and refuses to kill a recycled PID that no longer looks like Swarm.
 
+For separate installs without StabilityMatrix, see [standalone startup](docs/STANDALONE-STARTUP.md). The optional helper starts ComfyUI first and waits for its API before opening Studio and auto-starting SwarmUI.
+
 ## Studio updates
 
 Desktop Studio can update its own source checkout after the repository has been cloned once. A bounded startup check fetches the checkout's `origin` and shows a small **Update available** card only when the remote default branch is ahead. **Update & restart** refuses local edits, untracked files, or divergent history, fast-forwards with `git merge --ff-only`, then restarts through `start.ps1`; it never runs `git reset --hard` or `git clean`.
@@ -33,7 +35,7 @@ If a future release changes JavaScript dependencies, the detached updater asks t
 ## Current workflow
 
 - **Create:** checkpoint/LoRA controls, presets, prompt editing, advanced Swarm parameters, live generation progress, and optional Review Before Save with a compact approve/regenerate/discard strip.
-- **Library:** locally indexed Swarm outputs, search/filtering, Studio folders, Swarm date folders, batch actions, favorites, history sync, and a desktop right-docked Browse panel.
+- **Library:** locally indexed Swarm outputs, search/filtering, Studio folders, Swarm date folders, batch actions, favorites, and a desktop right-docked Browse panel. **Tools** groups history sync and scoped cleanup, with bulk deletion separated from everyday browsing and selection.
 <img width="1915" height="1000" alt="image" src="https://github.com/user-attachments/assets/0ed882db-7e4f-4401-86e4-644956299af7" />
 <img width="1916" height="1009" alt="image" src="https://github.com/user-attachments/assets/c53b5e8b-96ee-4127-a54a-947d845d61e7" />
 
@@ -41,7 +43,7 @@ If a future release changes JavaScript dependencies, the detached updater asks t
 <img width="1341" height="956" alt="image" src="https://github.com/user-attachments/assets/73bd7856-231b-4f0f-830b-25b9f616b940" />
 
 
-- **Models / LoRAs:** compatibility browsing, folder navigation, batch move/delete, metadata editing, hash-assisted CivitAI recovery, LoRA stack import/export, and saved stacks.
+- **Models / LoRAs:** compatibility browsing, collapsible checkpoint/LoRA folders, and separate numeric Depth controls (0 = selected folder, 1 = one subfolder level). The LoRA toolbar groups **Folders** (including Depth), **Filters** (compatibility, tags, creator, family, metadata and sorting), **Manage** (layout, batch organization and CivitAI enrichment), and **Add** (discovery and URL downloads). Filter changes apply together after review; active filters remain visible as chips.
 <img width="1918" height="1002" alt="image" src="https://github.com/user-attachments/assets/44d96872-b509-45d6-a158-6e1b60cddf2c" />
 
 
@@ -52,6 +54,8 @@ If a future release changes JavaScript dependencies, the detached updater asks t
 
 - **Inpaint:** mask editing and Swarm-backed edit generation.
 <img width="1463" height="908" alt="image" src="https://github.com/user-attachments/assets/54fcb6e3-7afa-430f-9567-2993a990648f" />
+
+- **Identities:** reusable subject prompts, checkpoints, notes, LoRA stacks and pictures. Pictures use compressed thumbnails in IndexedDB, keeping them out of localStorage's small settings quota. Existing inline avatars migrate automatically after their asset write succeeds. Keep both browser storage areas when backing up an installation; copying only localStorage does not include the avatar assets.
 
 
 - **Logs / Settings:** runtime and memory diagnostics, relay/origin configuration, appearance, desktop process controls, and a backend control room for Swarm/Comfy restart, disable, memory release, update policy, and local Git ref selection.

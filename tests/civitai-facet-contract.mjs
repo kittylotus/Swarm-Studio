@@ -72,19 +72,20 @@ assert.equal(isFacetRecordFresh({ modelKey: 'a', tags: [], status: 'unmatched', 
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const appSource = readFileSync(join(root, 'src/app.ts'), 'utf8');
-const cssSource = readFileSync(join(root, 'src/styles.css'), 'utf8');
-assert.match(appSource, /LOCAL LORA FACETS/, 'mobile facet sheet must remain wired');
+const filterSource = readFileSync(join(root, 'src/models/filters.ts'), 'utf8');
+const cssSource = readFileSync(join(root, 'src/models/filters.css'), 'utf8');
+assert.match(appSource, /openLoraFilters/, 'the shared desktop/mobile filter dialog must remain wired');
 assert.match(appSource, /selectFacetEnrichmentCandidates\([\s\S]*?24,/, 'enrichment pass must stay bounded');
 assert.match(appSource, /Math\.min\(3, candidates\.length\)/, 'enrichment concurrency must stay bounded');
 assert.match(appSource, /Enrich unclassified/, 'classification enrichment must be labeled separately from optional CivitAI stats');
-assert.match(appSource, /Fetch stats/, 'desktop CivitAI stats action must remain explicit');
+assert.match(appSource, /Fetch CivitAI stats/, 'CivitAI stats must remain an explicit action in Manage');
 assert.match(appSource, /Fetch CivitAI stats/, 'mobile CivitAI stats action must remain explicit');
 assert.match(appSource, /CivitAI stats uncached/, 'status/filter copy must distinguish uncached stats from missing classification');
 assert.doesNotMatch(appSource, /Enrich metadata ·|Needs enrichment ·|Enrich up to 24 missing/, 'UI must not call uncached CivitAI stats missing metadata');
 assert.match(appSource, /savedFacetMetadata === "needs-enrichment" \? "stats-uncached"/, 'legacy metadata filter preference must migrate safely');
 assert.match(appSource, /model-versions\/by-hash/, 'facets must resolve CivitAI from the Swarm model hash');
-assert.match(appSource, /OR within tags; AND with the fields above/, 'facet semantics must stay visible in the UI');
-assert.match(cssSource, /\.lora-facet-toolbar--desktop/, 'desktop facet toolbar styling is missing');
-assert.match(cssSource, /\.lora-facet-mobile-modal/, 'mobile facet sheet styling is missing');
+assert.match(filterSource, /Match any selected tag, together with the filters above/, 'facet semantics must stay visible in the dialog');
+assert.match(cssSource, /\.lora-filter-dialog/, 'shared filter dialog styling is missing');
+assert.match(cssSource, /@media\(max-width:600px\)/, 'mobile filter layout is missing');
 
 console.log('CivitAI facet contract OK');

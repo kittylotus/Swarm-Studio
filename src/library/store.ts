@@ -1,4 +1,6 @@
 import { createId } from "../id";
+import { loadAvatar, storeAvatar, deleteAvatar } from "./avatars";
+import { compareOutputDates } from "../swarm/history-metadata";
 import { emptyRegionalPromptDraft, normalizeRegionalPromptDraft } from "../regions";
 import { defaultTheme, normalizeStudioTheme } from "../theme";
 import type {
@@ -271,12 +273,14 @@ function persistableState(state: PersistedStudioState, outputLimit = PERSISTED_O
     ...state,
     draft,
     outputs,
+    identities: state.identities.map(identity => ({ ...identity, avatarUrl: identity.avatarKey ? "" : identity.avatarUrl })),
   };
 }
 
 export class StudioStore {
   state: PersistedStudioState;
   private persistenceWarning = "";
+  private avatarsReady?: Promise<string>;
 
   constructor() {
     const current = localStorage.getItem(STORAGE_KEY);
@@ -288,6 +292,7 @@ export class StudioStore {
       }
     }
     this.state = safeParse(current ?? legacy);
+    this.state.outputs.sort(compareOutputDates);
     const savedDraft = localStorage.getItem(DRAFT_STORAGE_KEY);
     if (savedDraft) {
       try {
@@ -307,7 +312,7 @@ export class StudioStore {
     this.save();
   }
 
-  save(): void {
+  save(): boolean {
     this.persistenceWarning = "";
     const attempts = [PERSISTED_OUTPUT_CACHE_LIMIT, 100, 35];
     for (const limit of attempts) {
@@ -315,13 +320,13 @@ export class StudioStore {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(persistableState(this.state, limit)));
         this.saveDraft();
         if (limit !== attempts[0]) this.persistenceWarning = `Studio storage was compacted to the latest ${limit} local outputs. Swarm files were not deleted.`;
-        return;
+        return true;
       } catch (error) {
         const quota = error instanceof DOMException && (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED");
         if (!quota && !(error instanceof Error && /quota/i.test(error.message))) {
           console.warn("Swarm Studio could not persist state", error);
           this.persistenceWarning = "Studio could not persist the latest local state.";
-          return;
+          return false;
         }
       }
     }
@@ -331,9 +336,11 @@ export class StudioStore {
       const minimal = persistableState(this.state, 0);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(minimal));
       this.persistenceWarning = "Browser storage was full, so Studio stopped caching output history locally. Use Library → Sync Swarm history to rebuild it.";
+      return true;
     } catch (error) {
       console.warn("Swarm Studio localStorage is full; continuing with in-memory state only", error);
       this.persistenceWarning = "Browser storage is full. Studio is continuing in-memory; changes may not survive a reload.";
+      return false;
     }
   }
 
@@ -442,9 +449,45 @@ export class StudioStore {
     this.save();
   }
 
-  saveIdentity(input: Omit<IdentityRecord, "id" | "createdAt" | "updatedAt"> & { id?: string }): IdentityRecord {
+  initializeIdentityAvatars(): Promise<string> {
+    return this.avatarsReady ??= (async () => {
+      const failures: string[] = [];
+      for (const identity of this.state.identities) {
+        try {
+          if (identity.avatarKey) {
+            identity.avatarUrl = await loadAvatar(identity.avatarKey);
+          } else if (/^data:image\//i.test(identity.avatarUrl)) {
+            // Commit the asset before replacing legacy inline data with its small durable key.
+            const original = identity.avatarUrl;
+            const key = createId();
+            const url = await storeAvatar(key, original);
+            identity.avatarKey = key;
+            identity.avatarUrl = url;
+            if (!this.save()) {
+              identity.avatarKey = undefined;
+              identity.avatarUrl = original;
+              void deleteAvatar(key).catch(() => {});
+              throw new Error("Could not persist the migrated picture reference; the original picture was kept.");
+            }
+          }
+        } catch (error) { failures.push(error instanceof Error ? error.message : String(error)); }
+      }
+      return failures.length ? `Some identity pictures could not be loaded or migrated. ${failures[0]}` : "";
+    })();
+  }
+
+  async saveIdentity(input: Omit<IdentityRecord, "id" | "createdAt" | "updatedAt"> & { id?: string }): Promise<IdentityRecord> {
+    await this.initializeIdentityAvatars();
     const now = Date.now();
     const current = input.id ? this.state.identities.find((item) => item.id === input.id) : undefined;
+    let avatarUrl = input.avatarUrl ?? current?.avatarUrl ?? "";
+    let avatarKey = avatarUrl === current?.avatarUrl ? current.avatarKey : undefined;
+    let newKey: string | undefined;
+    if (avatarUrl && !avatarKey && /^(data:|blob:)/i.test(avatarUrl)) {
+      newKey = createId();
+      avatarUrl = await storeAvatar(newKey, avatarUrl);
+      avatarKey = newKey;
+    }
     const identity: IdentityRecord = {
       id: current?.id ?? createId(),
       createdAt: current?.createdAt ?? now,
@@ -455,19 +498,33 @@ export class StudioStore {
       negativePrompt: input.negativePrompt,
       model: input.model,
       notes: input.notes,
-      avatarUrl: input.avatarUrl ?? current?.avatarUrl ?? "",
+      avatarUrl,
+      avatarKey,
       loraStack: cloneLoraStack(input.loraStack),
     };
+    const previous = this.state.identities;
     this.state.identities = current
       ? this.state.identities.map((item) => item.id === identity.id ? identity : item)
       : [identity, ...this.state.identities];
-    this.save();
+    if (!this.save()) {
+      this.state.identities = previous;
+      if (newKey) void deleteAvatar(newKey).catch(() => {});
+      throw new Error("Identity was not saved: browser storage is full or unavailable. Your form is still open; free storage and retry.");
+    }
+    if (current?.avatarKey && current.avatarKey !== avatarKey) void deleteAvatar(current.avatarKey).catch(() => {});
     return identity;
   }
 
-  deleteIdentity(id: string): void {
+  async deleteIdentity(id: string): Promise<void> {
+    await this.initializeIdentityAvatars();
+    const previous = this.state.identities;
+    const identity = previous.find(item => item.id === id);
     this.state.identities = this.state.identities.filter((identity) => identity.id !== id);
-    this.save();
+    if (!this.save()) {
+      this.state.identities = previous;
+      throw new Error("Could not save the identity deletion. Free browser storage and retry.");
+    }
+    if (identity?.avatarKey) void deleteAvatar(identity.avatarKey).catch(() => {});
   }
 
   saveLoraProfile(name: string, items: LoraStackItem[], source: LoraStackProfile["source"], folder = "Unsorted"): LoraStackProfile {

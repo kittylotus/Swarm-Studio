@@ -1,0 +1,21 @@
+.lora-library-toolbar.lora-library-toolbar--grouped { display:grid; grid-template-columns:minmax(0,1fr); gap:9px; padding:11px; }
+.lora-toolbar-main { min-width:0; display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.lora-search-field { min-width:0; flex:1 1 230px; display:flex; align-items:center; gap:8px; }
+.lora-search-field input { min-width:0; flex:1; }
+.lora-search-field > small { flex-shrink:0; color:var(--muted); font-size:8px; white-space:nowrap; }
+.lora-toolbar-actions { display:flex; align-items:center; gap:6px; margin-left:auto; }
+.lora-toolbar-actions > button,.lora-toolbar-actions > .studio-action-group > button { min-height:35px; gap:6px; padding-inline:10px; white-space:nowrap; }
+.lora-filter-trigger { display:inline-flex; align-items:center; justify-content:center; }
+.lora-filter-trigger .action-svg { width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.8; }
+.lora-filter-trigger b { min-width:17px; padding:2px 4px; border-radius:6px; color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,transparent); font-size:8px; }
+.lora-toolbar-readout { display:flex; flex-wrap:wrap; align-items:center; gap:5px; border-top:1px solid var(--line); padding-top:8px; }
+.lora-toolbar-readout > .ghost-button { min-height:24px; padding:3px 6px; font-size:8px; }
+.lora-facet-chip { display:inline-flex; align-items:center; gap:5px; min-height:24px; border:1px solid color-mix(in srgb,var(--accent) 26%,var(--line)); border-radius:999px; padding:4px 8px; color:var(--text); background:color-mix(in srgb,var(--accent) 7%,transparent); font-size:8px; }
+.lora-tool-progress { color:var(--accent); font-size:9px; }
+.model-folder-options { display:grid; gap:6px; padding:10px 16px; border-top:1px solid var(--line); background:var(--surface-soft); }
+@media(max-width:600px) {
+  .lora-toolbar-actions { width:100%; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:5px; }
+  .lora-toolbar-actions > .studio-action-group,.lora-toolbar-actions > .studio-action-group > button { width:100%; }
+  .lora-toolbar-actions > button,.lora-toolbar-actions > .studio-action-group > button { padding-inline:7px; font-size:9px; }
+  .lora-toolbar-actions .lora-organizer-action .action-svg { display:none; }
+}
