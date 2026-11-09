@@ -20,7 +20,7 @@ assert(eventToKeybind({ key: '¡', code: 'Digit1', ctrlKey: false, metaKey: fals
 const normalized = normalizeStudioKeybindPreferences({ enabled: true, bindings: { generate: 'ctrl+enter', 'nav-create': '' } });
 assert(normalized.enabled && normalized.bindings.generate === 'Mod+Enter' && normalized.bindings['nav-create'] === '', 'Stored keybind preferences must normalize safely while allowing explicit unbound actions.');
 assert(types.includes('"appearance" | "keybinds"'), 'Keybinds must be a persisted Settings pane.');
-assert(store.includes('["connection", "backend", "appearance", "keybinds"]'), 'Settings migration must preserve the Keybinds pane.');
+assert(store.includes('["connection", "backend", "appearance", "keybinds", "llm"]'), 'Settings migration must preserve the Keybinds pane.');
 assert(app.includes('id="keybinds-enabled"') && app.includes('data-keybind-input=') && app.includes('handleStudioKeybind(event)'), 'Settings must expose opt-in editable keybinds and install one global dispatcher.');
 assert(app.includes('if (editing && !definition.allowWhenEditing) return;'), 'Navigation shortcuts must not fire while the user is typing.');
 assert(app.includes("[role='dialog'][aria-modal='true']"), 'Modal suppression must ignore docked non-modal panels while blocking active dialogs.');

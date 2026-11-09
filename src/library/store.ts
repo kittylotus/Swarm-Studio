@@ -118,7 +118,7 @@ function cloneDefaults(): PersistedStudioState {
 }
 
 function validView(value: unknown): StudioView {
-  return ["create", "library", "identities", "models", "civitai", "logs", "settings"].includes(String(value))
+  return ["create", "expressions", "library", "identities", "models", "civitai", "logs", "settings"].includes(String(value))
     ? value as StudioView
     : "create";
 }
@@ -188,7 +188,7 @@ function safeParse(value: string | null): PersistedStudioState {
         identityEditorOpen: parsed.ui?.identityEditorOpen === true,
         settingsPane: String(parsed.ui?.settingsPane) === "remote"
           ? "connection"
-          : ["connection", "backend", "appearance", "keybinds"].includes(String(parsed.ui?.settingsPane))
+          : ["connection", "backend", "appearance", "keybinds", "llm"].includes(String(parsed.ui?.settingsPane))
             ? parsed.ui?.settingsPane as StudioUiState["settingsPane"]
             : "connection",
       },

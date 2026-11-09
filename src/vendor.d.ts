@@ -1,5 +1,9 @@
 declare module "@tauri-apps/api/core" {
   export function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  export class Channel<T = unknown> {
+    constructor(onmessage?: (response: T) => void);
+    onmessage: (response: T) => void;
+  }
 }
 
 declare module "@tauri-apps/api/event" {

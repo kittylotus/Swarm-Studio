@@ -1,4 +1,4 @@
-export type StudioView = "create" | "library" | "identities" | "models" | "civitai" | "logs" | "settings";
+export type StudioView = "create" | "expressions" | "library" | "identities" | "models" | "civitai" | "logs" | "settings";
 
 export interface ConnectionSettings {
   mode: "local" | "remote";
@@ -176,7 +176,7 @@ export interface StudioUiState {
   advancedOpen: boolean;
   mobileCreatePane: "generation" | "output" | "tune";
   identityEditorOpen: boolean;
-  settingsPane: "connection" | "backend" | "appearance" | "keybinds";
+  settingsPane: "connection" | "backend" | "appearance" | "keybinds" | "llm";
 }
 
 export interface PersistedStudioState {
