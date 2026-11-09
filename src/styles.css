@@ -399,7 +399,7 @@ pre, code { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
   .utility-readout--small { display: none; }
   .lora-stack-row { grid-template-columns: 13px 36px minmax(0,1fr) 52px auto; }
   .lora-thumb { width: 36px; height: 36px; }
-  .trigger-toggle { display: none; }
+  .lora-stack-row > .trigger-toggle { display: none; }
   .stack-row-actions { grid-column: 3 / -1; justify-content: flex-end; }
   .stack-tools { grid-template-columns: repeat(2,auto) minmax(80px,1fr); }
   .stack-tools > :nth-last-child(-n+2) { grid-row: 2; }
@@ -5119,8 +5119,8 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 .stack-profile-picker-row .stack-profile-picker { min-width:0; }
 .stack-manage-button { min-height:31px; padding-inline:9px; font-size:8px; }
 .lora-profile-manager-modal { width:min(900px,100%); height:min(760px,calc(100dvh - 36px)); max-height:calc(100dvh - 36px); overflow:hidden; display:grid; grid-template-rows:auto minmax(0,1fr); }
-.lora-profile-manager-body { min-height:0; overflow:hidden; display:grid; grid-template-columns:minmax(190px,.72fr) minmax(0,1.7fr); }
-.lora-profile-manager-list { min-width:0; display:grid; grid-template-rows:auto minmax(0,1fr); border-right:1px solid var(--line); background:color-mix(in srgb,var(--bg) 38%,transparent); }
+.lora-profile-manager-body { min-height:0; overflow:hidden; display:grid; grid-template-columns:minmax(190px,.72fr) minmax(0,1.7fr); grid-template-rows:minmax(0,1fr); }
+.lora-profile-manager-list { min-width:0; min-height:0; overflow:hidden; display:grid; grid-template-rows:auto minmax(0,1fr); border-right:1px solid var(--line); background:color-mix(in srgb,var(--bg) 38%,transparent); }
 .lora-profile-manager-list-head { display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:11px 12px 8px; border-bottom:1px solid var(--line); }
 .lora-profile-manager-list-head b { font-size:9px; text-transform:uppercase; letter-spacing:.08em; }
 .lora-profile-manager-list-head small { color:var(--faint); font-size:7px; }
@@ -5140,7 +5140,9 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 .lora-profile-manager-item b { font-size:9px; }
 .lora-profile-manager-item small { color:var(--faint); font-size:7px; }
 .lora-profile-manager-item em { color:var(--faint); font-size:6px; font-style:normal; text-transform:uppercase; letter-spacing:.08em; }
-.lora-profile-manager-editor { min-width:0; min-height:0; display:flex; flex-direction:column; gap:10px; padding:13px; overflow:auto; overscroll-behavior:contain; }
+.lora-profile-manager-editor { min-width:0; min-height:0; display:grid; grid-template-rows:minmax(0,1fr) auto; overflow:hidden; }
+.lora-profile-manager-editor-scroll { min-width:0; min-height:0; display:flex; flex-direction:column; gap:10px; padding:13px; overflow:auto; overscroll-behavior:contain; }
+.lora-profile-manager-editor-scroll > * { flex-shrink:0; }
 .lora-profile-manager-meta { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .lora-profile-manager-meta > span { display:grid; gap:2px; }
 .lora-profile-manager-meta b { font-size:8px; text-transform:uppercase; letter-spacing:.08em; }
@@ -5160,7 +5162,7 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 .lora-profile-edit-row > .stack-row-actions { grid-area:actions; }
 .lora-profile-add-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; }
 .lora-profile-add-row select { min-width:0; padding:8px; border:1px solid var(--line); border-radius:var(--control-radius); color:var(--text); background:var(--input-bg); font-size:8px; }
-.lora-profile-manager-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:auto; padding-top:3px; }
+.lora-profile-manager-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0; padding:11px 13px; border-top:1px solid var(--line); background:var(--panel-base); }
 .lora-profile-manager-actions > div { display:flex; gap:6px; }
 .lora-profile-manager-actions .danger-soft.is-armed { border-color:color-mix(in srgb,var(--danger) 55%,var(--line)); background:color-mix(in srgb,var(--danger) 18%,var(--surface-soft)); }
 .lora-profile-manager-empty { margin:auto; max-width:360px; display:grid; place-items:center; gap:8px; color:var(--muted); text-align:center; }
@@ -5171,7 +5173,7 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 @media (max-width:760px) {
   .stack-profile-picker-row { grid-template-columns:minmax(0,1fr) auto; }
   .stack-manage-button { min-height:29px; padding-inline:8px; }
-  .lora-profile-manager-modal { width:100%; height:min(760px,calc(100dvh - 88px - env(safe-area-inset-bottom))); max-height:calc(100dvh - 88px - env(safe-area-inset-bottom)); overflow:hidden; }
+  .lora-profile-manager-modal { width:100%; height:min(760px,calc(100dvh - 88px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))); max-height:calc(100dvh - 88px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px)); overflow:hidden; }
   .lora-profile-manager-body { min-height:0; overflow:hidden; display:grid; grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); }
   .lora-profile-manager-list { min-height:0; display:block; border-right:0; border-bottom:1px solid var(--line); }
   .lora-profile-manager-list-head { padding:8px 10px 6px; }
@@ -5180,7 +5182,7 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
   .lora-profile-manager-folder-head { flex:0 0 auto; align-self:stretch; min-width:76px; padding:5px 7px; border:1px solid var(--line); border-radius:9px; background:color-mix(in srgb,var(--bg) 38%,transparent); }
   .lora-profile-manager-folder-head > span { max-width:110px; }
   .lora-profile-manager-item { flex:0 0 min(190px,70vw); }
-  .lora-profile-manager-editor { padding:10px; overflow:auto; }
+  .lora-profile-manager-editor-scroll { padding:10px; }
   .lora-profile-manager-fields { grid-template-columns:1fr; }
   .lora-profile-edit-row { grid-template-columns:minmax(0,1fr) 62px auto; grid-template-areas:"copy copy copy" "weight trigger actions"; align-items:end; }
   .lora-profile-manager-actions { align-items:stretch; flex-direction:column-reverse; }

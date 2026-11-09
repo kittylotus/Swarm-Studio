@@ -1691,6 +1691,17 @@ export class StudioApp {
   }
 
   private render(): void {
+    const previousProfileManager = this.root.querySelector<HTMLElement>("[data-lora-profile-manager-dialog]");
+    const focusedProfileControl = previousProfileManager?.contains(document.activeElement) ? document.activeElement : null;
+    const profileFocusAttribute = focusedProfileControl?.getAttributeNames().find(name => name === "id")
+      ?? focusedProfileControl?.getAttributeNames().find(name => name.startsWith("data-"));
+    const profileManagerState = previousProfileManager ? {
+      selectedId: previousProfileManager.querySelector<HTMLElement>("[data-lora-profile-manage-select].is-active")?.dataset.loraProfileManageSelect,
+      listTop: previousProfileManager.querySelector(".lora-profile-manager-list-scroll")?.scrollTop ?? 0,
+      listLeft: previousProfileManager.querySelector(".lora-profile-manager-list-scroll")?.scrollLeft ?? 0,
+      editorTop: previousProfileManager.querySelector(".lora-profile-manager-editor-scroll")?.scrollTop ?? 0,
+      focus: profileFocusAttribute && focusedProfileControl ? `[${profileFocusAttribute}="${CSS.escape(focusedProfileControl.getAttribute(profileFocusAttribute) || "")}"]` : "",
+    } : null;
     // Models and CivitAI both use .content as the desktop scroll owner, then become document-scrolled
     // at narrower breakpoints. Preserve both candidates across every stateful rerender so dynamic
     // chrome (especially the CivitAI install queue appearing/disappearing) cannot move the viewport.
@@ -1787,6 +1798,18 @@ export class StudioApp {
     }
     this.bindGlobalEvents();
     this.bindViewEvents();
+    const profileManager = this.root.querySelector<HTMLElement>("[data-lora-profile-manager-dialog]");
+    if (profileManager) {
+      const sameProfile = profileManagerState?.selectedId === this.loraProfileManagerSelectedId;
+      const list = profileManager.querySelector<HTMLElement>(".lora-profile-manager-list-scroll");
+      const editor = profileManager.querySelector<HTMLElement>(".lora-profile-manager-editor-scroll");
+      if (list && profileManagerState) { list.scrollTop = profileManagerState.listTop; list.scrollLeft = profileManagerState.listLeft; }
+      if (editor && sameProfile) editor.scrollTop = profileManagerState?.editorTop ?? 0;
+      const focus = sameProfile && profileManagerState?.focus ? profileManager.querySelector<HTMLElement>(profileManagerState.focus) : profileManager.querySelector<HTMLElement>("#lora-profile-manager-name");
+      (focus ?? profileManager.querySelector<HTMLElement>("[data-action='save-lora-profile-edits'],[data-action='close-lora-profile-manager']"))?.focus({ preventScroll: true });
+    } else if (previousProfileManager) {
+      this.root.querySelector<HTMLElement>("[data-action='manage-lora-profiles']")?.focus({ preventScroll: true });
+    }
     this.renderHeaderStatus();
     this.renderToast();
     this.hydrateNativeSwarmImages();
@@ -3665,24 +3688,24 @@ export class StudioApp {
     const updatedLabel = selected ? new Date(selected.updatedAt).toLocaleDateString() : "";
     return `<div class="download-backdrop lora-profile-manager-backdrop" data-action="close-lora-profile-manager">
       <section class="download-modal lora-profile-manager-modal" role="dialog" aria-modal="true" aria-labelledby="lora-profile-manager-title" data-lora-profile-manager-dialog>
-        <header><div><span class="panel-kicker">LORA STACKS</span><h2 id="lora-profile-manager-title">Manage saved stacks</h2></div><button class="icon-button" data-action="close-lora-profile-manager" aria-label="Close">×</button></header>
+        <header><div><span class="panel-kicker">LORA STACKS</span><h2 id="lora-profile-manager-title">Manage saved stacks</h2></div><button type="button" class="icon-button" data-action="close-lora-profile-manager" aria-label="Close saved stack manager">×</button></header>
         <div class="lora-profile-manager-body">
           <aside class="lora-profile-manager-list" aria-label="Saved LoRA stacks">
             <div class="lora-profile-manager-list-head"><b>Saved</b><small>${profiles.length} stack${profiles.length === 1 ? "" : "s"}</small></div>
-            <div class="lora-profile-manager-list-scroll">${profileGroups.map((group) => `<section class="lora-profile-manager-folder"><div class="lora-profile-manager-folder-head"><span>${folderSvg}<b>${escapeHtml(group.folder)}</b></span><small>${group.profiles.length}</small></div>${group.profiles.map((profile) => `<button type="button" class="lora-profile-manager-item ${profile.id === selected?.id ? "is-active" : ""}" data-lora-profile-manage-select="${escapeHtml(profile.id)}"><span><b>${escapeHtml(profile.name)}</b><small>${profile.items.length} LoRA${profile.items.length === 1 ? "" : "s"}</small></span><em>${profile.source === "lumiswarm-import" ? "import" : "studio"}</em></button>`).join("")}</section>`).join("") || `<div class="stack-empty stack-empty--compact">No saved stacks yet.<br />Use the save icon in the composer first.</div>`}</div>
+            <div class="lora-profile-manager-list-scroll">${profileGroups.map((group) => `<section class="lora-profile-manager-folder"><div class="lora-profile-manager-folder-head"><span>${folderSvg}<b>${escapeHtml(group.folder)}</b></span><small>${group.profiles.length}</small></div>${group.profiles.map((profile) => `<button type="button" class="lora-profile-manager-item ${profile.id === selected?.id ? "is-active" : ""}" data-lora-profile-manage-select="${escapeHtml(profile.id)}" ${profile.id === selected?.id ? 'aria-current="true"' : ""}><span><b>${escapeHtml(profile.name)}</b><small>${profile.items.length} LoRA${profile.items.length === 1 ? "" : "s"}</small></span><em>${profile.source === "lumiswarm-import" ? "import" : "studio"}</em></button>`).join("")}</section>`).join("") || `<div class="stack-empty stack-empty--compact">No saved stacks yet.<br />Use the save icon in the composer first.</div>`}</div>
           </aside>
           <div class="lora-profile-manager-editor">
-            ${selected ? `<div class="lora-profile-manager-meta"><span><b>${sourceLabel}</b><small>Updated ${escapeHtml(updatedLabel)}</small></span><button type="button" class="ghost-button" data-action="profile-use-current" ${this.store.state.draft.loras.length ? "" : "disabled"}>Use current stack</button></div>
+            ${selected ? `<div class="lora-profile-manager-editor-scroll"><div class="lora-profile-manager-meta"><span><b>${sourceLabel}</b><small>Updated ${escapeHtml(updatedLabel)}</small></span><button type="button" class="ghost-button" data-action="profile-use-current" ${this.store.state.draft.loras.length ? "" : "disabled"}>Use current stack</button></div>
               <div class="lora-profile-manager-fields"><label class="field lora-profile-name-field"><span>Stack name</span><input id="lora-profile-manager-name" type="text" maxlength="120" value="${escapeHtml(this.loraProfileManagerDraftName)}" autocomplete="off" /></label><label class="field lora-profile-folder-field"><span>Folder</span><input id="lora-profile-manager-folder" type="text" maxlength="80" list="lora-profile-folder-options" value="${escapeHtml(this.loraProfileManagerDraftFolder)}" placeholder="Unsorted" autocomplete="off" /><datalist id="lora-profile-folder-options">${folderNames.map((folder) => `<option value="${escapeHtml(folder)}"></option>`).join("")}</datalist></label></div>
               <p class="helper-copy lora-profile-folder-helper">Choose an existing folder or type a new name. Empty folders disappear automatically.</p>
               <div class="lora-profile-edit-list">${draftItems.map((item) => `<div class="lora-profile-edit-row ${item.enabled ? "" : "is-disabled"}" data-lora-profile-edit-row="${escapeHtml(item.id)}">
                 <div class="lora-profile-edit-copy"><b>${escapeHtml(item.title || prettyName(item.name))}</b><small>${escapeHtml(item.name)}</small></div>
-                <label class="weight-field"><span>Weight</span><input type="number" min="-4" max="4" step="0.05" value="${item.weight}" data-lora-profile-weight="${escapeHtml(item.id)}" /></label>
-                <label class="trigger-toggle"><input type="checkbox" data-lora-profile-trigger="${escapeHtml(item.id)}" ${item.useTrigger ? "checked" : ""}/><span>Trigger</span></label>
-                <div class="stack-row-actions"><button type="button" class="icon-button" data-lora-profile-toggle="${escapeHtml(item.id)}" title="${item.enabled ? "Disable this LoRA" : "Enable this LoRA"}" aria-label="${item.enabled ? "Disable this LoRA" : "Enable this LoRA"}">${item.enabled ? eyeSvg : eyeOffSvg}</button><button type="button" class="icon-button" data-lora-profile-remove="${escapeHtml(item.id)}" title="Remove from saved stack" aria-label="Remove from saved stack">${trashSvg}</button></div>
+                <label class="weight-field"><span>Weight</span><input type="number" min="-4" max="4" step="0.05" value="${item.weight}" data-lora-profile-weight="${escapeHtml(item.id)}" aria-label="Weight for ${escapeHtml(item.title || prettyName(item.name))}" /></label>
+                <label class="trigger-toggle"><input type="checkbox" data-lora-profile-trigger="${escapeHtml(item.id)}" aria-label="Use trigger for ${escapeHtml(item.title || prettyName(item.name))}" ${item.useTrigger ? "checked" : ""}/><span>Trigger</span></label>
+                <div class="stack-row-actions"><button type="button" class="icon-button" data-lora-profile-toggle="${escapeHtml(item.id)}" title="${item.enabled ? "Disable this LoRA" : "Enable this LoRA"}" aria-label="${item.enabled ? "Disable" : "Enable"} ${escapeHtml(item.title || prettyName(item.name))}">${item.enabled ? eyeSvg : eyeOffSvg}</button><button type="button" class="icon-button" data-lora-profile-remove="${escapeHtml(item.id)}" title="Remove from saved stack" aria-label="Remove ${escapeHtml(item.title || prettyName(item.name))} from saved stack">${trashSvg}</button></div>
               </div>`).join("") || `<div class="stack-empty stack-empty--compact">This saved stack is empty.</div>`}</div>
-              <div class="lora-profile-add-row"><select id="lora-profile-manager-add" ${available.length ? "" : "disabled"}><option value="">${available.length ? "Add a LoRA to this saved stack…" : "No additional server LoRAs available"}</option>${available.map((lora) => this.loraOption(lora)).join("")}</select><button type="button" class="secondary-button" data-action="profile-add-lora" ${available.length ? "" : "disabled"}>Add</button></div>
-              <div class="lora-profile-manager-actions"><button type="button" class="danger-soft ${this.loraProfileManagerDeleteArmed ? "is-armed" : ""}" data-action="delete-lora-profile">${this.loraProfileManagerDeleteArmed ? "Confirm delete" : "Delete stack"}</button><div><button type="button" class="ghost-button" data-action="profile-load-composer">Load into composer</button><button type="button" class="primary-button" data-action="save-lora-profile-edits">Save changes</button></div></div>`
+              <div class="lora-profile-add-row"><select id="lora-profile-manager-add" aria-label="LoRA to add" ${available.length ? "" : "disabled"}><option value="">${available.length ? "Add a LoRA to this saved stack…" : "No additional server LoRAs available"}</option>${available.map((lora) => this.loraOption(lora)).join("")}</select><button type="button" class="secondary-button" data-action="profile-add-lora" ${available.length ? "" : "disabled"}>Add</button></div>
+              </div><footer class="lora-profile-manager-actions"><button type="button" class="danger-soft ${this.loraProfileManagerDeleteArmed ? "is-armed" : ""}" data-action="delete-lora-profile">${this.loraProfileManagerDeleteArmed ? "Confirm delete" : "Delete stack"}</button><div><button type="button" class="ghost-button" data-action="profile-load-composer">Load into composer</button><button type="button" class="primary-button" data-action="save-lora-profile-edits">Save changes</button></div></footer>`
               : `<div class="lora-profile-manager-empty"><span>${settingsRowsSvg}</span><b>Nothing to manage yet.</b><p>Save a LoRA stack from the composer and it will appear here for editing, loading, renaming, or deletion.</p></div>`}
           </div>
         </div>
@@ -5791,11 +5814,23 @@ export class StudioApp {
 
   private bindLoraProfileManagerEvents(): void {
     if (!this.loraProfileManagerOpen) return;
-    this.root.querySelectorAll<HTMLElement>("[data-action='close-lora-profile-manager']").forEach((element) => element.addEventListener("click", (event) => {
-      if (element.classList.contains("download-backdrop") && (event.target as HTMLElement).closest("[data-lora-profile-manager-dialog]")) return;
+    const close = () => {
       this.loraProfileManagerOpen = false;
       this.loraProfileManagerDeleteArmed = false;
       this.render();
+    };
+    const dialog = this.root.querySelector<HTMLElement>("[data-lora-profile-manager-dialog]");
+    dialog?.addEventListener("keydown", event => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
+      if (event.key !== "Tab") return;
+      const controls = [...dialog.querySelectorAll<HTMLElement>("button:not(:disabled),input:not(:disabled),select:not(:disabled)")].filter(control => control.getClientRects().length > 0);
+      const target = event.shiftKey && document.activeElement === controls[0] ? controls.at(-1)
+        : !event.shiftKey && document.activeElement === controls.at(-1) ? controls[0] : null;
+      if (target) { event.preventDefault(); target.focus(); }
+    });
+    this.root.querySelectorAll<HTMLElement>("[data-action='close-lora-profile-manager']").forEach((element) => element.addEventListener("click", (event) => {
+      if (element.classList.contains("download-backdrop") && (event.target as HTMLElement).closest("[data-lora-profile-manager-dialog]")) return;
+      close();
     }));
     this.root.querySelectorAll<HTMLElement>("[data-lora-profile-manage-select]").forEach((button) => button.addEventListener("click", () => {
       this.primeLoraProfileManager(button.dataset.loraProfileManageSelect ?? "");
