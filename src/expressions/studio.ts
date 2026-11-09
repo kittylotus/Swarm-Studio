@@ -1,3 +1,4 @@
+import { animaWorkflow, isAnimaModel, nodeChoices } from './anima';
 import { circleHelpIcon, openExpressionHelp } from './help';
 import { expressionFailure } from './errors';
 import { defaultSheet, normalizeSheet, expressionTiles, emptyMotion, motionLimits, expressionRequest, livePortraitWorkflow, ipAdapterWorkflow, advertisedValues, isAdapterModel, type SheetProject, type ExpressionTile, type NodeSchema, type ExpressionMotion } from './pipeline';
@@ -63,7 +64,7 @@ export class ExpressionStudio {
         if (!this.host?.isConnected)
             return;
         const p = this.project, disabled = this.running ? 'disabled' : '';
-        const models = this.bridge.models().filter(m => !['ipadapter', 'hybrid'].includes(p.engine) || isAdapterModel(m));
+        const models = this.bridge.models().filter(m => p.engine === 'anima' ? isAnimaModel(m) : !['ipadapter', 'hybrid'].includes(p.engine) || isAdapterModel(m));
         if (!p.model || !models.some(m => m.name === p.model)) {
             if (models.length && !this.running)
                 p.model = models[0]!.name;
@@ -82,10 +83,14 @@ export class ExpressionStudio {
     <label class="field"><span>Character & framing</span><textarea rows="4" data-setting="subject" ${disabled}>${esc(p.subject)}</textarea></label><label class="field"><span>Avoid</span><textarea rows="3" data-setting="negative" ${disabled}>${esc(p.negative)}</textarea></label>
     <label class="check-row"><input data-setting="useLoras" type="checkbox" ${p.useLoras ? 'checked' : ''} ${disabled}/>Use enabled LoRAs from the composer</label></section>
     <section class="expression-section"><div class="expression-section-head"><b>02 / Pipeline</b><small>Batch size 1</small></div>
-    <label class="field"><span>Render method</span><select data-setting="engine" ${disabled}>${[['ipadapter', 'IPAdapter · reference-guided'], ['liveportrait', 'LivePortrait · facial edit'], ['hybrid', 'IPAdapter → LivePortrait · two passes'], ['img2img', 'Image-to-image · redraw'], ['text', 'Prompt only · baseline']].map(([v, label]) => `<option value="${v}" ${p.engine === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
-    <label class="field"><span>Style preset</span><select data-setting="style" ${disabled}>${[['semireal', 'Semirealism'], ['realistic', 'Realistic portrait'], ['illustrated', 'Illustrated / anime']].map(([v, label]) => `<option value="${v}" ${p.style === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+    <label class="field"><span id="expression-engine-label">Render method</span><select data-setting="engine" aria-labelledby="expression-engine-label" ${disabled}>${[['ipadapter', 'IPAdapter · reference-guided'], ['anima', 'Anima Ref Adapter · reference-guided'], ['liveportrait', 'LivePortrait · facial edit'], ['hybrid', 'IPAdapter → LivePortrait · two passes'], ['img2img', 'Image-to-image · redraw'], ['text', 'Prompt only · baseline']].map(([v, label]) => `<option value="${v}" ${p.engine === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+    <label class="field" data-pipeline-part="style" ${p.engine === 'anima' ? 'hidden' : ''}><span id="expression-style-label">Style preset</span><select data-setting="style" aria-labelledby="expression-style-label" ${disabled}>${[['semireal', 'Semirealism'], ['realistic', 'Realistic portrait'], ['illustrated', 'Illustrated / anime']].map(([v, label]) => `<option value="${v}" ${p.style === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
     <div data-pipeline-part="checkpoint" ${p.engine === 'liveportrait' ? 'hidden' : ''}><label class="field"><span>${['ipadapter', 'hybrid'].includes(p.engine) ? 'SDXL / SD1.5 checkpoint' : 'Checkpoint'}</span><select data-setting="model" ${disabled}>${models.map(m => `<option value="${esc(m.name)}" ${m.name === p.model ? 'selected' : ''}>${esc(m.title || m.name)}</option>`).join('') || '<option value="">No compatible checkpoint loaded</option>'}</select></label></div><p data-pipeline-part="portrait" class="helper-copy" ${p.engine !== 'liveportrait' ? 'hidden' : ''}>Works best on detectable portrait faces. Uses the ExpressionEditor sliders in each card; character prompts and LoRAs are not used.</p>
     <div data-pipeline-part="adapter" ${['ipadapter', 'hybrid'].includes(p.engine) ? '' : 'hidden'}><label class="field"><span>Adapter</span><select data-setting="adapter" ${disabled}>${options(adapters, p.adapter)}</select></label><div class="expression-fields">${field('Identity strength', 'weight', 0, 2, .05)}${field('Start', 'start', 0, 1, .05)}${field('End', 'end', 0, 1, .05)}</div><p class="helper-copy">Start at 0.65 strength / 0.8 end. Lower strength or end if the reference expression is overpowering the requested emotion. Anima is not compatible with these SDXL adapters.</p></div>
+    <div data-pipeline-part="anima" ${p.engine === 'anima' ? '' : 'hidden'}><p class="helper-copy">Anima base + Qwen3 encoder + Qwen Image VAE. The reference supplies identity and style; describe framing and expression rather than repeating the outfit. Check loaded nodes to populate installed files. First render may download the adapter weights (183 MB).</p>
+      <button data-command="probe" class="secondary-button" ${this.setupBusy ? 'disabled' : ''}>Check Anima setup</button>
+      ${([['Text encoder', 'animaClip', 'CLIPLoader', 'clip_name'], ['VAE', 'animaVae', 'VAELoader', 'vae_name'], ['Adapter weights', 'animaAdapter', 'AnimaRefAdapter', 'lora_name']] as const).map(([label, key, node, input]) => `<label class="field"><span id="expression-${key}-label">${label}</span><select data-setting="${key}" aria-labelledby="expression-${key}-label" ${disabled}>${options(nodeChoices(this.schema, node, input), p[key])}</select></label>`).join('')}
+      <div class="expression-fields">${field('Reference guidance', 'animaGuidance', 0, 20, .1)}${field('Adapter strength', 'animaStrength', 0, 2, .05)}${field('Reference guidance end', 'animaEnd', 0, 1, .05)}</div><p class="helper-copy">APG correction. Start around CFG 4.5 / 30 steps; guidance 1 avoids an extra model call. Other LoRAs load before the adapter.</p><a href="https://github.com/ArcAnima/ComfyUI-Anima-Ref-Adapter" target="_blank" rel="noopener noreferrer">Anima adapter installation ↗</a></div>
     <div data-pipeline-part="img2img" ${p.engine === 'img2img' ? '' : 'hidden'}>${field('Redraw / creativity', 'denoise', 0, 1, .05)}</div>
     <details class="expression-details"><summary>Sampling & resolution</summary><div class="expression-fields">${field('Width', 'width', 256, 1536, 64)}${field('Height', 'height', 256, 1536, 64)}${field('Steps', 'steps', 1, 100)}${field('CFG', 'cfg', 1, 20, .5)}${field('Shared seed', 'seed', 0, 2147483646)}</div><label class="field"><span>Sampler</span><select data-setting="sampler" ${disabled}>${options(samplers, p.sampler)}</select></label><label class="field"><span>Scheduler</span><select data-setting="scheduler" ${disabled}>${options(schedulers, p.scheduler)}</select></label><p class="helper-copy">768² / 24 steps is a conservative starting point for an 8 GB GPU. Every card shares the seed; rerolls increment only that card.</p></details>
     <details class="expression-details"><summary>Backend setup & research</summary><button data-command="probe" class="secondary-button" ${this.setupBusy ? 'disabled' : ''}>${this.setupBusy ? 'Checking…' : 'Check loaded nodes'}</button><p class="expression-setup">${esc(this.setup)}</p><p class="helper-copy">IPAdapter needs its model weights and CLIP Vision. LivePortrait additionally needs ExpressionEditor and its models; install through ComfyUI Manager, restart the backend, then recheck.</p><button data-command="workflow-export" class="ghost-button">Export API workflow</button><a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noopener noreferrer">IPAdapter setup ↗</a><a href="https://github.com/PowerHouseMan/ComfyUI-AdvancedLivePortrait" target="_blank" rel="noopener noreferrer">LivePortrait setup ↗</a><a href="https://github.com/ToTheBeginning/PuLID/blob/main/docs/pulid_for_flux.md" target="_blank" rel="noopener noreferrer">Why PuLID-FLUX needs more memory ↗</a></details></section>
@@ -105,9 +110,9 @@ export class ExpressionStudio {
         if (!root) return;
         const p = this.project;
         const adapter = ['ipadapter', 'hybrid'].includes(p.engine);
-        const visible: Record<string, boolean> = { checkpoint: p.engine !== 'liveportrait', portrait: p.engine === 'liveportrait', adapter, img2img: p.engine === 'img2img', motion: ['liveportrait', 'hybrid'].includes(p.engine) };
+        const visible: Record<string, boolean> = { checkpoint: p.engine !== 'liveportrait', portrait: p.engine === 'liveportrait', adapter, style: p.engine !== 'anima', anima: p.engine === 'anima', img2img: p.engine === 'img2img', motion: ['liveportrait', 'hybrid'].includes(p.engine) };
         root.querySelectorAll<HTMLElement>('[data-pipeline-part]').forEach(part => { part.hidden = !visible[part.dataset.pipelinePart!]; });
-        const models = this.bridge.models().filter(model => !adapter || isAdapterModel(model));
+        const models = this.bridge.models().filter(model => p.engine === 'anima' ? isAnimaModel(model) : !adapter || isAdapterModel(model));
         if (!models.some(model => model.name === p.model)) p.model = models[0]?.name ?? '';
         const select = root.querySelector<HTMLSelectElement>('[data-setting="model"]');
         if (select) {
@@ -214,9 +219,9 @@ export class ExpressionStudio {
                 const tile = this.project.tiles.find(t => t.enabled);
                 if (!tile)
                     throw new Error('Select an expression first.');
-                if (!['ipadapter', 'liveportrait'].includes(this.project.engine))
-                    throw new Error('Workflow export supports IPAdapter or LivePortrait; choose a single-pass method.');
-                const workflow = this.project.engine === 'liveportrait' ? livePortraitWorkflow(this.project.reference, tile.motion, this.schema) : ipAdapterWorkflow(this.project, tile, this.schema);
+                if (!['ipadapter', 'anima', 'liveportrait'].includes(this.project.engine))
+                    throw new Error('Workflow export supports IPAdapter, Anima Ref Adapter or LivePortrait; choose a single-pass method.');
+                const workflow = this.project.engine === 'anima' ? animaWorkflow(this.project, tile, this.schema) : this.project.engine === 'liveportrait' ? livePortraitWorkflow(this.project.reference, tile.motion, this.schema) : ipAdapterWorkflow(this.project, tile, this.schema);
                 download(new Blob([JSON.stringify(workflow, null, 2)], { type: 'application/json' }), `${slug(this.project.name)}-${slug(tile.name)}-api.json`);
                 return;
             }
@@ -299,9 +304,10 @@ export class ExpressionStudio {
         this.schema = await this.bridge.probe();
         const ipa = Boolean(this.schema.IPAdapterUnifiedLoader);
         const portrait = Boolean(this.schema.ExpressionEditor);
-        this.setup = `IPAdapter loader: ${ipa ? 'loaded' : 'not loaded'}. ExpressionEditor: ${portrait ? 'loaded' : 'not installed or not loaded'}. Swarm image bridge: ${this.schema.SwarmLoadImageB64 && this.schema.SwarmSaveImageWS ? 'loaded' : 'missing'}. Installed files alone do not mean a node is loaded.`;
+        this.setup = `Anima Ref Adapter: ${this.schema.AnimaRefAdapter ? 'loaded' : 'not loaded'}. IPAdapter loader: ${ipa ? 'loaded' : 'not loaded'}. ExpressionEditor: ${portrait ? 'loaded' : 'not installed or not loaded'}. Swarm image bridge: ${this.schema.SwarmLoadImageB64 && this.schema.SwarmSaveImageWS ? 'loaded' : 'missing'}. Installed files alone do not mean a node is loaded.`;
     }
     catch (error) {
+        this.schema = {};
         this.setup = `Could not inspect backend nodes: ${String(error)}. The Swarm account needs direct Comfy access.`;
     }
     finally {
@@ -330,6 +336,10 @@ export class ExpressionStudio {
         let failed = 0;
         try {
             const loras = snapshot.useLoras && snapshot.engine !== 'liveportrait' ? this.bridge.captureLoras(snapshot.model) : [];
+            if (snapshot.engine === 'anima') {
+                await this.probe();
+                animaWorkflow(snapshot, tiles[0]!, this.schema, loras); // Validate the complete graph before submitting any card.
+            }
             if (['ipadapter', 'hybrid'].includes(snapshot.engine)) {
                 await this.probe();
                 if (Object.keys(this.schema).length && !this.schema.IPAdapterUnifiedLoader)
@@ -351,6 +361,8 @@ export class ExpressionStudio {
                 this.draw();
                 try {
                     const request = expressionRequest(snapshot, tile, this.bridge.params());
+                    if (snapshot.engine === 'anima')
+                        request.comfyworkflowraw = JSON.stringify(animaWorkflow(snapshot, tile, this.schema, loras));
                     if (snapshot.engine === 'liveportrait')
                         request.comfyworkflowraw = JSON.stringify(livePortraitWorkflow(snapshot.reference, tile.motion, this.schema));
                     let output = await this.bridge.generate(request, loras, n => { this.progress = n; const label = this.host?.querySelector('.expression-run-status small'); if (label)

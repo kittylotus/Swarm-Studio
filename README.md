@@ -60,6 +60,10 @@ If a future release changes JavaScript dependencies, the detached updater asks t
 
 
 
+## Prompt enhancer
+
+Configure **Settings → LLM enhancer**, write a positive prompt or instruction, then use **✦ Enhance** beside **Prompt**. Review streamed provider thinking/summaries and output before applying it. Auto/manual modes cover Anima, Illustrious, Krea and MOSS captions, with a separate validated MOSS layout mode. See the [prompt enhancer guide](docs/PROMPT-ENHANCER.md) for providers, key persistence, runtime requirements and diagnostics. [Expression Studio](docs/EXPRESSION-STUDIO.md) also supports Anima Ref Adapter through its separate reference-guided render method.
+
 ## Backend control room
 
 On desktop Studio, **Settings → Backends** can inspect the local SwarmUI and ComfyUI Git checkouts, fetch tags/recent commits, pin a tag/commit/remote branch, or return a repo to the latest fast-forward state of its origin default branch. Tracked local modifications block version changes; Studio does not run destructive `git reset --hard` or `git clean` operations. Pinning Swarm automatically disables its `src/bin/always_pull` launch marker, and the panel exposes that launch auto-pull policy directly so a pinned checkout cannot silently update itself on restart.

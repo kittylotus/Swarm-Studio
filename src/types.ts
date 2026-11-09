@@ -176,7 +176,7 @@ export interface StudioUiState {
   advancedOpen: boolean;
   mobileCreatePane: "generation" | "output" | "tune";
   identityEditorOpen: boolean;
-  settingsPane: "connection" | "backend" | "appearance" | "keybinds";
+  settingsPane: "connection" | "backend" | "appearance" | "keybinds" | "llm";
 }
 
 export interface PersistedStudioState {

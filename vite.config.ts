@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { llmRelayPlugin } from "./scripts/llm-relay.mjs";
 import { VitePWA } from "vite-plugin-pwa";
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -85,6 +86,7 @@ export default defineConfig({
     sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
   },
   plugins: [
+    llmRelayPlugin(),
     {
       name: "studio-host-control-bridge",
       configureServer(server) {

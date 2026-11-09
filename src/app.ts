@@ -1,4 +1,7 @@
 import { createId } from "./id";
+import { openPromptEnhancer } from "./llm/enhancer";
+import { llmSettingsMarkup, bindLlmSettings } from "./llm/settings";
+import { validateMossComposition } from "./llm/prompts";
 import { builtInThemes, isLightTheme, themeFontOptions, themeFontStack } from "./theme";
 import { StudioStore, folderIds, PERSISTED_OUTPUT_CACHE_LIMIT } from "./library/store";
 import { nonFavoriteTargets, readSwarmFavorites } from "./library/cleanup";
@@ -1826,12 +1829,13 @@ export class StudioApp {
     } else if (section === "library") {
       tabs = `<button class="is-active" data-nav="library"><span>${tabLibrarySvg}</span>Library</button>`;
     } else {
-      count = 5;
+      count = 6;
       const settingsPane = this.store.state.ui.settingsPane;
       tabs = `<button class="${this.view === "logs" ? "is-active" : ""}" data-mobile-settings="logs"><span>${tabLogsSvg}</span>Logs</button>
         <button class="${this.view === "settings" && settingsPane === "connection" ? "is-active" : ""}" data-mobile-settings="connection"><span>${tabConnectionSvg}</span>Connection</button>
         <button class="${this.view === "settings" && settingsPane === "backend" ? "is-active" : ""}" data-mobile-settings="backend"><span>${tabBackendSvg}</span>Backends</button>
         <button class="${this.view === "settings" && settingsPane === "appearance" ? "is-active" : ""}" data-mobile-settings="appearance"><span>${tabAppearanceSvg}</span>Appearance</button>
+        <button class="${this.view === "settings" && settingsPane === "llm" ? "is-active" : ""}" data-mobile-settings="llm"><span aria-hidden="true">✦</span>LLM</button>
         <button class="${this.view === "settings" && settingsPane === "keybinds" ? "is-active" : ""}" data-mobile-settings="keybinds"><span>${tabKeybindsSvg}</span>Keybinds</button>`;
     }
     return `<div class="mobile-context-tabs mobile-context-tabs--${count}">${tabs}</div>
@@ -1916,7 +1920,7 @@ export class StudioApp {
       return;
     }
     if (section === "settings") {
-      const options = ["logs", "connection", "backend", "appearance", "keybinds"] as const;
+      const options = ["logs", "connection", "backend", "appearance", "keybinds", "llm"] as const;
       const currentKey = this.view === "logs" ? "logs" : this.store.state.ui.settingsPane;
       const current = Math.max(0, options.indexOf(currentKey));
       const next = options[(current + direction + options.length) % options.length]!;
@@ -2613,9 +2617,9 @@ export class StudioApp {
           <div class="output-stage" id="output-stage">${this.outputStageMarkup()}</div>
           <div class="prompt-dock">
             <div id="generation-review-strip-host">${this.generationApprovalStripMarkup()}</div>
-            <div class="prompt-tabs"><span>Prompt</span><button class="ghost-button region-toggle ${hasRegionalPromptContent(draft.regionalPrompt) ? "is-active" : ""}" data-action="open-region-editor" title="Regional prompting">${regionsSvg}<em>Regions${draft.regionalPrompt.regions.length ? ` · ${draft.regionalPrompt.regions.length}` : ""}</em></button><button class="ghost-button syntax-toggle" data-action="toggle-syntax" title="Prompt syntax">${syntaxSvg}<em>Syntax</em></button><button class="ghost-button prompt-clear" data-action="clear-draft" title="Clear prompt">${clearPromptSvg}<em>Clear</em></button></div>
+            <div class="prompt-tabs"><span>Prompt</span><button type="button" class="ghost-button" data-action="enhance-prompt" aria-haspopup="dialog" title="Enhance positive prompt" aria-label="Enhance positive prompt"><span aria-hidden="true">✦</span><em>Enhance</em></button><button class="ghost-button region-toggle ${hasRegionalPromptContent(draft.regionalPrompt) ? "is-active" : ""}" data-action="open-region-editor" title="Regional prompting">${regionsSvg}<em>Regions${draft.regionalPrompt.regions.length ? ` · ${draft.regionalPrompt.regions.length}` : ""}</em></button><button class="ghost-button syntax-toggle" data-action="toggle-syntax" title="Prompt syntax">${syntaxSvg}<em>Syntax</em></button><button class="ghost-button prompt-clear" data-action="clear-draft" title="Clear prompt">${clearPromptSvg}<em>Clear</em></button></div>
             ${this.syntaxMenuMarkup()}
-            <label class="field prompt-positive"><textarea id="prompt" placeholder="Describe the image…">${escapeHtml(draft.prompt)}</textarea></label>
+            <label class="field prompt-positive"><textarea id="prompt" aria-label="Positive prompt" placeholder="Describe the image…">${escapeHtml(draft.prompt)}</textarea></label>
             <label class="field prompt-negative"><span>Negative</span><textarea id="negative-prompt" rows="2" placeholder="Things to avoid…">${escapeHtml(draft.negativePrompt)}</textarea></label>
             <div class="prompt-footer">
               <span>${this.connected ? `${this.models.length} checkpoints · ${this.loras.length} LoRAs · ${this.presets.length} presets` : "Connect to load Swarm metadata"}</span>
@@ -4608,9 +4612,10 @@ export class StudioApp {
           <button class="${pane === "connection" ? "is-active" : ""}" data-settings-pane="connection"><span>${tabConnectionSvg}</span><div><b>Connection</b><small>Account, process, network</small></div></button>
           <button class="${pane === "backend" ? "is-active" : ""}" data-settings-pane="backend"><span>${tabBackendSvg}</span><div><b>Backends</b><small>Versions, policy, recovery</small></div></button>
           <button class="${pane === "appearance" ? "is-active" : ""}" data-settings-pane="appearance"><span>${tabAppearanceSvg}</span><div><b>Appearance</b><small>Theme profiles + shape</small></div></button>
+          <button class="${pane === "llm" ? "is-active" : ""}" data-settings-pane="llm"><span aria-hidden="true">✦</span><div><b>LLM enhancer</b><small>Provider, model, reasoning</small></div></button>
           <button class="${pane === "keybinds" ? "is-active" : ""}" data-settings-pane="keybinds"><span>${tabKeybindsSvg}</span><div><b>Keybinds</b><small>Opt-in keyboard controls</small></div></button>
         </aside>
-        <div class="settings-pane-host">${pane === "connection" ? connectionPane : pane === "backend" ? backendPane : pane === "appearance" ? appearancePane : keybindPane}</div>
+        <div class="settings-pane-host">${pane === "llm" ? llmSettingsMarkup() : pane === "connection" ? connectionPane : pane === "backend" ? backendPane : pane === "appearance" ? appearancePane : keybindPane}</div>
       </div>`;
   }
 
@@ -4767,7 +4772,7 @@ export class StudioApp {
       if (target === "logs") {
         this.view = "logs";
         this.store.updateUi({ lastView: "logs", selectedOutputId: "" });
-      } else if (["connection", "backend", "appearance", "keybinds"].includes(String(target))) {
+      } else if (["connection", "backend", "appearance", "keybinds", "llm"].includes(String(target))) {
         this.view = "settings";
         this.store.updateUi({ lastView: "settings", settingsPane: target as StudioUiState["settingsPane"], selectedOutputId: "" });
       }
@@ -5253,6 +5258,21 @@ export class StudioApp {
   }
 
   private bindCreateEvents(): void {
+    this.root.querySelector<HTMLButtonElement>('[data-action="enhance-prompt"]')?.addEventListener('click', () => {
+      this.persistDraftFromForm(true);
+      const draft = structuredClone(this.store.state.draft);
+      openPromptEnhancer({ prompt: draft.prompt, model: this.models.find(model => model.name === draft.model), width: draft.width, height: draft.height,
+        settings: () => { this.view = "settings"; this.store.updateUi({ lastView: "settings", settingsPane: "llm" }); this.render(); },
+        apply: (prompt, layout) => {
+          const current = this.store.state.draft;
+          if (current.prompt !== draft.prompt || current.model !== draft.model || (layout && (current.width !== draft.width || current.height !== draft.height))) return false;
+          this.store.updateDraft({ prompt });
+          const input = this.root.querySelector<HTMLTextAreaElement>('#prompt');
+          if (input) input.value = prompt;
+          return true;
+        },
+      });
+    });
     this.root.querySelector<HTMLElement>("[data-action='generate']")?.addEventListener("click", () => void this.generate());
     this.root.querySelector<HTMLElement>("[data-action='interrupt']")?.addEventListener("click", () => void this.interrupt());
 
@@ -6673,6 +6693,7 @@ export class StudioApp {
       .filter((item) => item.enabled && item.useTrigger)
       .map((item) => String(this.resolveLora(item)?.trigger_phrase ?? "").replaceAll(";", ",").trim())
       .filter(Boolean);
+    validateMossComposition(draft.prompt, draft.width, draft.height, presets.length > 0 || triggers.length > 0 || hasRegionalPromptContent(draft.regionalPrompt));
     const basePrompt = [presets.join(", "), triggers.join(", "), draft.prompt].filter(Boolean).join(", ");
     return compileRegionalPrompt(basePrompt, draft.regionalPrompt);
   }
@@ -6833,6 +6854,9 @@ export class StudioApp {
       this.notify(`Refresh or re-add the missing LoRA${loraSelection.missing.length === 1 ? "" : "s"}: ${names}`, "error");
       return;
     }
+    let request: SwarmGenerationRequest;
+    try { request = this.wireGenerationRequest(this.generationRequest(draft, loraSelection)); }
+    catch (error) { this.notify(error instanceof Error ? error.message : String(error), "error"); return; }
     this.generating = true;
     this.generationStartedAt = performance.now();
     this.generationSamplingStartedAt = 0;
@@ -6845,7 +6869,6 @@ export class StudioApp {
     this.generationPercent = 0;
     this.generationStep = 0;
     this.generationMessage = "Opening generation stream";
-    const request = this.wireGenerationRequest(this.generationRequest(draft, loraSelection));
     const reviewBeforeSave = this.requestUsesReviewBeforeSave(request);
     const pendingApprovalStart = this.pendingGenerationApprovals.length;
     this.generationReviewModeActive = reviewBeforeSave;
@@ -9997,6 +10020,7 @@ export class StudioApp {
   }
 
   private bindSettingsEvents(): void {
+    bindLlmSettings(this.root, (message, error) => this.notify(message, error ? "error" : "success"));
     this.root.querySelector<HTMLElement>("[data-action='refresh-host-control']")?.addEventListener("click", () => void this.refreshHostControlStatus(true));
     this.root.querySelector<HTMLElement>("[data-action='install-host-control']")?.addEventListener("click", () => void this.installHostControl());
     this.root.querySelector<HTMLElement>("[data-action='refresh-backend-control']")?.addEventListener("click", () => void this.refreshBackendControl(true, false));

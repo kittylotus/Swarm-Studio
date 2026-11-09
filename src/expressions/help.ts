@@ -21,7 +21,7 @@ export function openExpressionHelp(): void {
         </ol></section>
         <section><h3>Choose a render method</h3><dl>
           <dt>IPAdapter · reference-guided</dt><dd>Uses the reference to guide identity while prompts direct the emotion. Choose an SDXL or SD1.5 checkpoint and matching adapter weights. Anima is incompatible with these adapters.</dd>
-          <dt>LivePortrait · facial edit</dt><dd>Edits facial geometry on the reference using each card’s <strong>Face controls</strong>. Character prompts and composer LoRAs are unused. <strong>Apply face</strong> reapplies the controls; changing a seed does not create a new face edit.</dd>
+          <dt>Anima Ref Adapter · reference-guided</dt><dd>Uses its own Anima adapter, Qwen3 encoder and Qwen Image VAE. Install the adapter node, restart Comfy, then use Check Anima setup. Describe expression and framing; the reference supplies identity and style. Guidance 4.5 / strength 1 with APG is a starting point. Composer LoRAs load before the adapter. The first render may download adapter weights.</dd><dt>LivePortrait · facial edit</dt><dd>Edits facial geometry on the reference using each card’s <strong>Face controls</strong>. Character prompts and composer LoRAs are unused. <strong>Apply face</strong> reapplies the controls; changing a seed does not create a new face edit.</dd>
           <dt>IPAdapter → LivePortrait · two passes</dt><dd>Generates a portrait with IPAdapter, then refines the generated face with the card’s facial controls. Requires both pipelines.</dd>
           <dt>Image-to-image · redraw</dt><dd>Redraws the reference at the chosen creativity level. It can retain composition and the original expression.</dd>
           <dt>Prompt only · baseline</dt><dd>Generates from the shared description and card direction without a reference. Useful for creating a neutral starting portrait.</dd>
@@ -32,7 +32,7 @@ export function openExpressionHelp(): void {
           <li><strong>Sheet PNG:</strong> all selected cards in their current order, with optional labels. Every selected card must have an image.</li>
           <li><strong>Portrait pack:</strong> individual PNGs and project JSON, plus the sheet when all selected cards are finished.</li>
           <li><strong>Card PNG:</strong> download one portrait directly from its card.</li>
-          <li><strong>API workflow:</strong> exports the first selected expression in IPAdapter or LivePortrait mode. Requires Swarm image bridge nodes and is an API graph. Disable composer LoRAs for standalone IPAdapter graph export; the live Studio pipeline supports them.</li>
+          <li><strong>API workflow:</strong> exports the first selected expression in IPAdapter, Anima Ref Adapter or LivePortrait mode. Requires Swarm image bridge nodes and is an API graph. Disable composer LoRAs for standalone IPAdapter or Anima graph export; the live Studio pipeline supports them.</li>
         </ul></section>
       </div>
       <footer><button class="primary-button" data-help-close>Got it</button></footer>`;

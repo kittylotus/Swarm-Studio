@@ -1,3 +1,4 @@
+mod llm;
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -1271,7 +1272,11 @@ pub fn run() {
             Ok(())
         })
         .manage(OwnedSwarmProcess(Mutex::new(None)))
+        .manage(llm::LlmStreams::default())
         .invoke_handler(tauri::generate_handler![
+            llm::list_llm_models,
+            llm::stream_llm,
+            llm::cancel_llm_stream,
             http_post_json,
             http_get_data_url,
             http_get_text,

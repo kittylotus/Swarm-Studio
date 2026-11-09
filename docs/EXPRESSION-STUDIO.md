@@ -14,6 +14,16 @@ Default: **IPAdapter → SDXL**, semirealism preset, adapter PLUS, strength 0.65
 
 **Image-to-image** and **Prompt only** provide fallback and baseline paths. Image-to-image retains composition more strongly but can also retain the original emotion.
 
+## Anima Ref Adapter
+
+Choose **Anima Ref Adapter · reference-guided** as the render method for Anima checkpoints. This is separate from SDXL IPAdapter. Install [ComfyUI-Anima-Ref-Adapter](https://github.com/ArcAnima/ComfyUI-Anima-Ref-Adapter) in the backend, restart Comfy, then use **Check Anima setup**. Studio does not install nodes or model files. The adapter may download its 183 MB v2 weights on first use.
+
+The pipeline uses separate Anima diffusion weights, a Qwen3 text encoder and Qwen Image VAE. Text encoder, VAE and adapter selections come from live Comfy node inventories; missing or ambiguous filenames block rendering. Default filenames match the upstream workflow. Describe framing and expression in **Character & framing**; the reference supplies character appearance and much of its style. The generic style preset is hidden for this method.
+
+Reference guidance defaults to 4.5, adapter strength to 1 and guidance end to 1, with APG correction. Guidance 1 avoids the extra reference-guidance model call. Around 30 steps / CFG 4.5 is an upstream starting point; shared sampling controls remain explicit and are not silently overwritten when switching methods. Composer LoRAs are inserted before the adapter.
+
+Anima also supports single-expression **Export API workflow**. Disable composer LoRAs for standalone export. The graph uses Swarm image bridge nodes and requires them in the target backend.
+
 ## Workflow
 
 1. Upload a clean front-facing portrait. It is resized to at most 1024 pixels on its longest side. Alternatively generate a neutral card in Prompt only mode, then use its **Ref** action.
@@ -30,7 +40,7 @@ Stop after current finishes the active portrait and prevents later submissions. 
 
 The project, reference, output images, and prior takes live in IndexedDB, separate from Studio's small localStorage library cache. Changes autosave. Imported images must be embedded data URLs; imported remote URLs are discarded. Generated outputs also appear in Studio Library.
 
-API workflow export supports one selected expression in IPAdapter or LivePortrait mode. The graph uses SwarmLoadImageB64 and SwarmSaveImageWS, so it requires those installed Comfy nodes. It is an API graph, not a Comfy frontend layout. Checkpoint names are matched against the live Comfy inventory. Standalone IPAdapter workflow export rejects the composer-LoRA toggle rather than silently omitting the stack; the live Studio pipeline supports it.
+API workflow export supports one selected expression in IPAdapter, Anima Ref Adapter or LivePortrait mode. The graph uses SwarmLoadImageB64 and SwarmSaveImageWS, so it requires those installed Comfy nodes. It is an API graph, not a Comfy frontend layout. Checkpoint names are matched against the live Comfy inventory. Standalone IPAdapter workflow export rejects the composer-LoRA toggle rather than silently omitting the stack; the live Studio pipeline supports it.
 
 The face-edit path is deterministic: Apply face reapplies the card controls; changing a seed does not create a different LivePortrait face edit. Semireal faces generally fit its intended use better than extreme anime faces. Identity consistency remains model-dependent.
 
