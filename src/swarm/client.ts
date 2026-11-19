@@ -313,7 +313,9 @@ export class SwarmClient {
       const transport = signal ? new AbortController() : undefined;
       let interruption: Promise<void> | undefined;
       const interrupt = () => {
-        interruption = this.interrupt().then(() => transport?.abort(), onInterruptError);
+        interruption = this.interrupt()
+          .catch(error => onInterruptError?.(error))
+          .finally(() => transport?.abort());
       };
       signal?.addEventListener("abort", interrupt, { once: true });
       try {

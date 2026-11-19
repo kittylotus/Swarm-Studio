@@ -746,6 +746,28 @@ fn studio_source_command(root: &Path, action: &str) -> Result<serde_json::Value,
 }
 
 #[tauri::command]
+async fn expression_project_files(body: serde_json::Value) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = resolve_studio_root()?;
+        let mut command = Command::new("node");
+        command.arg(root.join("scripts").join("expression-projects.mjs")).arg("--stdio").arg(&root)
+            .current_dir(&root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let mut process = command.spawn().map_err(|error| error.to_string())?;
+        if let Some(mut input) = process.stdin.take() {
+            input.write_all(body.to_string().as_bytes()).map_err(|error| error.to_string())?;
+        }
+        let output = process.wait_with_output().map_err(|error| error.to_string())?;
+        if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).to_string()); }
+        serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())
+    }).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn studio_update_check() -> StudioUpdateStatus {
     match tauri::async_runtime::spawn_blocking(|| {
         let root = resolve_studio_repo_root()?;
@@ -1199,6 +1221,7 @@ pub fn run() {
             swarm_repo_set_launch_auto_pull,
             studio_update_check,
             studio_update_apply,
+            expression_project_files,
             save_data_url_download
         ])
         .run(tauri::generate_context!())

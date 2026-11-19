@@ -1,7 +1,10 @@
 export async function openExpressionSettings(page, tab) {
     const trigger = page.locator('[data-expression-settings-open]');
     await trigger.waitFor({ state: 'attached' });
-    if (!await trigger.isVisible()) return;
+    if (!await trigger.isVisible()) {
+        if (tab) await page.locator('.expression-controls').getByRole('tab', { name: tab, exact: true }).click();
+        return;
+    }
     const drawer = page.locator('.expression-settings-drawer');
     if (!await drawer.isVisible()) await trigger.click();
     if (tab) await drawer.getByRole('tab', { name: tab, exact: true }).click();

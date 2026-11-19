@@ -175,7 +175,7 @@ export async function reportStudioActivity(active: boolean): Promise<void> {
   finally { lastStudioActivityAt = Date.now(); reportingStudioActivity = false; }
 }
 
-async function browserHostControlFetch<T>(path: string, init?: RequestInit, retrySession = true): Promise<T> {
+export async function browserHostControlFetch<T>(path: string, init?: RequestInit, retrySession = true): Promise<T> {
   if (!browserHostControlSessionReady) {
     const session = await fetch("/__studio/host-control/session", { credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(8000) });
     if (!session.ok) throw new Error(`Host control session failed with ${session.status}.`);
@@ -189,6 +189,13 @@ async function browserHostControlFetch<T>(path: string, init?: RequestInit, retr
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok || payload.error) throw new Error(String(payload.error || `Host control returned ${response.status}.`));
   return payload as T;
+}
+
+export async function expressionProjectFiles<T>(body: Record<string, unknown>): Promise<T> {
+  if (runtime.kind === "tauri") return tauriInvoke<T>("expression_project_files", { body });
+  return browserHostControlFetch<T>("expression-projects", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
 }
 
 function connectionPort(settings: ConnectionSettings): number {

@@ -1,11 +1,18 @@
 import { actionMenu, bindActionMenus, disclosureChevronSvg } from '../ui/action-menu';
+import { bindExpandedFields } from '../ui/expanded-editor';
+import { openExpressionBank } from './bank';
+import { openProjectBrowser, projectFiles } from './projects';
+import { showProjectActivity } from './activity';
+import { linkedSvg, unlinkedSvg } from '../ui/resolution-icons';
+import { referenceIcon, samplingIcon, backendIcon } from './settings-icons';
+import { createId } from '../id';
 import { resolveLoraModelName as resolveModelFileName } from '../lora/request';
 import { cloneLoraStack } from '../lora/stack';
 import { dimensionsForRatio } from '../resolution';
 import { ANIMA_INSTALL_GUIDE, animaWorkflow, isAnimaModel, nodeChoices, resolveAnimaSetup } from './anima';
 import { circleHelpIcon, openExpressionHelp } from './help';
 import { expressionFailure } from './errors';
-import { defaultSheet, normalizeSheet, expressionTiles, emptyMotion, motionLimits, expressionRequest, livePortraitWorkflow, ipAdapterWorkflow, advertisedValues, isAdapterModel, imageForStage, recordStageImage, type ExpressionImage, type SheetProject, type ExpressionTile, type NodeSchema, type ExpressionMotion } from './pipeline';
+import { defaultSheet, normalizeSheet, expressionTiles, emptyMotion, motionLimits, expressionRequest, livePortraitWorkflow, ipAdapterWorkflow, advertisedValues, isAdapterModel, imageForStage, recordStageImage, type SheetProject, type ExpressionTile, type NodeSchema, type ExpressionMotion } from './pipeline';
 import { pendingStages, processingLabels, processingRequest, readProcessingImage, type PipelineStage, type ProcessingStage } from './processing';
 import { bindProcessingFields, resolveProcessing, type ProcessingChoices, type ProcessingHost } from './processing-ui';
 import type { ExpressionLora } from './loras';
@@ -53,8 +60,8 @@ async function portraitDataUrl(src: string): Promise<string> {
     return canvas.toDataURL('image/png');
 }
 function db(): Promise<IDBDatabase> { return new Promise((resolve, reject) => { const request = indexedDB.open('swarm-studio-expressions-v1', 1); request.onupgradeneeded = () => request.result.createObjectStore('projects'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); }); }
-async function storedProject(write?: SheetProject): Promise<unknown> { const store = await db(); try {
-    return await new Promise((resolve, reject) => { const tx = store.transaction('projects', write ? 'readwrite' : 'readonly'); const request = write ? tx.objectStore('projects').put(write, 'current') : tx.objectStore('projects').get('current'); request.onsuccess = () => { if (!write)
+async function storedProject(write?: SheetProject, key = 'current'): Promise<unknown> { const store = await db(); try {
+    return await new Promise((resolve, reject) => { const tx = store.transaction('projects', write ? 'readwrite' : 'readonly'); const request = write ? tx.objectStore('projects').put(write, key) : tx.objectStore('projects').get(key); request.onsuccess = () => { if (!write)
         resolve(request.result); }; tx.oncomplete = () => { if (write)
         resolve(undefined); }; request.onerror = () => reject(request.error); tx.onerror = () => reject(tx.error); });
 }
@@ -63,10 +70,39 @@ finally {
 } }
 function download(blob: Blob, name: string): void { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 const slug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'expression-sheet';
+const fileLabel = (value: string) => Array.from(value.normalize('NFC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '-').trim()
+    .replace(/^[. -]+|[. -]+$/g, '')).reduce((text, char) => text.length + char.length <= 40 ? text + char : text, '').trimEnd();
+const pngBytes = (url: string) => Uint8Array.from(atob(url.slice(url.indexOf(',') + 1)), byte => byte.charCodeAt(0));
+
+function portraitPackNames(character: string, projectName: string, tiles: ExpressionTile[], includeSheet: boolean) {
+    const prefix = fileLabel(character);
+    const manifest = prefix ? `${prefix}-project.expressions.json` : 'project.expressions.json';
+    const sheet = includeSheet ? (prefix ? `${prefix}-expression-sheet.png` : 'expression-sheet.png') : undefined;
+    const used = new Set([manifest.toLowerCase(), ...(sheet ? [sheet.toLowerCase()] : [])]);
+    const portraits = tiles.map((tile, index) => {
+        const stem = prefix ? `${prefix}-${fileLabel(tile.name) || 'Expression'}` : `${String(index + 1).padStart(2, '0')}-${slug(tile.name)}`;
+        let name = `${stem}.png`;
+        for (let suffix = 2; used.has(name.toLowerCase()); suffix++) name = `${stem}-${suffix}.png`;
+        used.add(name.toLowerCase());
+        return name;
+    });
+    const archiveStem = prefix && /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(prefix) ? `_${prefix}` : prefix;
+    return { manifest, sheet, portraits, archive: `${archiveStem || slug(projectName)}.zip` };
+}
 export class ExpressionStudio {
     private host: HTMLElement | null = null;
     private project: SheetProject = defaultSheet();
     private loaded = false;
+    private projectFile = createId();
+    private projectFolder = '';
+    private projectFolderSelected = false;
+    private projectSaveState = 'Local draft';
+    private projectSaveError: unknown;
+    private projectTransition = false;
+    private projectImportFolder: string | undefined;
+    private projectSaveVersion = 0;
+    private coverSource = '';
+    private coverPromise = Promise.resolve('');
     private saving: Promise<unknown> = Promise.resolve();
     private saveTimer: number | undefined;
     private running = false;
@@ -81,7 +117,7 @@ export class ExpressionStudio {
     private settingsTab: SettingsTab = 'identity';
     private settingsOpen = false;
     private settingsMediaListener: AbortController | null = null;
-    private generateDisclosures = new Set<string>();
+    private generateDisclosures = new Set<string>(['reference']);
     private status = 'Ready to build your expression sheet.';
     private schema: Record<string, NodeSchema> = {};
     private setup = 'Not checked yet. Check backend setup to inspect loaded nodes.';
@@ -98,6 +134,12 @@ export class ExpressionStudio {
             const saved = await storedProject();
             if (saved)
                 this.project = normalizeSheet(saved);
+            const location = JSON.parse(localStorage.getItem('swarm-expression-location') ?? 'null');
+            if (location && typeof location.folder === 'string' && typeof location.id === 'string') {
+                this.projectFile = location.id;
+                this.projectFolder = location.folder;
+                this.projectFolderSelected = true;
+            }
         }
         catch (error) {
             this.bridge.notify(`Expression project could not be restored: ${String(error)}`, true);
@@ -105,10 +147,28 @@ export class ExpressionStudio {
     } this.draw(); }
     private persist(immediate = false): void {
         window.clearTimeout(this.saveTimer);
+        const version = ++this.projectSaveVersion;
+        this.setProjectSaveState('Saving…');
         const write = () => {
+            this.saveTimer = undefined;
             const snapshot = structuredClone(this.project);
+            const folder = this.projectFolder;
+            const id = this.projectFile;
+            const disk = this.projectFolderSelected;
+            this.setProjectSaveState('Saving…');
             this.saving = this.saving.catch(() => undefined).then(() => storedProject(snapshot))
-                .catch(error => this.bridge.notify(`Expression project could not be saved: ${String(error)}`, true));
+                .then(() => disk ? this.saveProjectFile(folder,id,snapshot) : undefined)
+                .then(() => {
+                    if (version !== this.projectSaveVersion) return;
+                    this.projectSaveError = undefined;
+                    this.setProjectSaveState(disk ? 'Saved to project folder' : 'Saved on this device');
+                })
+                .catch(error => {
+                    if (version !== this.projectSaveVersion) return;
+                    this.projectSaveError = error;
+                    this.setProjectSaveState('Save failed · retry from Project');
+                    this.bridge.notify(`Expression project could not be saved: ${String(error)}`, true);
+                });
         };
         if (immediate) write();
         else this.saveTimer = window.setTimeout(write, 250);
@@ -116,6 +176,36 @@ export class ExpressionStudio {
     private modelsForEngine(engine: SheetProject['engine']): SwarmModel[] {
         return this.bridge.models().filter(model => engine === 'anima' ? isAnimaModel(model)
             : !['ipadapter', 'hybrid'].includes(engine) || isAdapterModel(model));
+    }
+    private rememberProjectLocation(): void {
+        localStorage.setItem('swarm-expression-location', JSON.stringify({ folder: this.projectFolder, id: this.projectFile }));
+    }
+    private setProjectSaveState(state: string): void {
+        this.projectSaveState = state;
+        const note = this.host?.querySelector('[data-project-save-state]');
+        if (note) {
+            note.textContent = state;
+            note.classList.toggle('is-saving', state === 'Saving…');
+        }
+    }
+    private async flushProject(): Promise<void> {
+        if (this.saveTimer !== undefined || this.projectSaveError) this.persist(true);
+        await this.saving;
+        if (this.projectSaveError) throw this.projectSaveError;
+    }
+    private async saveProjectFile(folder: string, id: string, project: SheetProject): Promise<void> {
+        if (this.coverSource !== project.reference) {
+            this.coverSource = project.reference;
+            this.coverPromise = project.reference ? imageFrom(project.reference).then(image => {
+                const canvas = document.createElement('canvas');
+                const scale = Math.min(1,256 / Math.max(image.width,image.height));
+                canvas.width = Math.max(1,Math.round(image.width * scale));
+                canvas.height = Math.max(1,Math.round(image.height * scale));
+                canvas.getContext('2d')!.drawImage(image,0,0,canvas.width,canvas.height);
+                return canvas.toDataURL('image/webp',.75);
+            }).catch(() => '') : Promise.resolve('');
+        }
+        await projectFiles({ action:'save',folder,id,project,cover:await this.coverPromise });
     }
     private draw(): void {
         if (!this.host?.isConnected)
@@ -141,7 +231,11 @@ export class ExpressionStudio {
         const generatingScreen = stage === 'generate';
         const focusedTab = document.activeElement?.matches('[data-stage-tab]');
         this.host.innerHTML = `<div class="expression-studio">
-   <header class="expression-hero"><div><div class="expression-heading"><h1>Expression studio</h1><button type="button" class="expression-help-button" data-command="help" title="Expression sheet usage guide" aria-label="Expression sheet usage guide" aria-haspopup="dialog">${circleHelpIcon}</button></div><p>Keep the identity, direct the emotion, and build a sheet one portrait at a time.</p></div><div class="expression-hero-actions">${actionMenu('expression-project-menu', 'Project', 'Project files', `<div class="studio-menu-section"><button type="button" data-command="project-open" ${disabled}>Open project<small>Continue a saved expression project.</small></button><button type="button" data-command="project-export">Save project<small>Download the project JSON, including portraits.</small></button></div>`)}${actionMenu('expression-export-menu', 'Export', 'Export portraits', '<div class="studio-menu-section"><button type="button" data-command="sheet-export">Export sheet PNG<small>Arrange the selected portraits into one sheet.</small></button><button type="button" data-command="pack-export">Export portrait pack<small>Separate images with the project manifest.</small></button></div>')}<input data-project-import type="file" accept="application/json,.json" hidden ${disabled}/></div></header>
+   <header class="expression-hero"><div><div class="expression-heading"><h1>Expression studio</h1><button type="button" class="expression-help-button" data-command="help" title="Expression sheet usage guide" aria-label="Expression sheet usage guide" aria-haspopup="dialog">${circleHelpIcon}</button></div></div><div class="expression-hero-actions">${actionMenu('expression-project-menu', 'Project', 'Project files', `<div class="studio-menu-section"><button type="button" data-command="project-new" ${disabled}>Start new project</button><button type="button" data-command="project-open" ${disabled}>Open projects<small>Browse, rename, and manage your projects.</small></button><button type="button" data-command="project-import" ${disabled}>Import file<small>Bring in an external project JSON.</small></button><button type="button" data-command="project-save" ${disabled}>Save now</button><button type="button" data-command="project-export">Download project JSON<small>Download a portable copy, including portraits.</small></button></div>`)}${actionMenu('expression-export-menu', 'Export', 'Export portraits', '<div class="studio-menu-section"><button type="button" data-command="sheet-export">Export sheet PNG<small>Arrange the selected portraits into one sheet.</small></button><button type="button" data-command="pack-export">Export portrait pack<small>Separate images with the project manifest.</small></button></div>')}<input data-project-import type="file" accept="application/json,.json" hidden ${disabled}/></div></header>
+   <div class="expression-current-project">
+     ${p.reference ? `<img src="${esc(p.reference)}" alt="Project reference" />` : '<span class="expression-project-monogram" aria-hidden="true">◇</span>'}
+     <div><b>${esc(p.name)}</b><button type="button" class="ghost-button" data-command="project-open" ${disabled}>${this.projectFolderSelected ? 'Projects / ' + esc(this.projectFolder || 'Expressions') : 'Browse projects'}</button><small data-project-save-state role="status" class="${this.projectSaveState === 'Saving…' ? 'is-saving' : ''}">${esc(this.projectSaveState)}</small></div>
+   </div>
    ${this.pipelineTabs()}
    <div class="expression-layout" id="expression-stage-panel" role="tabpanel" aria-labelledby="expression-tab-${stage}">
    <aside class="expression-controls" aria-label="Expression settings">
@@ -149,9 +243,11 @@ export class ExpressionStudio {
     <section class="expression-section" id="expression-settings-identity" data-settings-group="identity"><div class="expression-section-head"><b>Identity</b>${this.bridge.identitySources ? `<button type="button" class="secondary-button" data-command="pick-identity" aria-haspopup="dialog" ${disabled}>Choose saved identity</button>` : ''}</div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
     <div class="expression-reference">${p.reference ? `<img src="${esc(p.reference)}" alt="Character reference"/><span>${esc(p.referenceName)}</span>` : `<div class="expression-reference-empty"><b>＋</b><span>Add a face reference</span><small>Front-facing, neutral expression, clear eyes</small></div>`}</div>
     <div class="expression-button-row"><button type="button" data-command="upload-reference" class="secondary-button" ${disabled}>Upload portrait</button>${this.bridge.browseReference ? `<button type="button" data-command="browse-reference" class="secondary-button" ${disabled}>Browse Library</button>` : ''}<button type="button" data-command="clear-reference" class="ghost-button" ${disabled}>Clear</button><input data-reference type="file" accept="image/png,image/jpeg,image/webp" hidden ${disabled}/></div><p class="helper-copy">Reference is resized to at most 1024 px and stored with this project. IPAdapter uses it to guide identity; LivePortrait edits the face directly.</p>
-    <label class="field"><span>Character & framing</span><textarea rows="4" data-setting="subject" ${disabled}>${esc(p.subject)}</textarea></label><label class="field"><span>Avoid</span><textarea rows="3" data-setting="negative" ${disabled}>${esc(p.negative)}</textarea></label>
+    <div class="field"><span><label for="expression-identity-subject">Character & framing</label></span><textarea id="expression-identity-subject" rows="4" data-setting="subject" data-expand-editor ${disabled}>${esc(p.subject)}</textarea></div>
+    <div class="field"><span><label for="expression-identity-negative">Avoid</label></span><textarea id="expression-identity-negative" rows="3" data-setting="negative" data-expand-editor ${disabled}>${esc(p.negative)}</textarea></div>
     <label class="check-row"><input data-setting="useLoras" type="checkbox" ${p.useLoras ? 'checked' : ''} ${disabled}/>${p.savedIdentityLoras ? 'Use LoRAs from saved identity' : 'Use enabled LoRAs from the composer'}</label></section>
-    <section class="expression-section" id="expression-settings-generate" data-settings-group="generate"><div class="expression-section-head"><b>Generate</b></div>
+    <section class="expression-section" id="expression-settings-generate" data-settings-group="generate">
+    <details class="expression-disclosure expression-reference-settings" data-generate-disclosure="reference" ${this.generateDisclosures.has('reference') ? 'open' : ''}><summary>${referenceIcon}Reference${disclosureChevronSvg}</summary><div class="expression-reference-fields">
     <label class="field"><span id="expression-engine-label">Render method</span><select data-setting="engine" aria-labelledby="expression-engine-label" ${disabled}>${[['ipadapter', 'IPAdapter · reference-guided'], ['anima', 'Anima Ref Adapter · reference-guided'], ['liveportrait', 'LivePortrait · facial edit'], ['hybrid', 'IPAdapter → LivePortrait · two passes'], ['img2img', 'Image-to-image · redraw'], ['text', 'Prompt only · baseline']].map(([v, label]) => `<option value="${v}" ${p.engine === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
     <label class="field" data-pipeline-part="style" ${p.engine === 'anima' ? 'hidden' : ''}><span id="expression-style-label">Style preset</span><select data-setting="style" aria-labelledby="expression-style-label" ${disabled}>${[['semireal', 'Semirealism'], ['realistic', 'Realistic portrait'], ['illustrated', 'Illustrated / anime']].map(([v, label]) => `<option value="${v}" ${p.style === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
     <div data-pipeline-part="checkpoint" ${p.engine === 'liveportrait' ? 'hidden' : ''}><label class="field"><span>${['ipadapter', 'hybrid'].includes(p.engine) ? 'SDXL / SD1.5 checkpoint' : p.engine === 'anima' ? 'Anima model' : 'Checkpoint'}</span><select data-setting="model" ${disabled}>${models.map(m => `<option value="${esc(m.name)}" ${m.name === p.model ? 'selected' : ''}>${esc(m.title || m.name)}</option>`).join('') || '<option value="">No compatible checkpoint loaded</option>'}</select></label></div><p data-pipeline-part="portrait" class="helper-copy" ${p.engine !== 'liveportrait' ? 'hidden' : ''}>Works best on detectable portrait faces. Uses the ExpressionEditor sliders in each card; character prompts and LoRAs are not used.</p>
@@ -177,8 +273,9 @@ export class ExpressionStudio {
       </section>
     </div>
     <div data-pipeline-part="img2img" ${p.engine === 'img2img' ? '' : 'hidden'}>${field('Redraw / creativity', 'denoise', 0, 1, .05)}</div>
-    <details class="expression-details expression-disclosure" data-generate-disclosure="sampling" ${this.generateDisclosures.has('sampling') ? 'open' : ''}><summary>Sampling & resolution</summary>${this.resolutionFields(disabled)}<div class="expression-fields">${field('Steps', 'steps', 1, 100)}${field('CFG', 'cfg', 1, 20, .5)}${field('Shared seed', 'seed', 0, 2147483646)}</div><label class="field"><span>Sampler</span><select data-setting="sampler" ${disabled}>${options(samplers, p.sampler)}</select></label><label class="field"><span>Scheduler</span><select data-setting="scheduler" ${disabled}>${options(schedulers, p.scheduler)}</select></label><p class="helper-copy">768² / 24 steps is a conservative starting point for an 8 GB GPU. Every card shares the seed; rerolls increment only that card.</p></details>
-    <details class="expression-details expression-disclosure" data-generate-disclosure="backend" ${this.generateDisclosures.has('backend') ? 'open' : ''}><summary>Backend setup & research</summary><button data-command="probe" class="secondary-button" ${this.setupBusy ? 'disabled' : ''}>${this.setupBusy ? 'Checking…' : 'Check loaded nodes'}</button><p class="expression-setup">${esc(this.setup)}</p><p class="helper-copy">IPAdapter needs its model weights and CLIP Vision. LivePortrait additionally needs ExpressionEditor and its models; install through ComfyUI Manager, restart the backend, then recheck.</p><button data-command="workflow-export" class="ghost-button">Export API workflow</button><a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noopener noreferrer">IPAdapter setup ↗</a><a href="https://github.com/PowerHouseMan/ComfyUI-AdvancedLivePortrait" target="_blank" rel="noopener noreferrer">LivePortrait setup ↗</a><a href="https://github.com/ToTheBeginning/PuLID/blob/main/docs/pulid_for_flux.md" target="_blank" rel="noopener noreferrer">Why PuLID-FLUX needs more memory ↗</a></details></section>
+    </div></details>
+    <details class="expression-details expression-disclosure" data-generate-disclosure="sampling" ${this.generateDisclosures.has('sampling') ? 'open' : ''}><summary>${samplingIcon}Sampling & resolution${disclosureChevronSvg}</summary>${this.resolutionFields(disabled)}<div class="expression-fields expression-sampling-fields">${field('Shared seed', 'seed', 0, 2147483646)}${field('Steps', 'steps', 1, 100)}${field('CFG', 'cfg', 1, 20, .5)}<label class="field"><span>Sampler</span><select data-setting="sampler" ${disabled}>${options(samplers, p.sampler)}</select></label><label class="field"><span>Scheduler</span><select data-setting="scheduler" ${disabled}>${options(schedulers, p.scheduler)}</select></label></div><p class="helper-copy">768² / 24 steps is a conservative starting point for an 8 GB GPU. Every card shares the seed; rerolls increment only that card.</p></details>
+    <details class="expression-details expression-disclosure" data-generate-disclosure="backend" ${this.generateDisclosures.has('backend') ? 'open' : ''}><summary>${backendIcon}Backend setup & research${disclosureChevronSvg}</summary><button data-command="probe" class="secondary-button" ${this.setupBusy ? 'disabled' : ''}>${this.setupBusy ? 'Checking…' : 'Check loaded nodes'}</button><p class="expression-setup">${esc(this.setup)}</p><p class="helper-copy">IPAdapter needs its model weights and CLIP Vision. LivePortrait additionally needs ExpressionEditor and its models; install through ComfyUI Manager, restart the backend, then recheck.</p><button data-command="workflow-export" class="ghost-button">Export API workflow</button><a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noopener noreferrer">IPAdapter setup ↗</a><a href="https://github.com/PowerHouseMan/ComfyUI-AdvancedLivePortrait" target="_blank" rel="noopener noreferrer">LivePortrait setup ↗</a><a href="https://github.com/ToTheBeginning/PuLID/blob/main/docs/pulid_for_flux.md" target="_blank" rel="noopener noreferrer">Why PuLID-FLUX needs more memory ↗</a></details></section>
     <section class="expression-section" id="expression-settings-layout" data-settings-group="layout"><div class="expression-section-head"><b>Sheet layout</b></div><div class="expression-fields">${field('Columns', 'columns', 1, 8)}${field('Gutter', 'gutter', 0, 100)}<label class="field"><span>Paper</span><input data-setting="background" type="color" value="${p.background}" ${disabled}/></label></div><label class="check-row"><input data-setting="labels" type="checkbox" ${p.labels ? 'checked' : ''} ${disabled}/>Include expression labels</label><p class="helper-copy">Exports include enabled cards in their current order. Portrait packs include separate images and the project manifest.</p></section>
     ` : `<section class="expression-section" data-processing-stage="${stage}">
         <div class="expression-section-head"><b>${stageLabels[stage]} settings</b></div>
@@ -191,7 +288,7 @@ export class ExpressionStudio {
         ${generatingScreen ? `<input class="expression-title" id="expression-stage-heading" aria-label="Expression sheet name" data-setting="name" value="${esc(p.name)}" ${disabled}/>` : `<h2 id="expression-stage-heading" class="expression-stage-heading">${stageLabels[stage]}</h2>`}
         <p data-stage-count></p>
       </div>
-      <div class="expression-toolbar-actions">
+      <div class="expression-toolbar-actions expression-board-tools" role="group" aria-label="Expression tools">
         <button type="button" class="secondary-button expression-settings-open" aria-haspopup="dialog" aria-controls="expression-settings-drawer" data-expression-settings-open>Settings</button>
         ${generatingScreen ? this.addExpressionsMenu(disabled) : ''}
         <div class="expression-render-actions">
@@ -203,7 +300,7 @@ export class ExpressionStudio {
       </div>
     </div>
     <div class="expression-run-status" role="status"><span class="${this.running ? 'is-running' : ''}"></span><b>${esc(this.status)}</b></div>
-    ${p.tiles.length ? `<div class="expression-grid" style="--expression-columns:${Math.min(p.columns, 4)}">${p.tiles.map((tile, index) => this.card(tile, index, disabled)).join('')}</div>`
+    ${p.tiles.length || generatingScreen ? `<div class="expression-grid" style="--expression-columns:${Math.min(p.columns, 4)}">${p.tiles.map((tile, index) => this.card(tile, index, disabled)).join('')}${generatingScreen && p.tiles.length < 48 ? `<button type="button" class="expression-add-card" data-command="add-card" aria-haspopup="dialog" ${disabled}><span aria-hidden="true">+</span>Add custom expression</button>` : ''}</div>`
         : '<p class="expression-stage-empty">Add expressions on the Generate screen to build your sheet.</p>'}
    </section></div>
    <dialog id="expression-settings-drawer" class="expression-settings-drawer" aria-labelledby="expression-settings-title"><header><h2 id="expression-settings-title">${generatingScreen ? 'Expression settings' : `${stageLabels[stage]} settings`}</h2><button type="button" class="icon-button" aria-label="Close expression settings" data-expression-settings-close>×</button></header></dialog>
@@ -253,6 +350,8 @@ export class ExpressionStudio {
             }
             for (const section of sections) {
                 section.toggleAttribute('data-selected', section.dataset.settingsGroup === key);
+                section.setAttribute('role', 'tabpanel');
+                section.setAttribute('aria-labelledby', `expression-settings-tab-${section.dataset.settingsGroup}`);
             }
             controls.scrollTop = 0;
         };
@@ -263,17 +362,31 @@ export class ExpressionStudio {
         const open = () => {
             if (!phone.matches || drawer.open) return;
             this.settingsOpen = true;
+            const controller = new AbortController();
+            this.settingsMediaListener = controller;
+            const { signal } = controller;
             for (const section of sections) {
                 section.setAttribute('role', 'tabpanel');
                 section.setAttribute('aria-labelledby', `expression-settings-tab-${section.dataset.settingsGroup}`);
             }
             selectTab(this.settingsTab);
             drawer.append(controls);
+            const pageTop = window.scrollY;
+            document.body.style.setProperty('--expression-settings-page-top', `${-pageTop}px`);
+            document.body.setAttribute('data-expression-page-locked', '');
+            const removal = new MutationObserver(() => {
+                if (!drawer.isConnected) controller.abort();
+            });
+            removal.observe(root.closest('#app') ?? document.body, { childList: true, subtree: true });
+            signal.addEventListener('abort', () => {
+                removal.disconnect();
+                document.body.removeAttribute('data-expression-page-locked');
+                document.body.style.removeProperty('--expression-settings-page-top');
+                window.scrollTo({ top: pageTop, behavior: 'instant' });
+            }, { once: true });
             syncViewport();
             drawer.showModal();
             (tabs.find(tab => tab.tabIndex === 0) ?? close).focus({ preventScroll: true });
-            this.settingsMediaListener = new AbortController();
-            const { signal } = this.settingsMediaListener;
             viewport?.addEventListener('resize', syncViewport, { signal });
             viewport?.addEventListener('scroll', syncViewport, { signal });
             phone.addEventListener('change', () => { if (!phone.matches && drawer.open) dismiss(); },
@@ -288,10 +401,6 @@ export class ExpressionStudio {
             if (!drawer.isConnected) return;
             this.settingsOpen = false;
             this.settingsMediaListener?.abort();
-            for (const section of sections) {
-                section.removeAttribute('role');
-                section.removeAttribute('aria-labelledby');
-            }
             layout.prepend(controls);
             if (phone.matches) trigger.focus({ preventScroll: true });
         });
@@ -307,6 +416,7 @@ export class ExpressionStudio {
                 next.focus({ preventScroll: true });
             });
         });
+        selectTab(this.settingsTab);
         if (this.settingsOpen && phone.matches) open();
         else this.settingsOpen = false;
     }
@@ -322,9 +432,9 @@ export class ExpressionStudio {
             ${this.availableStages().map(stage => {
                 const selected = stage === this.screen;
                 const active = stage === this.currentStage;
-                return `<button type="button" id="expression-tab-${stage}" role="tab" aria-label="${stageLabels[stage]}" aria-controls="expression-stage-panel"
+                return `<button type="button" id="expression-tab-${stage}" role="tab" aria-label="${stageLabels[stage]}" aria-controls="expression-stage-panel" aria-describedby="expression-status-${stage}"
                     aria-selected="${selected}" tabindex="${selected ? 0 : -1}" data-stage-tab="${stage}" data-pipeline-stage="${stage}" ${active ? 'aria-current="step"' : ''}>
-                    <span><b>${stageLabels[stage]}</b><small></small></span>
+                    <span><b>${stage === 'background' ? '<span class="expression-stage-full">Remove background</span><span class="expression-stage-short">Remove BG</span>' : stageLabels[stage]}</b><small id="expression-status-${stage}" class="expression-stage-badge"></small></span>
                     ${active ? `<progress aria-label="${stageLabels[stage]} progress" max="1" ${this.progress ? `value="${this.progress}"` : ''}></progress>` : ''}
                 </button>`;
             }).join('')}
@@ -342,9 +452,14 @@ export class ExpressionStudio {
             const waiting = ready(stage);
             const complete = done(stage);
             const failed = tiles.filter(tile => tile.error && tile.errorStage === stage).length;
-            const badge = root.querySelector(`[data-stage-tab="${stage}"] small`);
-            if (badge) badge.textContent = stage === this.currentStage ? 'Running' : stage !== 'generate' && recipe.mode === 'off'
-                ? 'Skipped' : failed ? `${failed} failed` : waiting ? `${waiting} ready` : complete ? `${complete} shown` : 'Waiting';
+            const badge = root.querySelector<HTMLElement>(`#expression-status-${stage}`);
+            const [state, label] = stage === this.currentStage ? ['running', 'Running'] : stage !== 'generate' && recipe.mode === 'off'
+                ? ['skipped', 'Skipped'] : failed ? ['failed', `${failed} failed`] : waiting ? ['ready', `${waiting} ready`]
+                : complete ? ['shown', `${complete} shown`] : ['waiting', 'Waiting'];
+            if (badge) {
+                badge.dataset.state = state;
+                badge.textContent = label;
+            }
         }
         const count = root.querySelector('[data-stage-count]');
         if (count) count.textContent = `${done(this.screen)} results · ${ready(this.screen)} ready · ${tiles.filter(tile => tile.locked).length} locked`;
@@ -360,7 +475,7 @@ export class ExpressionStudio {
         }
     }
     private addExpressionsMenu(disabled: string): string {
-        return actionMenu('expression-add-menu', 'Add expressions', 'Build the sheet', `<div class="studio-menu-section"><label class="field"><span>Preset set</span><select data-preset-count ${disabled}><option value="6">Essential 6</option><option value="12" selected>Classic 12</option><option value="24">Full range 24</option></select></label><button type="button" data-command="load-presets" ${disabled}>Add preset expressions<small>Add the chosen preset set to this sheet.</small></button></div><div class="studio-menu-section"><button type="button" data-command="add-card" ${disabled}>Add custom expression<small>Start with a blank direction.</small></button></div>`);
+        return actionMenu('expression-add-menu', 'Add expressions', 'Build the sheet', `<div class="studio-menu-section"><label class="field"><span>Preset set</span><select data-preset-count ${disabled}><option value="6">Essential 6</option><option value="12" selected>Classic 12</option><option value="24">Full range 24</option></select></label><button type="button" data-command="load-presets" ${disabled}>Add preset expressions<small>Add the chosen preset set to this sheet.</small></button></div><div class="studio-menu-section"><button type="button" data-command="add-card" ${disabled}>Add custom expression<small>Write a direction and optionally save it for reuse.</small></button><button type="button" data-command="open-bank" ${disabled}>Custom expression bank</button></div>`);
     }
     private processingStatus(tile: ExpressionTile, stage: ProcessingStage): string {
         if (imageForStage(tile, stage)) return 'Result';
@@ -396,12 +511,14 @@ export class ExpressionStudio {
             <details class="expression-disclosure" data-pipeline-part="motion" ${['liveportrait', 'hybrid'].includes(this.project.engine) ? '' : 'hidden'}><summary>Face controls</summary><div class="expression-motion">${Object.entries(tile.motion).map(([key, value]) => `<label><span>${esc(key.replaceAll('_', ' '))}</span><input data-motion="${key}" type="number" min="${motionLimits[key as keyof ExpressionMotion][0]}" max="${motionLimits[key as keyof ExpressionMotion][1]}" step="${key === 'smile' ? .05 : .5}" value="${value}" ${disabled}/></label>`).join('')}</div></details>
             <div class="expression-card-actions">
                 ${stopButton || `<button data-tile-command="render" class="primary-button" ${disabled || tile.locked ? 'disabled' : ''}>${this.project.engine === 'liveportrait' ? 'Apply face' : tile.image ? 'Reroll' : 'Render'}</button>`}
-                <button data-tile-command="reference" class="ghost-button" title="Use this portrait as the character reference" ${result && !this.running ? '' : 'disabled'}>Ref</button>
-                <button data-tile-command="download" class="ghost-button" ${result ? '' : 'disabled'}>PNG</button>
-                <button data-tile-command="up" title="Move earlier" ${disabled}>↑</button><button data-tile-command="down" title="Move later" ${disabled}>↓</button><button data-tile-command="remove" title="Remove card" ${disabled}>×</button>
+                ${actionMenu(`expression-card-actions-${esc(tile.id)}`, 'Card actions', tile.name,
+                    `<div class="studio-menu-section"><button type="button" data-tile-command="reference" ${result && !this.running ? '' : 'disabled'}>Use as reference</button>
+                    <button type="button" data-tile-command="up" ${disabled || index === 0 ? 'disabled' : ''}>Move earlier</button>
+                    <button type="button" data-tile-command="down" ${disabled || index === this.project.tiles.length - 1 ? 'disabled' : ''}>Move later</button></div>
+                    <div class="studio-menu-section"><button type="button" class="danger-soft" data-tile-command="remove" ${disabled}>Remove expression</button></div>`)}
             </div>` : `
             ${this.cardError(tile)}
-            <div class="expression-processing-meta"><small data-stage-state="${tile.id}"></small>${stopButton}${result ? '<button data-tile-command="download" class="ghost-button">PNG</button>' : ''}</div>`;
+            <div class="expression-processing-meta"><small data-stage-state="${tile.id}"></small>${stopButton}</div>`;
         const lastStage = tile.stage ?? 'generate';
         const latest = !preview && tile.image && lastStage !== stage && this.availableStages().includes(lastStage);
         const empty = latest ? 'Earlier image unavailable' : generate ? 'Ready for direction' : 'No image yet';
@@ -449,18 +566,20 @@ export class ExpressionStudio {
         return `<div class="expression-resolution">
             <div class="expression-resolution-options">
                 <label class="field"><span id="expression-ratio-label">Aspect ratio</span><select data-expression-ratio aria-labelledby="expression-ratio-label" ${disabled}><option value="">Custom</option>${presets.map(ratio => `<option value="${ratio}" ${ratio === this.project.linkedRatio ? 'selected' : ''}>${ratio}</option>`).join('')}</select></label>
-                <button type="button" class="secondary-button" data-expression-link aria-label="Link dimensions" aria-pressed="${Boolean(this.project.linkedRatio)}" ${disabled}>${this.project.linkedRatio ? 'Linked' : 'Unlinked'}</button>
+                <button type="button" class="secondary-button" data-expression-link aria-label="Link dimensions" title="${this.project.linkedRatio ? 'Unlink dimensions' : 'Link dimensions'}" aria-pressed="${Boolean(this.project.linkedRatio)}" ${disabled}>${this.project.linkedRatio ? linkedSvg : unlinkedSvg}</button>
             </div>
             ${(['width', 'height'] as const).map((axis) => {
                 const label = axis === 'width' ? 'Width' : 'Height';
-                return `<div class="expression-dimension"><label class="field"><span>${label} (px)</span><input type="number" min="256" max="1536" step="64" data-dimension="${axis}" value="${this.project[axis]}" ${disabled}/></label><input type="range" min="256" max="1536" step="64" aria-label="${label} slider" data-dimension="${axis}" value="${this.project[axis]}" ${disabled}/></div>`;
+                return `<div class="expression-dimension"><label class="field"><span>${label} (px)</span><input type="number" min="256" max="1536" step="64" data-dimension="${axis}" value="${this.project[axis]}" ${disabled}/></label><input type="range" min="256" max="1536" step="64" aria-label="${label} slider" data-dimension="${axis}" value="${this.project[axis]}" ${this.project.linkedRatio ? 'hidden' : ''} ${disabled}/></div>`;
             }).join('')}
+            <label class="expression-size-slider range-field" ${this.project.linkedRatio ? '' : 'hidden'}><span>Size <b data-resolution-size-value>${Math.max(this.project.width,this.project.height)} px</b></span><input type="range" min="256" max="1536" step="64" aria-label="Size slider" data-resolution-size value="${Math.max(this.project.width,this.project.height)}" ${disabled}/></label>
         </div>`;
     }
     private bindResolution(root: HTMLElement): void {
         const fields = [...root.querySelectorAll<HTMLInputElement>('[data-dimension]')];
         const presets = root.querySelector<HTMLSelectElement>('[data-expression-ratio]');
         const link = root.querySelector<HTMLButtonElement>('[data-expression-link]');
+        const sizeSlider = root.querySelector<HTMLInputElement>('[data-resolution-size]');
         if (!presets || !link) return;
         const apply = (axis: 'width' | 'height', size: number, ratio = this.project.linkedRatio) => {
             const p = this.project;
@@ -475,7 +594,14 @@ export class ExpressionStudio {
                 p[axis] = Math.min(1536, Math.max(256, Math.round(size / 64) * 64));
             }
             for (const input of fields) input.value = String(p[input.dataset.dimension as 'width' | 'height']);
-            link.textContent = p.linkedRatio ? 'Linked' : 'Unlinked';
+            for (const input of fields) if (input.type === 'range') input.hidden = Boolean(p.linkedRatio);
+            if (sizeSlider) {
+                sizeSlider.parentElement!.hidden = !p.linkedRatio;
+                sizeSlider.value = String(Math.max(p.width,p.height));
+                root.querySelector('[data-resolution-size-value]')!.textContent = `${sizeSlider.value} px`;
+            }
+            link.innerHTML = p.linkedRatio ? linkedSvg : unlinkedSvg;
+            link.title = p.linkedRatio ? 'Unlink dimensions' : 'Link dimensions';
             link.setAttribute('aria-pressed', String(Boolean(p.linkedRatio)));
             presets.value = [...presets.options].some(option => option.value === p.linkedRatio) ? p.linkedRatio! : '';
             root.querySelectorAll<HTMLElement>('.expression-card-image').forEach(image => { image.style.aspectRatio = `${p.width} / ${p.height}`; });
@@ -485,6 +611,7 @@ export class ExpressionStudio {
             const axis = field.dataset.dimension as 'width' | 'height';
             apply(axis, Number.isFinite(field.valueAsNumber) ? field.valueAsNumber : this.project[axis]);
         });
+        sizeSlider?.addEventListener('input', () => apply(this.project.width >= this.project.height ? 'width' : 'height', sizeSlider.valueAsNumber));
         link.addEventListener('click', () => {
             const p = this.project;
             p.linkedRatio = p.linkedRatio ? undefined : `${p.width}:${p.height}`;
@@ -503,6 +630,7 @@ export class ExpressionStudio {
     }
     private bind(): void {
         const root = this.host!;
+        bindExpandedFields(root);
         this.bindResolution(root);
         const switchStage = (stage: PipelineStage) => {
             if (this.screen !== stage) {
@@ -550,14 +678,21 @@ export class ExpressionStudio {
             input.value = '';
             void this.loadReference(file);
         });
-        root.querySelector<HTMLInputElement>('[data-project-import]')?.addEventListener('change', e => void this.importProject((e.currentTarget as HTMLInputElement).files?.[0]));
+        root.querySelector<HTMLInputElement>('[data-project-import]')?.addEventListener('change', e => {
+            const input = e.currentTarget as HTMLInputElement;
+            const file = input.files?.[0];
+            input.value = '';
+            const folder = this.projectImportFolder;
+            this.projectImportFolder = undefined;
+            void this.importProject(file,folder);
+        });
         bindActionMenus(root);
         const openGuide = this.bridge.openAnimaGuide;
         if (openGuide) root.querySelector('[data-anima-guide]')?.addEventListener('click', event => {
             event.preventDefault();
             void openGuide().catch(error => this.bridge.notify(`Could not open the installation guide: ${String(error)}`, true));
         });
-        root.querySelectorAll<HTMLButtonElement>('[data-command]').forEach(button => button.addEventListener('click', () => void this.command(button.dataset.command!)));
+        root.querySelectorAll<HTMLButtonElement>('[data-command]').forEach(button => button.addEventListener('click', () => void this.command(button.dataset.command!, button)));
         root.querySelectorAll<HTMLElement>('[data-card]').forEach(card => {
             const tile = this.project.tiles.find(t => t.id === card.dataset.card)!;
             card.querySelectorAll<HTMLButtonElement>('[data-take]').forEach(button => button.addEventListener('click', () => { if (this.running)
@@ -574,11 +709,7 @@ export class ExpressionStudio {
             else
                 tile.prompt = input.value.slice(0, 3000); this.persist(); }));
             card.querySelectorAll<HTMLInputElement>('[data-motion]').forEach(input => input.addEventListener('change', () => { const key = input.dataset.motion as keyof ExpressionMotion; tile.motion[key] = Number.isFinite(input.valueAsNumber) ? Math.max(motionLimits[key][0], Math.min(motionLimits[key][1], input.valueAsNumber)) : 0; this.persist(); }));
-            card.querySelectorAll<HTMLButtonElement>('[data-tile-command]').forEach(button => button.addEventListener('click', () => { const command = button.dataset.tileCommand; if (command === 'download') {
-                const result = imageForStage(tile, this.screen);
-                if (result) void this.saveTile(tile.name, result).catch(error => this.bridge.notify(String(error), true));
-                return;
-            } if (command === 'stop' && this.currentId === tile.id && this.runController) {
+            card.querySelectorAll<HTMLButtonElement>('[data-tile-command]').forEach(button => button.addEventListener('click', () => { const command = button.dataset.tileCommand; if (command === 'stop' && this.currentId === tile.id && this.runController) {
                 this.stopped = true;
                 this.runController.abort();
                 this.livePreview = '';
@@ -596,8 +727,19 @@ export class ExpressionStudio {
                 void this.run([tile], true, 'generate');
                 return;
             } if (command === 'lock')
-                tile.locked = !tile.locked; if (command === 'remove')
-                this.project.tiles = this.project.tiles.filter(t => t.id !== tile.id); if (command === 'up' || command === 'down') {
+                tile.locked = !tile.locked;
+            if (command === 'remove') {
+                const index = this.project.tiles.indexOf(tile);
+                this.project.tiles.splice(index, 1);
+                const neighbor = this.project.tiles[index] ?? this.project.tiles.at(-1);
+                this.persist();
+                this.draw();
+                this.host?.querySelector<HTMLElement>(neighbor
+                    ? `[popovertarget="expression-card-actions-${CSS.escape(neighbor.id)}"]`
+                    : '[popovertarget="expression-add-menu"]')?.focus({ preventScroll: true });
+                return;
+            }
+            if (command === 'up' || command === 'down') {
                 const index = this.project.tiles.indexOf(tile);
                 const next = index + (command === 'up' ? -1 : 1);
                 if (next >= 0 && next < this.project.tiles.length) {
@@ -607,7 +749,11 @@ export class ExpressionStudio {
             } this.persist(); this.draw(); }));
         });
     }
-    private async command(command: string): Promise<void> {
+    private async command(command: string, trigger?: HTMLButtonElement, destination?: string): Promise<void> {
+        let finishActivity: (() => void) | undefined;
+        const projectAction = ['project-new','project-open','project-folder','project-import','project-save'].includes(command);
+        if (projectAction && (this.running || this.projectTransition)) return;
+        if (projectAction) this.projectTransition = true;
         try {
             if (command === 'help') {
                 openExpressionHelp();
@@ -631,8 +777,108 @@ export class ExpressionStudio {
                 this.draw();
                 return;
             }
-            if (command === 'project-open') {
+            if (command === 'project-import') {
+                this.projectImportFolder = undefined;
                 if (!this.running) this.host?.querySelector<HTMLInputElement>('[data-project-import]')?.click();
+                return;
+            }
+            if (command === 'project-save') {
+                if (this.host) finishActivity = showProjectActivity(this.host,'Saving project…');
+                this.persist(true);
+                await this.flushProject();
+                return;
+            }
+            if (command === 'project-new') {
+                if (this.running) return;
+                const name = window.prompt('New project name', 'Character expressions');
+                if (!name?.trim()) return;
+                if (this.host) finishActivity = showProjectActivity(this.host,'Creating project…');
+                await this.flushProject();
+                await storedProject(structuredClone(this.project), `backup-${Date.now()}`);
+                await storedProject(this.project);
+                await this.saveProjectFile(this.projectFolder,this.projectFile,this.project);
+                this.projectFolder = destination ?? this.projectFolder;
+                this.projectFolderSelected = true;
+                this.projectFile = createId();
+                if (this.projectFolderSelected) this.rememberProjectLocation();
+                this.project = { ...defaultSheet(), name: name.trim().slice(0,120) };
+                this.referenceRequest++;
+                this.screen = 'generate';
+                this.persist(true);
+                await this.flushProject();
+                this.draw();
+                return;
+            }
+            if ((command === 'project-folder' || command === 'project-open') && this.host && !this.running) {
+                const originalProject = this.project;
+                const originalName = this.project.name;
+                const originalFolder = this.projectFolder;
+                const originalFile = this.projectFile;
+                const originalUi = this.host.querySelector('.expression-studio');
+                openProjectBrowser(this.host, this.projectFolder, {
+                  prepare: () => this.flushProject(),
+                  current: { folder: this.projectFolder, file: this.projectFile + '.expressions.json' },
+                  closed: () => {
+                    if (this.host?.querySelector('.expression-studio') === originalUi &&
+                        (this.project !== originalProject || this.project.name !== originalName || this.projectFolder !== originalFolder || this.projectFile !== originalFile))
+                        this.draw();
+                  },
+                  create: async folder => {
+                    const before = this.projectFile;
+                    await this.command('project-new',undefined,folder);
+                    return this.projectFile !== before;
+                  },
+                  importFile: folder => {
+                    this.projectImportFolder = folder;
+                    this.host?.querySelector<HTMLInputElement>('[data-project-import]')?.click();
+                  },
+                  renamed: (folder,file,name) => {
+                    if (folder === this.projectFolder && file === this.projectFile + '.expressions.json') {
+                        this.project.name = name;
+                        this.persist(true);
+                    }
+                  },
+                  deleted: async (folder,file) => {
+                    if (folder === this.projectFolder && file === this.projectFile + '.expressions.json') {
+                        window.clearTimeout(this.saveTimer);
+                        this.project = defaultSheet();
+                        this.projectFile = createId();
+                        this.projectFolderSelected = false;
+                        this.referenceRequest++;
+                        localStorage.removeItem('swarm-expression-location');
+                        await storedProject(this.project);
+                        this.setProjectSaveState('Saved on this device');
+                    }
+                  },
+                  selectFolder: async folder => {
+                    await this.flushProject();
+                    const id = createId();
+                    await this.saveProjectFile(folder,id,this.project);
+                    this.projectFolder = folder;
+                    this.projectFolderSelected = true;
+                    this.projectFile = id;
+                    this.rememberProjectLocation();
+                    this.persist(true);
+                    await this.flushProject();
+                  }, open: async (raw, folder, file) => {
+                    if (this.running) throw new Error('Finish the current render before switching projects.');
+                    const imported = normalizeSheet(raw);
+                    window.clearTimeout(this.saveTimer);
+                    await this.saving;
+                    await storedProject(structuredClone(this.project), `backup-${Date.now()}`);
+                    await this.saveProjectFile(this.projectFolder,this.projectFile,this.project);
+                    this.project = imported;
+                    this.referenceRequest++;
+                    this.projectFolder = folder;
+                    const id = file.replace(/\.expressions\.json$/, '');
+                    this.projectFile = /^[a-zA-Z0-9-]{1,80}$/.test(id) ? id : createId();
+                    this.projectFolderSelected = true;
+                    this.rememberProjectLocation();
+                    this.screen = 'generate';
+                    this.persist(true);
+                    await this.flushProject();
+                  },
+                });
                 return;
             }
             if (command === 'project-export') {
@@ -644,7 +890,7 @@ export class ExpressionStudio {
                 return;
             }
             if (command === 'pack-export') {
-                await this.pack();
+                this.openPortraitPack();
                 return;
             }
             if (command === 'workflow-export') {
@@ -682,10 +928,26 @@ export class ExpressionStudio {
                 this.project.reference = '';
                 this.project.referenceName = '';
             }
-            if (command === 'add-card') {
-                if (this.project.tiles.length >= 48)
-                    throw new Error('A sheet supports up to 48 expressions.');
-                this.project.tiles.push({ ...expressionTiles(1)[0]!, name: 'Custom expression', prompt: '', motion: emptyMotion() });
+            if ((command === 'add-card' || command === 'open-bank') && this.host) {
+                const menuTrigger = '[popovertarget="expression-add-menu"]';
+                const returnFocus = trigger?.matches('.expression-add-card') ? '.expression-add-card' : menuTrigger;
+                openExpressionBank(this.host, command === 'add-card', {
+                    restoreFocus: () => {
+                        const target = this.host?.querySelector<HTMLElement>(returnFocus) ?? this.host?.querySelector<HTMLElement>(menuTrigger);
+                        target?.focus({ preventScroll: true });
+                    },
+                    checkAdd: () => {
+                        if (this.running) throw new Error('Wait for the current render to finish before adding an expression.');
+                        if (this.project.tiles.length >= 48) throw new Error('A sheet supports up to 48 expressions.');
+                    },
+                    add: direction => {
+                        this.project.tiles.push({ ...expressionTiles(1)[0]!, ...direction, motion: emptyMotion() });
+                        this.persist();
+                        this.draw();
+                    },
+                    export: json => download(new Blob([json], { type: 'application/json' }), 'expression-bank.json'),
+                });
+                return;
             }
             if (command === 'load-presets') {
                 const count = Number(this.host?.querySelector<HTMLSelectElement>('[data-preset-count]')?.value || 12);
@@ -697,6 +959,10 @@ export class ExpressionStudio {
         }
         catch (error) {
             this.bridge.notify(error instanceof Error ? error.message : String(error), true);
+        }
+        finally {
+            finishActivity?.();
+            if (projectAction) this.projectTransition = false;
         }
     }
     private openIdentityPicker(): void {
@@ -798,19 +1064,37 @@ export class ExpressionStudio {
         this.persist();
         this.draw();
     }
-    private async importProject(file?: File): Promise<void> { if (!file)
-        return; try {
+    private async importProject(file?: File, destination?: string): Promise<void> { if (!file)
+        return;
+        if (this.projectTransition) return;
+        this.projectTransition = true;
+        const finishActivity = this.host ? showProjectActivity(this.host,'Importing project…') : undefined;
+        try {
         const imported = normalizeSheet(JSON.parse(await file.text()));
         if (this.running)
             throw new Error('Wait for the sheet queue to finish before opening a project.');
+        window.clearTimeout(this.saveTimer);
+        await this.saving;
+        await storedProject(structuredClone(this.project), `backup-${Date.now()}`);
+        if (this.projectFolderSelected) await this.saveProjectFile(this.projectFolder,this.projectFile,this.project);
         this.project = imported;
-            this.referenceRequest++;
+        if (destination !== undefined) {
+            this.projectFolder = destination;
+            this.projectFolderSelected = true;
+        }
+        this.projectFile = createId();
+        if (this.projectFolderSelected) this.rememberProjectLocation();
+        this.referenceRequest++;
         this.screen = 'generate';
-        this.persist();
+        this.persist(true);
+        await this.flushProject();
         this.draw();
     }
     catch (error) {
         this.bridge.notify(String(error), true);
+    } finally {
+        finishActivity?.();
+        this.projectTransition = false;
     } }
     private animaSetupReport(): { state: string; title: string; message: string } {
         if (this.setupBusy) return { state: 'checking', title: 'Checking…', message: 'Reading the connected ComfyUI model inventory.' };
@@ -1036,8 +1320,7 @@ export class ExpressionStudio {
             this.draw();
         }
     }
-    private async saveTile(name: string, result: ExpressionImage): Promise<void> { const image = await imageFrom(result.image); const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height; canvas.getContext('2d')!.drawImage(image, 0, 0); await this.bridge.save(canvas.toDataURL('image/png'), `${slug(name)}.png`); }
-    private async sheetPng(): Promise<string> { const p = this.project; const tiles = p.tiles.filter(t => t.enabled); if (!tiles.length || tiles.some(t => !t.image))
+    private async sheetPng(p = this.project): Promise<string> { const tiles = p.tiles.filter(t => t.enabled); if (!tiles.length || tiles.some(t => !t.image))
         throw new Error('Render every selected expression before exporting, or deselect unfinished cards.'); const labelHeight = p.labels ? 48 : 0; const titleHeight = 80; const rows = Math.ceil(tiles.length / p.columns); const canvas = document.createElement('canvas'); canvas.width = p.columns * p.width + (p.columns + 1) * p.gutter; canvas.height = titleHeight + rows * (p.height + labelHeight) + (rows + 1) * p.gutter; if (canvas.width * canvas.height > 70000000)
         throw new Error('Sheet is too large. Reduce tile size or export the portrait pack.'); const ctx = canvas.getContext('2d')!; ctx.fillStyle = p.background; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.fillStyle = '#24212b'; ctx.font = '600 28px system-ui'; ctx.fillText(p.name.slice(0, 90), p.gutter, 46); ctx.font = '14px system-ui'; ctx.fillText(`${tiles.length} expressions · ${p.style} · ${p.engine}`, p.gutter, 68); for (const [i, tile] of tiles.entries()) {
         const image = await imageFrom(tile.image);
@@ -1052,18 +1335,79 @@ export class ExpressionStudio {
             ctx.textAlign = 'left';
         }
     } return canvas.toDataURL('image/png'); }
-    private async pack(): Promise<void> { const tiles = this.project.tiles.filter(t => t.enabled && t.image); if (!tiles.length)
-        throw new Error('Render a portrait before exporting the pack.'); const { zipStore } = await import('./zip'); const files: Array<{
-        name: string;
-        data: Uint8Array;
-    }> = [{ name: 'project.expressions.json', data: new TextEncoder().encode(JSON.stringify(this.project, null, 2)) }]; for (const [i, t] of tiles.entries()) {
-        const image = await imageFrom(t.image);
-        const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
-        canvas.getContext('2d')!.drawImage(image, 0, 0);
-        const blob = await fetch(canvas.toDataURL('image/png')).then(r => r.blob());
-        files.push({ name: `${String(i + 1).padStart(2, '0')}-${slug(t.name)}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
-    } if (this.project.tiles.filter(t => t.enabled).every(t => t.image)) {
-        const sheet = await fetch(await this.sheetPng()).then(r => r.blob());
-        files.push({ name: 'expression-sheet.png', data: new Uint8Array(await sheet.arrayBuffer()) });
-    } download(zipStore(files), `${slug(this.project.name)}.zip`); }
+    private openPortraitPack(): void {
+        const host = this.host;
+        if (!host || host.querySelector('.expression-pack-dialog')) return;
+        const project = structuredClone(this.project);
+        const enabled = project.tiles.filter(tile => tile.enabled);
+        const portraits = enabled.filter(tile => tile.image);
+        if (!portraits.length) throw new Error('Render a portrait before exporting the pack.');
+        const names = (character: string) => portraitPackNames(character, project.name, portraits, portraits.length === enabled.length);
+        const dialog = document.createElement('dialog');
+        dialog.className = 'expression-pack-dialog';
+        dialog.setAttribute('aria-labelledby', 'expression-pack-title');
+        dialog.innerHTML = `<header><h2 id="expression-pack-title">Export portrait pack</h2><button type="button" class="icon-button" data-close aria-label="Close">×</button></header>
+            <form class="expression-pack-form">
+                <label class="field"><span>Character name (optional)</span><input type="text" maxlength="40" placeholder="e.g. Lior"></label>
+                <div class="expression-pack-preview"><b data-archive-name></b><ul aria-label="Files in the ZIP"></ul></div>
+                <p class="expression-error" role="alert" hidden></p>
+                <div class="form-actions"><button type="button" class="secondary-button" data-close>Cancel</button><button type="submit" class="primary-button">Export ZIP</button></div>
+            </form>`;
+        const form = dialog.querySelector('form')!;
+        const input = form.querySelector('input')!;
+        const preview = () => {
+            const { archive, manifest, portraits, sheet } = names(input.value);
+            form.querySelector('[data-archive-name]')!.textContent = archive;
+            form.querySelector('ul')!.replaceChildren(...[...portraits, ...(sheet ? [sheet] : []), manifest].map(filename => {
+                const row = document.createElement('li');
+                row.textContent = filename;
+                return row;
+            }));
+        };
+        input.addEventListener('input', preview);
+        dialog.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => dialog.close()));
+        dialog.addEventListener('keydown', event => event.stopPropagation());
+        dialog.addEventListener('close', () => {
+            dialog.remove();
+            host.querySelector<HTMLElement>('[popovertarget="expression-export-menu"]')?.focus({ preventScroll: true });
+        }, { once: true });
+        form.addEventListener('submit', async event => {
+            event.preventDefault();
+            const submit = form.querySelector<HTMLButtonElement>('[type="submit"]')!;
+            const errorNote = form.querySelector<HTMLElement>('[role="alert"]')!;
+            if (submit.disabled) return;
+            submit.disabled = input.disabled = true;
+            errorNote.hidden = true;
+            try {
+                const filenames = names(input.value);
+                const archive = await this.pack(project, portraits, filenames);
+                if (dialog.open && dialog.isConnected) {
+                    download(archive, filenames.archive);
+                    dialog.close();
+                }
+            } catch (error) {
+                errorNote.textContent = error instanceof Error ? error.message : String(error);
+                errorNote.hidden = false;
+            } finally {
+                submit.disabled = input.disabled = false;
+            }
+        });
+        preview();
+        host.append(dialog);
+        dialog.showModal();
+    }
+    private async pack(project: SheetProject, tiles: ExpressionTile[], names: ReturnType<typeof portraitPackNames>): Promise<Blob> {
+        const { zipStore } = await import('./zip');
+        const files = [{ name: names.manifest, data: new TextEncoder().encode(JSON.stringify(project, null, 2)) }];
+        for (const [index, tile] of tiles.entries()) {
+            const image = await imageFrom(tile.image);
+            const canvas = document.createElement('canvas');
+            canvas.width = image.width;
+            canvas.height = image.height;
+            canvas.getContext('2d')!.drawImage(image, 0, 0);
+            files.push({ name: names.portraits[index]!, data: pngBytes(canvas.toDataURL('image/png')) });
+        }
+        if (names.sheet) files.push({ name: names.sheet, data: pngBytes(await this.sheetPng(project)) });
+        return zipStore(files);
+    }
 }

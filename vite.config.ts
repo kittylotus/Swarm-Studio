@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import { llmRelayPlugin } from "./scripts/llm-relay.mjs";
+import { expressionProjects } from "./scripts/expression-projects.mjs";
 import { createStudioSourceUpdater, handleStudioSourceRequest } from "./scripts/studio-source-updater.mjs";
 import { VitePWA } from "vite-plugin-pwa";
 import { execFile } from "node:child_process";
@@ -92,6 +93,7 @@ export default defineConfig({
       name: "studio-host-control-bridge",
       configureServer(server) {
         const sourceUpdater = createStudioSourceUpdater({ root: configRoot });
+        const projects = expressionProjects(configRoot);
         server.middlewares.use(async (req, res, next) => {
           if (!req.url?.startsWith("/__studio/host-control")) return next();
           res.setHeader("cache-control", "no-store");
@@ -111,6 +113,19 @@ export default defineConfig({
           }
 
           try {
+            if (requestUrl.pathname === "/__studio/host-control/expression-projects" && req.method === "POST") {
+              if (!sameOriginRequest(req)) throw new Error("Project actions require a same-origin Studio request.");
+              const chunks: Buffer[] = [];
+              let size = 0;
+              for await (const chunk of req) {
+                const bytes = Buffer.from(chunk);
+                size += bytes.length;
+                if (size > 192 * 1024 * 1024) throw new Error("Project is too large.");
+                chunks.push(bytes);
+              }
+              res.end(JSON.stringify(await projects(JSON.parse(Buffer.concat(chunks).toString("utf8")))));
+              return;
+            }
             if (requestUrl.pathname.startsWith("/__studio/host-control/studio-source/")) {
               if (req.method === "POST" && !sameOriginRequest(req)) {
                 res.statusCode = 403;

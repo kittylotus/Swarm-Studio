@@ -1,5 +1,7 @@
+import { linkedSvg, unlinkedSvg } from "./ui/resolution-icons";
 import { createId } from "./id";
 import { actionMenu, bindActionMenus, disclosureChevronSvg } from "./ui/action-menu";
+import { bindExpandedField, bindExpandedFields } from "./ui/expanded-editor";
 import { openLoraFilters, type LoraFilterSelection } from "./models/filters";
 import "./models/library-controls.css";
 import { normalizeModelPath, modelFolderPaths, modelInFolder, folderDepth } from "./models/folders";
@@ -107,6 +109,7 @@ const clearPromptSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden=
 const tabCreateSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.4 4.2a2 2 0 0 1-1.3 1.3L5 10l4.3 1.5a2 2 0 0 1 1.3 1.3L12 17l1.4-4.2a2 2 0 0 1 1.3-1.3L19 10l-4.3-1.5a2 2 0 0 1-1.3-1.3Z"/><path d="M5 3v3M3.5 4.5h3M19 17v4M17 19h4"/></svg>`;
 const tabLibrarySvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>`;
 const tabIdentitiesSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>`;
+const tabExpressionsSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9.3h.01m6 0h.01"/></svg>`;
 const tabModelsSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4.5-8 4.5-8-4.5Z"/><path d="m4 12 8 4.5 8-4.5"/><path d="m4 16.5 8 4.5 8-4.5"/></svg>`;
 const tabLogsSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="m7 9 2 2-2 2"/><path d="M12 14h5"/></svg>`;
 const tabSettingsSvg = `<svg class="tab-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="16" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>`;
@@ -135,8 +138,6 @@ const trashSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"
 const gripSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>`;
 const eyeSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="3"/></svg>`;
 const eyeOffSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 10.7A3 3 0 0 0 12 15a3 3 0 0 0 2.3-5.3"/><path d="M9.9 5.1A10.7 10.7 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3.2 4"/><path d="M6.4 6.5C4.1 8 2.5 12 2.5 12a17 17 0 0 0 6.2 5.4"/></svg>`;
-const linkedSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>`;
-const unlinkedSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 15 5 19"/><path d="M15 9 19 5"/><path d="M7.5 7.5a5 5 0 0 1 7.1 0l1.4 1.4"/><path d="m15.1 15.1-1.4 1.4a5 5 0 0 1-7.1 0"/></svg>`;
 const swapSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 3h5v5"/><path d="m4 20 17-17"/><path d="M8 21H3v-5"/></svg>`;
 const batchSelectSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m7.5 12 3 3 6-7"/></svg>`;
 const folderTreeSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10h18"/></svg>`;
@@ -1757,7 +1758,7 @@ export class StudioApp {
           </button>
           <nav class="utility-nav utility-nav--desktop" aria-label="Studio sections">
             ${this.navButton("create", "Create", tabCreateSvg)}
-            ${this.navButton("expressions", "Expressions", tabIdentitiesSvg)}
+            ${this.navButton("expressions", "Expressions", tabExpressionsSvg)}
             ${this.navButton("editor", "Editor", inpaintBrushSvg)}
             ${this.navButton("library", "Library", tabLibrarySvg)}
             ${this.navButton("identities", "Identities", tabIdentitiesSvg)}
@@ -1893,7 +1894,7 @@ export class StudioApp {
     } else if (section === "visuals") {
       count = 5;
       tabs = `<button class="${this.view === "identities" ? "is-active" : ""}" data-nav="identities"><span>${tabIdentitiesSvg}</span>Identities</button>
-        <button class="${this.view === "expressions" ? "is-active" : ""}" data-nav="expressions"><span>${tabIdentitiesSvg}</span>Expressions</button>
+        <button class="${this.view === "expressions" ? "is-active" : ""}" data-nav="expressions"><span>${tabExpressionsSvg}</span>Expressions</button>
         <button class="${this.view === "editor" ? "is-active" : ""}" data-nav="editor"><span>${inpaintBrushSvg}</span>Editor</button>
         <button class="${this.view === "models" ? "is-active" : ""}" data-nav="models"><span>${tabModelsSvg}</span>Models</button>
         <button class="${this.view === "civitai" ? "is-active" : ""}" data-nav="civitai"><span>${tabSearchSvg}</span>CivitAI</button>`;
@@ -2700,8 +2701,8 @@ export class StudioApp {
             <div id="generation-review-strip-host">${this.generationApprovalStripMarkup()}</div>
             <div class="prompt-tabs"><span>Prompt</span><button type="button" class="ghost-button" data-action="enhance-prompt" aria-haspopup="dialog" title="Enhance positive prompt" aria-label="Enhance positive prompt"><span aria-hidden="true">✦</span><em>Enhance</em></button><button class="ghost-button region-toggle ${hasRegionalPromptContent(draft.regionalPrompt) ? "is-active" : ""}" data-action="open-region-editor" title="Regional prompting">${regionsSvg}<em>Regions${draft.regionalPrompt.regions.length ? ` · ${draft.regionalPrompt.regions.length}` : ""}</em></button><button class="ghost-button syntax-toggle" data-action="toggle-syntax" title="Prompt syntax">${syntaxSvg}<em>Syntax</em></button><button class="ghost-button prompt-clear" data-action="clear-draft" title="Clear prompt">${clearPromptSvg}<em>Clear</em></button></div>
             ${this.syntaxMenuMarkup()}
-            <label class="field prompt-positive"><textarea id="prompt" aria-label="Positive prompt" placeholder="Describe the image…">${escapeHtml(draft.prompt)}</textarea></label>
-            <label class="field prompt-negative"><span>Negative</span><textarea id="negative-prompt" rows="2" placeholder="Things to avoid…">${escapeHtml(draft.negativePrompt)}</textarea></label>
+            <div class="field prompt-positive"><textarea id="prompt" aria-label="Positive prompt" placeholder="Describe the image…">${escapeHtml(draft.prompt)}</textarea></div>
+            <div class="field prompt-negative"><span id="negative-prompt-label">Negative</span><textarea id="negative-prompt" aria-labelledby="negative-prompt-label" rows="2" placeholder="Things to avoid…">${escapeHtml(draft.negativePrompt)}</textarea></div>
             <div class="prompt-footer">
               <span>${this.connected ? `${this.models.length} checkpoints · ${this.loras.length} LoRAs · ${this.presets.length} presets` : "Connect to load Swarm metadata"}</span>
               <div><button class="danger-soft" data-action="interrupt" ${this.generating ? "" : "disabled"}>Interrupt</button><button class="primary-button ${reviewPending ? "is-review-locked" : ""}" data-action="generate" ${this.generating || reviewPending ? "disabled" : ""} title="${reviewPending ? "Use Save, Regen, or Discard in the review strip before starting another generation." : ""}">${this.generating ? "Generating…" : reviewPending ? "Review pending" : "Generate image"}<b>✦</b></button></div>
@@ -3541,11 +3542,11 @@ export class StudioApp {
               <label class="field"><span>Name</span><input name="name" required value="${escapeHtml(source.name)}" placeholder="Hugo, Lycaon, Scenery…" /></label>
               <label class="field"><span>Folder</span><select name="folderId">${this.identityFolderOptions(source.folderId)}</select></label>
             </div>
-            <label class="field"><span>Base positive</span><textarea name="positivePrompt" rows="5" placeholder="Reusable subject and style tags…">${escapeHtml(source.positivePrompt)}</textarea></label>
-            <label class="field"><span>Base negative</span><textarea name="negativePrompt" rows="3" placeholder="Identity-specific exclusions…">${escapeHtml(source.negativePrompt)}</textarea></label>
+            <div class="field"><span><label for="identity-base-positive">Base positive</label></span><textarea id="identity-base-positive" name="positivePrompt" rows="5" data-expand-editor placeholder="Reusable subject and style tags…">${escapeHtml(source.positivePrompt)}</textarea></div>
+            <div class="field"><span><label for="identity-base-negative">Base negative</label></span><textarea id="identity-base-negative" name="negativePrompt" rows="3" data-expand-editor placeholder="Identity-specific exclusions…">${escapeHtml(source.negativePrompt)}</textarea></div>
             <label class="field"><span>Default checkpoint</span><select name="model"><option value="">Follow current</option>${this.modelOptions(source.model)}</select></label>
             <label class="check-row"><input type="checkbox" name="bindLoras" ${this.identityFormDraft ? (this.identityFormDraft.bindLoras ? "checked" : "") : editing ? (editing.loraStack.length ? "checked" : "") : (draft.loras.length ? "checked" : "")}/><span><b>Bind LoRA stack</b><small>${editing ? editing.loraStack.length : draft.loras.length} LoRA${(editing ? editing.loraStack.length : draft.loras.length) === 1 ? "" : "s"} currently attached.</small></span></label>
-            <label class="field"><span>Notes</span><textarea name="notes" rows="3" placeholder="Reference notes, clothing rules, trigger reminders…">${escapeHtml(source.notes)}</textarea></label>
+            <div class="field"><span><label for="identity-notes">Notes</label></span><textarea id="identity-notes" name="notes" rows="3" data-expand-editor placeholder="Reference notes, clothing rules, trigger reminders…">${escapeHtml(source.notes)}</textarea></div>
             <button class="primary-button" type="submit" ${this.identityPictureReading || this.identitySaveBusy ? "disabled" : ""}>${editing ? "Save changes" : "Save identity"} <b>♡</b></button>
           </form>
         </section>
@@ -5557,6 +5558,11 @@ export class StudioApp {
   }
 
   private bindCreateEvents(): void {
+    for (const [selector, title] of [["#prompt", "Positive prompt"], ["#negative-prompt", "Negative prompt"]] as const) {
+      const findField = () => this.root.querySelector<HTMLTextAreaElement>(selector);
+      const field = findField();
+      if (field) bindExpandedField(field, title, findField);
+    }
     this.root.querySelector<HTMLButtonElement>('[data-action="enhance-prompt"]')?.addEventListener('click', () => {
       this.persistDraftFromForm(true);
       const draft = structuredClone(this.store.state.draft);
@@ -9167,6 +9173,7 @@ export class StudioApp {
     this.root.querySelectorAll<HTMLElement>("[data-picture-identity]").forEach(button => button.addEventListener("click", () => this.root.querySelector<HTMLInputElement>(`[data-identity-picture-input="${CSS.escape(button.dataset.pictureIdentity || "")}"]`)?.click()));
     this.root.querySelectorAll<HTMLInputElement>("[data-identity-picture-input]").forEach(input => input.addEventListener("change", () => { const file = input.files?.[0]; const id = input.dataset.identityPictureInput ?? ""; if (file && id) void readPicture(() => file, id); }));
     const form = this.root.querySelector<HTMLFormElement>("#identity-form");
+    if (form) bindExpandedFields(form);
     form?.addEventListener("input", captureDraft);
     form?.addEventListener("change", captureDraft);
     form?.addEventListener("submit", async event => {

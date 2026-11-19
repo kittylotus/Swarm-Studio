@@ -1,4 +1,5 @@
 import type { SwarmGenerationRequest } from '../swarm/types';
+import { bindExpandedFields } from '../ui/expanded-editor';
 import { normalizeRecipe, processingLabels, processingRequest, readProcessingImage, type ProcessingSource, type ProcessingStage } from './processing';
 import { bindProcessingFields, escapeMarkup as esc, resolveProcessing, type ProcessingChoices, type ProcessingHost } from './processing-ui';
 
@@ -139,7 +140,7 @@ export class ImageEditor {
                         <div class="editor-tools" role="group" aria-label="Image tools">
                             ${Object.entries(tools).map(([id, name]) => `<button type="button" class="secondary-button" data-editor-tool="${id}" aria-pressed="${id === tool}" ${lock}>${name}</button>`).join('')}
                         </div>
-                        ${tool === 'generate' ? `<label class="field"><span>Prompt</span><textarea rows="4" data-editor-prompt ${lock}>${esc(this.prompt)}</textarea></label>
+                        ${tool === 'generate' ? `<div class="field"><span><label for="editor-generate-prompt">Prompt</label></span><textarea id="editor-generate-prompt" rows="4" data-editor-prompt data-expand-editor ${lock}>${esc(this.prompt)}</textarea></div>
                             <p class="helper-copy">${checkpoint ? `Using the Create checkpoint and sampling settings · ${esc(checkpoint)}` : 'Choose a checkpoint in Create to generate an image.'}</p>` : ''}
                         ${tool === 'refine' || tool === 'background' ? '<div class="processing-fields" data-editor-recipe></div>' : ''}
                         ${!this.bridge.connected() && tool !== 'inpaint' ? '<p class="helper-copy">Connect to Swarm to run this tool.</p>' : ''}
@@ -179,6 +180,7 @@ export class ImageEditor {
         host.querySelector('[data-editor-upload-button]')?.addEventListener('click', () => fileInput?.click());
         fileInput?.addEventListener('change', event => this.upload((event.currentTarget as HTMLInputElement).files?.[0]));
         host.querySelector('[data-editor-browse]')?.addEventListener('click', () => this.bridge.browseLibrary());
+        bindExpandedFields(host);
         host.querySelector<HTMLTextAreaElement>('[data-editor-prompt]')?.addEventListener('input', event => {
             this.prompt = (event.currentTarget as HTMLTextAreaElement).value;
             const run = host.querySelector<HTMLButtonElement>('[data-editor-run]')!;

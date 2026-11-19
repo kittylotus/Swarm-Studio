@@ -1,0 +1,119 @@
+.expandable-field {
+  --expand-target: 28px;
+  position: relative;
+  min-width: 0;
+}
+.expandable-field > .expandable-field-input {
+  display: block;
+  padding-inline-end: calc(var(--expand-target) + 9px);
+}
+.expandable-field > .expandable-field-button {
+  position: absolute;
+  inset-block-start: 4px;
+  inset-inline-end: 4px;
+  width: var(--expand-target);
+  height: var(--expand-target);
+  border: 0;
+  background: transparent;
+}
+.expandable-field-button svg { width: 15px; height: 15px; }
+.expandable-field-button:hover svg { color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  .expandable-field:not(:hover):not(:focus-within) > .expandable-field-button { opacity: 0; }
+}
+.expanded-editor-dialog {
+  box-sizing: border-box;
+  width: min(840px, calc(100vw - 32px));
+  height: min(650px, calc(100dvh - 48px));
+  min-height: 0;
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--panel-base);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.expanded-editor-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.expanded-editor-dialog::backdrop { background: rgb(0 0 0 / .58); }
+.expanded-editor-dialog > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 14px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.expanded-editor-dialog h2 {
+  flex: 1 1 auto;
+  margin: 0;
+  font: 650 17px/1.2 var(--font-subtitle);
+}
+.expanded-editor-dialog h2:focus { outline: none; }
+.expanded-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+.expanded-editor-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px;
+}
+.expanded-editor-content textarea {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  padding: 13px;
+  resize: none;
+  color: var(--text);
+  background: var(--surface-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  font: 14px/1.65 var(--font-subtitle);
+  overscroll-behavior: contain;
+}
+.expanded-editor-hint, .expanded-editor-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.expanded-editor-status { color: var(--danger); }
+.expanded-editor-status:empty { display: none; }
+.expanded-editor-dialog :is(button, textarea):focus-visible,
+.expandable-field-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (pointer: coarse) {
+  .expandable-field { --expand-target: 44px; }
+}
+@media (max-width: 600px) {
+  .expanded-editor-dialog {
+    position: fixed;
+    inset: var(--expanded-viewport-top, 0px) 0 auto;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    height: var(--expanded-viewport-height, 100dvh);
+    border: 0;
+    border-radius: 0;
+  }
+  .expanded-editor-dialog > header {
+    padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  }
+  .expanded-editor-actions button { min-width: 44px; min-height: 44px; }
+  .expanded-editor-content {
+    padding: 10px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+  .expanded-editor-content textarea { font-size: 16px; }
+}

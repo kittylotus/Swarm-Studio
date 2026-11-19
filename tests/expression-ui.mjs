@@ -36,15 +36,89 @@ try {
     const port = server.httpServer.address().port;
     browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || 'msedge', headless: true });
     for (const viewport of [{width:1440,height:1000},{width:390,height:844}]) {
-        const context = await browser.newContext({ viewport });
+        const context = await browser.newContext({ viewport, hasTouch: viewport.width <= 760 });
         const page = await context.newPage();
         await page.goto(`http://127.0.0.1:${port}/__expression_contract`);
         await page.waitForFunction(() => window.ready);
         assert.equal(await page.locator('h1').count(),1);
         assert.ok(parseFloat(await page.locator('h1').evaluate(el=>getComputedStyle(el).fontSize))<=22);
+        if (viewport.width <= 760) {
+            const trigger = page.locator('[data-expression-settings-open]');
+            await trigger.scrollIntoViewIfNeeded();
+            await page.evaluate(() => window.scrollBy(0, 48));
+            await openExpressionSettings(page, 'Identity');
+            const drawer = page.locator('.expression-settings-drawer');
+            const lockedTop = await page.evaluate(() => document.body.getBoundingClientRect().top);
+            assert.ok(lockedTop < 0, 'test opens the drawer on a scrolled board');
+            const fields = await drawer.locator('[data-setting="subject"], [data-setting="negative"]').all();
+            assert.equal(fields.length, 2);
+            for (const field of fields) {
+                await field.tap();
+                assert.equal(await field.evaluate(node => getComputedStyle(node).fontSize), '16px');
+                await page.evaluate(() => window.scrollTo(0, 400));
+                assert.equal(await page.evaluate(() => document.body.getBoundingClientRect().top), lockedTop);
+            }
+            await closeExpressionSettings(page);
+            await page.waitForFunction(() => !document.body.hasAttribute('data-expression-page-locked'));
+            assert.equal(await page.evaluate(() => window.scrollY), -lockedTop);
+        }
+        await openExpressionSettings(page, 'Identity');
+        const subject = page.getByLabel('Character & framing', { exact: true });
+        const originalSubject = await subject.inputValue();
+        const expandSubject = page.getByRole('button', { name: 'Expand character & framing', exact: true });
+        const expanded = page.getByRole('dialog', { name: 'Character & framing', exact: true });
+        const visibility = button => button.evaluate(el => getComputedStyle(el).opacity);
+        if (viewport.width > 760) {
+            assert.equal(await visibility(expandSubject), '0');
+            await subject.hover();
+            assert.equal(await visibility(expandSubject), '1');
+            await page.mouse.move(0, 0);
+            assert.equal(await visibility(expandSubject), '0');
+            await subject.focus();
+            await page.keyboard.press('Tab');
+            assert.equal(await visibility(expandSubject), '1');
+            await page.keyboard.press('Enter');
+        } else {
+            assert.equal(await visibility(expandSubject), '1');
+            await expandSubject.tap();
+        }
+        const subjectEditor = expanded.getByRole('textbox', { name: 'Character & framing', exact: true });
+        assert.equal(await subjectEditor.inputValue(), originalSubject);
+        await page.keyboard.press('Escape');
+        await expanded.waitFor({ state: 'detached' });
+        assert.ok(await expandSubject.isVisible(), 'closing the editor leaves the Identity settings open');
+        assert.equal(await expandSubject.evaluate(el => el === document.activeElement), true);
+        await expandSubject.click();
+        await subjectEditor.fill('A close-up with side lighting');
+        await expanded.getByRole('button', { name: 'Done', exact: true }).click();
+        await expanded.waitFor({ state: 'detached' });
+        assert.equal(await page.evaluate(() => studio.project.subject), 'A close-up with side lighting');
+        assert.equal(await page.getByRole('button', { name: 'Expand avoid', exact: true }).count(), 1);
+        await closeExpressionSettings(page);
         await openExpressionSettings(page, 'Generate');
         const sampling = page.locator('details').filter({has:page.locator('summary', {hasText:'Sampling & resolution'})});
         await sampling.locator('summary').click();
+        assert.equal(await sampling.locator('summary .expression-settings-icon').count(),1);
+        const reference = page.locator('[data-generate-disclosure="reference"]');
+        await reference.locator(':scope > summary').click();
+        assert.equal(await page.locator('[data-setting="engine"]').isVisible(),false);
+        await reference.locator(':scope > summary').click();
+        const grid = sampling.locator('.expression-sampling-fields');
+        assert.ok(await grid.evaluate(node => {
+            const fields = [...node.children].map(child => child.getBoundingClientRect());
+            const [seed, steps, cfg, sampler, scheduler] = fields;
+            return seed.width > steps.width && steps.top === cfg.top && sampler.top === scheduler.top
+                && seed.bottom <= steps.top && steps.bottom <= sampler.top;
+        }), 'seed, steps/CFG, and sampler/scheduler have the requested rows');
+        if (viewport.width > 760) {
+            const controls=page.locator('.expression-controls');
+            assert.equal(await controls.evaluate(node=>getComputedStyle(node).position),'sticky');
+            assert.equal(await controls.evaluate(node=>getComputedStyle(node).scrollbarGutter),'stable');
+            const before=await controls.boundingBox();
+            await controls.hover();
+            assert.equal((await controls.boundingBox()).width,before.width);
+            await controls.screenshot({path:'test-results/actions/expression-desktop-settings.png'});
+        }
         const width = page.getByRole('spinbutton', { name: 'Width (px)' });
         const height = page.getByRole('spinbutton', { name: 'Height (px)' });
         const widthSlider = page.getByRole('slider', { name: 'Width slider' });
@@ -52,7 +126,8 @@ try {
         await page.getByLabel('Aspect ratio', { exact: true }).selectOption('2:3');
         assert.equal(await link.getAttribute('aria-pressed'), 'true');
         assert.deepEqual([await width.inputValue(), await height.inputValue()], ['512', '768']);
-        await widthSlider.press('End');
+        assert.equal(await widthSlider.isVisible(),false);
+        await page.getByRole('slider',{name:'Size slider'}).press('End');
         assert.deepEqual([await width.inputValue(), await height.inputValue()], ['1024', '1536']);
         await link.click();
         await widthSlider.press('ArrowLeft');

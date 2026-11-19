@@ -30,7 +30,10 @@ const picture = (width, height, cutout) => {
 };
 runtime.postJson = async (url, body) => {
     if (url.endsWith('GetNewSession')) return { session_id: 'mock-session' };
-    if (url.endsWith('InterruptAll')) { interrupts.push(body); return {}; }
+    if (url.endsWith('InterruptAll')) {
+        interrupts.push(body);
+        return window.rejectInterrupt ? { error: 'Fixture interrupt rejected' } : {};
+    }
     if (url.endsWith('ComfyListWorkflows')) return { workflows: [{ name: 'Saved/cutout' }] };
     if (url.endsWith('ComfyReadWorkflow')) return { result: { custom_params: JSON.stringify({
         source: { id: 'comfyrawworkflowinputimage0', type: 'image', name: 'Foreground source' },
@@ -154,7 +157,7 @@ try {
             return route.fulfill({ contentType: 'image/jpeg', body: thumbnails[index] });
         });
         await page.evaluate(() => loadLegacyProject());
-        const generateTab = page.getByRole('tab', { name: 'Generate', exact: true });
+        const generateTab = page.getByRole('tablist', { name: 'Expression pipeline' }).getByRole('tab', { name: 'Generate', exact: true });
         const refineTab = page.getByRole('tab', { name: 'Refine', exact: true });
         const backgroundTab = page.getByRole('tab', { name: 'Remove background', exact: true });
         assert.equal(await generateTab.getAttribute('aria-selected'), 'true');
@@ -372,6 +375,14 @@ try {
         const identityForm = page.locator('#identity-form');
         const identityBrowse = identityForm.getByRole('button', { name: 'Browse Library', exact: true });
         await identityForm.getByLabel('Name', { exact: true }).fill('Library identity');
+        for (const [label, value] of [['Base positive', 'soft portrait light'], ['Base negative', 'harsh shadows'], ['Notes', 'Use the lavender backdrop']]) {
+            await identityForm.getByRole('button', { name: `Expand ${label.toLowerCase()}`, exact: true }).click();
+            const expanded = page.getByRole('dialog', { name: label, exact: true });
+            await expanded.getByRole('textbox', { name: label, exact: true }).fill(value);
+            await expanded.getByRole('button', { name: 'Done', exact: true }).click();
+            await expanded.waitFor({ state: 'detached' });
+            assert.equal(await identityForm.getByLabel(label, { exact: true }).inputValue(), value);
+        }
         assert.ok(await identityForm.getByRole('button', { name: 'Upload picture' }).isVisible());
         await identityBrowse.click();
         await page.getByRole('heading', { name: 'Choose an identity picture' }).waitFor();
@@ -384,6 +395,10 @@ try {
         assert.doesNotMatch(await page.evaluate(() => requestedOriginals.at(-1)), /preview=true/);
         await identityForm.getByRole('button', { name: /Save identity/ }).click();
         await page.waitForFunction(() => app.store.state.identities[0]?.avatarKey);
+        assert.deepEqual(await page.evaluate(() => {
+            const { positivePrompt, negativePrompt, notes } = app.store.state.identities[0];
+            return { positivePrompt, negativePrompt, notes };
+        }), { positivePrompt: 'soft portrait light', negativePrompt: 'harsh shadows', notes: 'Use the lavender backdrop' });
         await page.evaluate(() => app.navigateToView('expressions'));
         await generateTab.click();
         await openExpressionSettings(page, 'Identity');
@@ -400,7 +415,12 @@ try {
         await closeExpressionSettings(page);
         await page.evaluate(() => app.navigateToView('editor'));
         await editor.getByRole('button', { name: 'Generate', exact: true }).click();
-        await editor.getByLabel('Prompt', { exact: true }).fill('A purple portrait');
+        await editor.getByRole('button', { name: 'Expand prompt', exact: true }).click();
+        const expandedPrompt = page.getByRole('dialog', { name: 'Prompt', exact: true });
+        await expandedPrompt.getByRole('textbox', { name: 'Prompt', exact: true }).fill('A purple portrait');
+        await expandedPrompt.getByRole('button', { name: 'Done', exact: true }).click();
+        await expandedPrompt.waitFor({ state: 'detached' });
+        assert.equal(await editor.getByLabel('Prompt', { exact: true }).inputValue(), 'A purple portrait');
         await editor.locator('[data-editor-run]').click();
         await page.waitForFunction(() => calls.length === 5 && !app.imageEditor?.busy);
         assert.equal(await page.evaluate(() => calls[4].request.prompt), 'A purple portrait');
@@ -499,6 +519,24 @@ try {
         assert.equal(await page.evaluate(() => app.expressionStudio.project.refine.model), 'detail.pth');
         await refineTab.click();
         assert.equal(await page.locator('.expression-card-image img').getAttribute('src'), refinedImage);
+        await generateTab.click();
+        await page.evaluate(() => {
+            const studio = app.expressionStudio;
+            Object.assign(studio.project.tiles[0], { image: '', path: '', stage: undefined, earlierStages: undefined });
+            window.holdPreview = true;
+            window.rejectInterrupt = true;
+            studio.draw();
+        });
+        const renderMissing = page.getByRole('button', { name: 'Render missing', exact: true });
+        await renderMissing.click();
+        await livePreview.waitFor();
+        await page.getByRole('button', { name: 'Stop Neutral', exact: true }).click();
+        await page.waitForFunction(() => interrupts.length === 1 && !app.expressionStudio.busy);
+        assert.equal(await renderMissing.isEnabled(), true);
+        assert.equal(await page.evaluate(() => app.expressionStudio.project.tiles[0].image), '');
+        await renderMissing.click();
+        await page.waitForFunction(() => calls.length === 2 && !app.expressionStudio.busy);
+        assert.match(await page.locator('.expression-run-status').textContent(), /Finished · 1 complete/);
         await context.close();
     }
     console.log('Image tools desktop/mobile UI: shared Library picker and uploads, live expression preview and interrupt, mobile settings, final-only renders, workflow import and inline Inpaint passed.');

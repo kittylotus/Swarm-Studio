@@ -57,7 +57,7 @@ import { saveLlmSettings, loadLlmSettings } from '/src/llm/settings.ts'; import 
 import { streamEnhancement } from '/src/llm/transport.ts'; import { buildLlmRequest } from '/src/llm/contracts.ts';
 import { builtInThemes } from '/src/theme.ts';
 window.app = new StudioApp(document.querySelector('#app'));
-window.configure = (provider='openai', rememberKey=false) => saveLlmSettings({...defaultLlmSettings(provider),baseUrl:${JSON.stringify(apiBase)},model:'fixture-model',apiKey:'fixture-key',rememberKey});
+window.configure = (provider='openai', rememberKey=false, customInstructions='') => saveLlmSettings({...defaultLlmSettings(provider),baseUrl:${JSON.stringify(apiBase)},model:'fixture-model',apiKey:'fixture-key',rememberKey,customInstructions});
 window.settings = () => { app.view='settings'; app.store.updateUi({settingsPane:'llm'});app.render(); };
 window.create = (prompt='a portrait') => {app.view='create';app.store.updateUi({mobileCreatePane:'output'});app.store.updateDraft({prompt,model:'anima.safetensors',width:1024,height:1024});app.render();};
 app.models=[{name:'anima.safetensors',architecture:'anima'}];
@@ -87,8 +87,9 @@ try {
   const session = await fetch(`${origin}/__studio/llm/session`); const cookie = session.headers.get('set-cookie').split(';')[0];
   assert.equal((await fetch(`${origin}/__studio/llm/stream`, { method: 'POST', headers: { origin: 'https://foreign.invalid', cookie, 'content-type': 'application/json' }, body: '{}' })).status, 403);
   browser = await chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || 'msedge', headless: true });
-  for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
-    const context = await browser.newContext({ viewport }); const page = await context.newPage(); const errors = [];
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }, { width: 320, height: 568 }]) {
+    const mobile = viewport.width < 600;
+    const context = await browser.newContext({ viewport, isMobile: mobile, hasTouch: mobile }); const page = await context.newPage(); const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`${origin}/__enhancer_contract`); await page.waitForFunction(() => window.ready);
     const scrollbarBefore = await page.locator('#prompt').evaluate(el => ({ color: getComputedStyle(el).scrollbarColor, width: getComputedStyle(el).scrollbarWidth }));
@@ -109,17 +110,88 @@ try {
     await page.evaluate(() => switchFixtureTheme('studio'));
     const enhance = page.getByRole('button', { name: 'Enhance positive prompt', exact: true });
     const dialog = page.getByRole('dialog', { name: 'Enhance positive prompt', exact: true });
+    const run = dialog.locator('[data-run]');
+    const apply = dialog.locator('[data-apply]');
+    const reasoning = dialog.locator('[data-thought-toggle]');
+    const expanded = page.locator('dialog.expanded-editor-dialog');
+    const done = expanded.getByRole('button', { name: 'Done', exact: true });
+    const positiveExpand = page.getByRole('button', { name: 'Expand positive prompt', exact: true });
+    await page.evaluate(() => create('original'));
+    await positiveExpand.focus(); await page.keyboard.press('Enter');
+    const fullPrompt = expanded.getByRole('textbox', { name: 'Positive prompt', exact: true });
+    assert.equal(await fullPrompt.inputValue(), 'original');
+    const editorBounds = await expanded.boundingBox();
+    assert.equal(editorBounds.width === viewport.width && editorBounds.height === viewport.height, mobile);
+    await fullPrompt.fill('edit to discard');
+    await page.keyboard.press('Escape'); await expanded.waitFor({ state: 'detached' });
+    assert.equal(await promptField.inputValue(), 'original');
+    assert.equal(await positiveExpand.evaluate(el => el === document.activeElement), true);
+    await positiveExpand.click(); await fullPrompt.fill('expanded composer edit'); await done.click();
+    await expanded.waitFor({ state: 'detached' });
+    assert.equal(await page.evaluate(() => app.store.state.draft.prompt), 'expanded composer edit');
+    await page.getByRole('button', { name: 'Expand negative prompt', exact: true }).click();
+    await expanded.getByRole('textbox', { name: 'Negative prompt', exact: true }).fill('expanded negative edit');
+    await done.click(); await expanded.waitFor({ state: 'detached' });
+    assert.equal(await page.evaluate(() => app.store.state.draft.negativePrompt), 'expanded negative edit');
+
+    await page.evaluate(() => { configure('openai', false, 'Use the fixture style.'); create('inspect'); });
+    const beforeOpen = requests.length;
+    await enhance.click();
+    const system = dialog.locator('[data-system]');
+    await system.click();
+    const systemText = expanded.getByRole('textbox', { name: 'System prompt', exact: true });
+    const defaults = await systemText.inputValue();
+    assert.match(defaults, /Selected image checkpoint: anima.safetensors/);
+    assert.match(defaults, /Additional style preferences: Use the fixture style\./);
+    if (viewport.width !== 320) await page.screenshot({ path: `test-results/expanded-system-prompt-${viewport.width}.png` });
+    await systemText.fill(''); await done.click();
+    assert.match(await expanded.getByRole('status').textContent(), /restore the default/);
+    await systemText.fill('Fixture instructions from expanded editor');
+    await done.click(); await expanded.waitFor({ state: 'detached' });
+    assert.equal(await system.evaluate(el => el === document.activeElement), true, 'closing the nested editor returns focus to the enhancer');
+    assert.equal(requests.length, beforeOpen, 'opening or editing never starts a request');
+    await run.click(); await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled);
+    assert.equal(requests.at(-1).body.instructions, 'Fixture instructions from expanded editor');
+    await system.click();
+    await expanded.getByRole('button', { name: 'Restore default', exact: true }).click();
+    assert.equal(await systemText.inputValue(), defaults);
+    await done.click(); await expanded.waitFor({ state: 'detached' });
+    assert.equal(await apply.isEnabled(), false, 'restoring instructions invalidates the prior result');
+    assert.equal(await dialog.locator('[data-output]').inputValue(), 'A café portrait 🌸, gentle light');
+    await run.click(); await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled);
+    assert.equal(requests.at(-1).body.instructions, defaults);
+    await dialog.getByRole('button', { name: 'Expand enhanced prompt', exact: true }).click();
+    await expanded.getByRole('textbox', { name: 'Enhanced prompt', exact: true }).fill('Edited enhancement');
+    await done.click(); await expanded.waitFor({ state: 'detached' });
+    await apply.click(); await dialog.waitFor({ state: 'detached' });
+    assert.equal(await promptField.inputValue(), 'Edited enhancement');
+
     for (const provider of ['openai', 'compatible', 'anthropic', 'gemini', 'deepseek']) {
       await page.evaluate(provider => { configure(provider); create('a portrait'); }, provider);
       await enhance.focus(); await page.keyboard.press('Enter'); await dialog.waitFor();
+      assert.equal(await reasoning.getAttribute('aria-expanded'), 'false');
+      await run.click();
       await page.waitForFunction(() => document.querySelector('[data-thinking]')?.textContent.includes('composition'));
-      assert.equal(await page.getByRole('button', { name: 'Apply to positive prompt', exact: true }).isEnabled(), false);
-      assert.equal(await page.getByRole('textbox', { name: 'Positive prompt', exact: true }).inputValue(), 'a portrait');
-      await page.getByRole('button', { name: 'Apply to positive prompt', exact: true }).waitFor();
+      assert.equal(await apply.isEnabled(), false);
+      assert.equal(await page.locator('#prompt').inputValue(), 'a portrait');
+      assert.equal(await dialog.locator('[data-thinking]').isVisible(), false, 'incoming reasoning stays collapsed');
       await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled);
       assert.equal(await dialog.locator('[data-output]').inputValue(), 'A café portrait 🌸, gentle light');
+      const runBox = await run.boundingBox();
+      const applyBox = await apply.boundingBox();
+      const settingsBox = await dialog.locator('[data-settings]').boundingBox();
+      assert.equal(Math.abs(runBox.y - settingsBox.y) < 2, true);
+      assert.equal(Math.abs(runBox.y - applyBox.y) < 2, viewport.width >= 360);
+      assert.equal(applyBox.x + applyBox.width <= viewport.width, true);
+      if (viewport.width >= 360) assert.ok(applyBox.x - runBox.x - runBox.width < 12, 'workflow actions are grouped');
+      assert.ok(await dialog.locator('[data-output]').evaluate(el => {
+        const field = el.getBoundingClientRect();
+        const body = el.closest('.enhancer-body').getBoundingClientRect();
+        return Math.min(field.bottom, body.bottom) - field.top >= 36;
+      }), 'the first lines of the result should be visible with reasoning collapsed');
+      if (provider === 'openai') await page.screenshot({ path: `test-results/enhancer-${viewport.width}.png` });
+      await reasoning.focus(); await page.keyboard.press('Enter');
       assert.equal(await dialog.locator('[data-thinking]').evaluate(el => { const text = el.getBoundingClientRect(); const shell = el.closest('[data-thought-card]').getBoundingClientRect(); return text.height > 0 && text.bottom <= shell.bottom; }), true, 'thinking text must remain inside its visible shell on phones');
-      if (provider === 'openai') { await mkdir('test-results', { recursive: true }); await page.screenshot({ path: `test-results/enhancer-${viewport.width}.png` }); }
       assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('fixture-key')), false);
       assert.equal(await dialog.evaluate(el => el.getBoundingClientRect().top >= 20), true, 'phone dialog stays away from top viewport edge');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -129,6 +201,7 @@ try {
       assert.equal(await enhance.evaluate(el => el === document.activeElement), true);
     }
     await page.evaluate(() => { configure('compatible'); create('linger'); }); await enhance.click();
+    await run.click();
     await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled);
     assert.equal(await dialog.locator('[data-status]').textContent(), 'Ready to review and apply.');
     await page.keyboard.press('Escape');
@@ -138,24 +211,25 @@ try {
     assert.match((await page.evaluate(() => nativeStreamCheck('stall'))).error, /stopped responding/);
     // Exercise the real modal on the delayed native channel path from the screenshot.
     await page.evaluate(() => { configure('compatible'); create('native'); nativeFixture('complete'); }); await enhance.click();
+    await run.click();
     await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled); await page.waitForTimeout(100);
     assert.equal(await dialog.locator('[data-output]').inputValue(), 'Native output');
     assert.equal(await dialog.locator('[data-status]').textContent(), 'Ready to review and apply.');
-    assert.equal(await dialog.getByRole('button', { name: 'Stop', exact: true }).isEnabled(), false);
+    assert.equal(await run.textContent(), 'Enhance again');
     await page.keyboard.press('Escape'); await page.evaluate(() => { delete window.__TAURI_INTERNALS__; });
     await page.evaluate(() => { configure('compatible'); create('slow'); }); await enhance.click();
+    await run.click();
     await page.waitForFunction(() => document.querySelector('[data-output]')?.value === 'Partial');
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('[data-status]')?.textContent.startsWith('Stopped'));
-    assert.equal(await page.getByRole('button', { name: 'Apply to positive prompt', exact: true }).isEnabled(), false);
-    await page.keyboard.press('Escape'); assert.equal(await dialog.count(), 0);
+    assert.equal(await apply.isEnabled(), false);
+    await page.keyboard.press('Escape'); await dialog.waitFor({ state: 'detached' });
     assert.equal(await page.getByRole('textbox', { name: 'Positive prompt', exact: true }).inputValue(), 'slow');
     await page.evaluate(() => create('fail')); await enhance.click();
+    await run.click();
     await page.waitForFunction(() => document.querySelector('[data-status]')?.textContent.includes('(401)'));
     await page.keyboard.press('Escape');
     await page.evaluate(() => create('layout')); await enhance.click();
-    await page.getByRole('button', { name: 'Stop', exact: true }).click();
-    await page.waitForFunction(() => !document.querySelector('[data-run]').disabled);
     await dialog.getByLabel('Prompt mode', { exact: true }).selectOption('moss-layout');
     await dialog.getByRole('button', { name: 'Enhance', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled);
@@ -163,6 +237,7 @@ try {
     assert.deepEqual(JSON.parse(await page.getByRole('textbox', { name: 'Positive prompt', exact: true }).inputValue()).items[0].bbox, [-448, -448, -256, 448]);
     // Keep the user's newer edit if background state changes while the dialog is open.
     await page.evaluate(() => { localStorage.removeItem('swarm-studio-prompt-mode');create('a portrait'); }); await enhance.click();
+    await run.click();
     await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled);
     await page.evaluate(() => app.store.updateDraft({ prompt: 'newer edit' }));
     await page.getByRole('button', { name: 'Apply to positive prompt', exact: true }).click();
