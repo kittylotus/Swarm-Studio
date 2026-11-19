@@ -61,6 +61,14 @@ try {
     const shape=await page.evaluate(async()=>{const i=app.store.state.identities[0];const image=new Image();image.src=i.avatarUrl;await image.decode();return {width:image.naturalWidth,height:image.naturalHeight,key:i.avatarKey,snapshot:JSON.parse(localStorage.getItem('swarm-studio-state-v8')).identities[0]};});
     assert.ok(shape.key);assert.equal(shape.snapshot.avatarUrl,'');assert.ok(shape.width<=384&&shape.height<=384);
     await page.getByLabel('Actions for Unfinished subject',{exact:true}).click();
+    const identityMenu = page.locator('.identity-menu[open] > div');
+    assert.equal(await identityMenu.evaluate(menu => {
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      context.fillStyle = getComputedStyle(menu).backgroundColor;
+      context.fillRect(0, 0, 1, 1);
+      return context.getImageData(0, 0, 1, 1).data[3];
+    }), 255, 'the Identity menu background is fully opaque');
     await page.getByRole('button',{name:'Edit identity Unfinished subject',exact:true}).click();
     await form.getByLabel('Name',{exact:true}).fill('Edited subject');
     await form.getByLabel('Notes').fill('Unsaved edit');

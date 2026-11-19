@@ -1994,7 +1994,7 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 .identity-menu { position:relative; }
 .identity-menu > summary { list-style:none; display:grid; place-items:center; cursor:pointer; }
 .identity-menu > summary::-webkit-details-marker { display:none; }
-.identity-menu > div { position:absolute; right:0; top:calc(100% + 6px); z-index:35; min-width:132px; padding:6px; border:1px solid color-mix(in srgb,var(--outline) 15%,transparent); border-radius:var(--control-radius); background:var(--panel); box-shadow:0 15px 36px rgba(0,0,0,.42); display:grid; gap:4px; }
+.identity-menu > div { position:absolute; right:0; top:calc(100% + 6px); z-index:35; min-width:132px; padding:6px; border:1px solid color-mix(in srgb,var(--outline) 15%,transparent); border-radius:var(--control-radius); background:var(--panel-base); box-shadow:0 15px 36px rgba(0,0,0,.42); display:grid; gap:4px; }
 .identity-menu > div button { border:0; border-radius:8px; padding:8px 10px; text-align:left; color:var(--text); background:transparent; cursor:pointer; }
 .identity-menu > div button:hover { background:rgba(255,255,255,.07); }
 .identity-editor-avatar { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
