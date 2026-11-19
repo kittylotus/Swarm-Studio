@@ -1,6 +1,7 @@
 import { actionMenu, bindActionMenus, disclosureChevronSvg } from '../ui/action-menu';
 import { resolveLoraModelName as resolveModelFileName } from '../lora/request';
 import { cloneLoraStack } from '../lora/stack';
+import { dimensionsForRatio } from '../resolution';
 import { ANIMA_INSTALL_GUIDE, animaWorkflow, isAnimaModel, nodeChoices, resolveAnimaSetup } from './anima';
 import { circleHelpIcon, openExpressionHelp } from './help';
 import { expressionFailure } from './errors';
@@ -176,7 +177,7 @@ export class ExpressionStudio {
       </section>
     </div>
     <div data-pipeline-part="img2img" ${p.engine === 'img2img' ? '' : 'hidden'}>${field('Redraw / creativity', 'denoise', 0, 1, .05)}</div>
-    <details class="expression-details expression-disclosure" data-generate-disclosure="sampling" ${this.generateDisclosures.has('sampling') ? 'open' : ''}><summary>Sampling & resolution</summary><div class="expression-fields">${field('Width', 'width', 256, 1536, 64)}${field('Height', 'height', 256, 1536, 64)}${field('Steps', 'steps', 1, 100)}${field('CFG', 'cfg', 1, 20, .5)}${field('Shared seed', 'seed', 0, 2147483646)}</div><label class="field"><span>Sampler</span><select data-setting="sampler" ${disabled}>${options(samplers, p.sampler)}</select></label><label class="field"><span>Scheduler</span><select data-setting="scheduler" ${disabled}>${options(schedulers, p.scheduler)}</select></label><p class="helper-copy">768² / 24 steps is a conservative starting point for an 8 GB GPU. Every card shares the seed; rerolls increment only that card.</p></details>
+    <details class="expression-details expression-disclosure" data-generate-disclosure="sampling" ${this.generateDisclosures.has('sampling') ? 'open' : ''}><summary>Sampling & resolution</summary>${this.resolutionFields(disabled)}<div class="expression-fields">${field('Steps', 'steps', 1, 100)}${field('CFG', 'cfg', 1, 20, .5)}${field('Shared seed', 'seed', 0, 2147483646)}</div><label class="field"><span>Sampler</span><select data-setting="sampler" ${disabled}>${options(samplers, p.sampler)}</select></label><label class="field"><span>Scheduler</span><select data-setting="scheduler" ${disabled}>${options(schedulers, p.scheduler)}</select></label><p class="helper-copy">768² / 24 steps is a conservative starting point for an 8 GB GPU. Every card shares the seed; rerolls increment only that card.</p></details>
     <details class="expression-details expression-disclosure" data-generate-disclosure="backend" ${this.generateDisclosures.has('backend') ? 'open' : ''}><summary>Backend setup & research</summary><button data-command="probe" class="secondary-button" ${this.setupBusy ? 'disabled' : ''}>${this.setupBusy ? 'Checking…' : 'Check loaded nodes'}</button><p class="expression-setup">${esc(this.setup)}</p><p class="helper-copy">IPAdapter needs its model weights and CLIP Vision. LivePortrait additionally needs ExpressionEditor and its models; install through ComfyUI Manager, restart the backend, then recheck.</p><button data-command="workflow-export" class="ghost-button">Export API workflow</button><a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noopener noreferrer">IPAdapter setup ↗</a><a href="https://github.com/PowerHouseMan/ComfyUI-AdvancedLivePortrait" target="_blank" rel="noopener noreferrer">LivePortrait setup ↗</a><a href="https://github.com/ToTheBeginning/PuLID/blob/main/docs/pulid_for_flux.md" target="_blank" rel="noopener noreferrer">Why PuLID-FLUX needs more memory ↗</a></details></section>
     <section class="expression-section" id="expression-settings-layout" data-settings-group="layout"><div class="expression-section-head"><b>Sheet layout</b></div><div class="expression-fields">${field('Columns', 'columns', 1, 8)}${field('Gutter', 'gutter', 0, 100)}<label class="field"><span>Paper</span><input data-setting="background" type="color" value="${p.background}" ${disabled}/></label></div><label class="check-row"><input data-setting="labels" type="checkbox" ${p.labels ? 'checked' : ''} ${disabled}/>Include expression labels</label><p class="helper-copy">Exports include enabled cards in their current order. Portrait packs include separate images and the project manifest.</p></section>
     ` : `<section class="expression-section" data-processing-stage="${stage}">
@@ -443,8 +444,66 @@ export class ExpressionStudio {
         });
         this.persist();
     }
+    private resolutionFields(disabled: string): string {
+        const presets = ['1:1', '2:3', '3:4', '4:5', '9:16', '3:2', '4:3', '5:4', '16:9'];
+        return `<div class="expression-resolution">
+            <div class="expression-resolution-options">
+                <label class="field"><span id="expression-ratio-label">Aspect ratio</span><select data-expression-ratio aria-labelledby="expression-ratio-label" ${disabled}><option value="">Custom</option>${presets.map(ratio => `<option value="${ratio}" ${ratio === this.project.linkedRatio ? 'selected' : ''}>${ratio}</option>`).join('')}</select></label>
+                <button type="button" class="secondary-button" data-expression-link aria-label="Link dimensions" aria-pressed="${Boolean(this.project.linkedRatio)}" ${disabled}>${this.project.linkedRatio ? 'Linked' : 'Unlinked'}</button>
+            </div>
+            ${(['width', 'height'] as const).map((axis) => {
+                const label = axis === 'width' ? 'Width' : 'Height';
+                return `<div class="expression-dimension"><label class="field"><span>${label} (px)</span><input type="number" min="256" max="1536" step="64" data-dimension="${axis}" value="${this.project[axis]}" ${disabled}/></label><input type="range" min="256" max="1536" step="64" aria-label="${label} slider" data-dimension="${axis}" value="${this.project[axis]}" ${disabled}/></div>`;
+            }).join('')}
+        </div>`;
+    }
+    private bindResolution(root: HTMLElement): void {
+        const fields = [...root.querySelectorAll<HTMLInputElement>('[data-dimension]')];
+        const presets = root.querySelector<HTMLSelectElement>('[data-expression-ratio]');
+        const link = root.querySelector<HTMLButtonElement>('[data-expression-link]');
+        if (!presets || !link) return;
+        const apply = (axis: 'width' | 'height', size: number, ratio = this.project.linkedRatio) => {
+            const p = this.project;
+            if (ratio) {
+                const [width, height] = ratio.split(':').map(Number);
+                const long = Math.max(width!, height!);
+                const short = Math.min(width!, height!);
+                const requested = size * long / (axis === 'width' ? width! : height!);
+                const longest = Math.min(1536, Math.max(256 * long / short, requested));
+                Object.assign(p, dimensionsForRatio(ratio, false, longest, longest));
+            } else if (Number.isFinite(size)) {
+                p[axis] = Math.min(1536, Math.max(256, Math.round(size / 64) * 64));
+            }
+            for (const input of fields) input.value = String(p[input.dataset.dimension as 'width' | 'height']);
+            link.textContent = p.linkedRatio ? 'Linked' : 'Unlinked';
+            link.setAttribute('aria-pressed', String(Boolean(p.linkedRatio)));
+            presets.value = [...presets.options].some(option => option.value === p.linkedRatio) ? p.linkedRatio! : '';
+            root.querySelectorAll<HTMLElement>('.expression-card-image').forEach(image => { image.style.aspectRatio = `${p.width} / ${p.height}`; });
+            this.persist();
+        };
+        for (const field of fields) field.addEventListener(field.type === 'range' ? 'input' : 'change', () => {
+            const axis = field.dataset.dimension as 'width' | 'height';
+            apply(axis, Number.isFinite(field.valueAsNumber) ? field.valueAsNumber : this.project[axis]);
+        });
+        link.addEventListener('click', () => {
+            const p = this.project;
+            p.linkedRatio = p.linkedRatio ? undefined : `${p.width}:${p.height}`;
+            apply('width', p.width);
+        });
+        presets.addEventListener('change', () => {
+            if (!presets.value) {
+                this.project.linkedRatio = undefined;
+                apply('width', this.project.width);
+                return;
+            }
+            const [width, height] = presets.value.split(':').map(Number);
+            this.project.linkedRatio = presets.value;
+            apply(width! >= height! ? 'width' : 'height', Math.max(this.project.width, this.project.height));
+        });
+    }
     private bind(): void {
         const root = this.host!;
+        this.bindResolution(root);
         const switchStage = (stage: PipelineStage) => {
             if (this.screen !== stage) {
                 this.screen = stage;

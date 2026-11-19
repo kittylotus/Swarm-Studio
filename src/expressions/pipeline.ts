@@ -48,6 +48,7 @@ export interface SheetProject {
     referenceName: string;
     width: number;
     height: number;
+    linkedRatio?: string;
     steps: number;
     cfg: number;
     seed: number;
@@ -274,5 +275,10 @@ export function normalizeSheet(raw: unknown): SheetProject {
         throw new Error('Project reference must be an embedded PNG, JPEG, or WebP.');
     if (Array.isArray(r.savedIdentityLoras))
         d.savedIdentityLoras = cloneLoraStack(r.savedIdentityLoras);
+    if (typeof r.linkedRatio === 'string' && /^\d{1,4}:\d{1,4}$/.test(r.linkedRatio)) {
+        const [width, height] = r.linkedRatio.split(':').map(Number);
+        if (width && height && width / height >= 1 / 6 && width / height <= 6)
+            d.linkedRatio = r.linkedRatio;
+    }
     return { ...d, autoDeleteDrafts: r.autoDeleteDrafts === true, refine: recipe('refine'), backgroundRemoval: recipe('backgroundRemoval'), name: str('name').slice(0, 120), subject: str('subject').slice(0, 20000), negative: str('negative').slice(0, 20000), model: str('model'), reference, referenceName: str('referenceName'), style: ['semireal', 'realistic', 'illustrated'].includes(str('style')) ? str('style') as SheetStyle : d.style, engine: ['ipadapter', 'anima', 'liveportrait', 'hybrid', 'img2img', 'text'].includes(str('engine')) ? str('engine') as SheetEngine : d.engine, adapter: str('adapter'), animaEmbedded: r.animaEmbedded === true, animaClip: str('animaClip'), animaVae: str('animaVae'), animaAdapter: str('animaAdapter'), animaGuidance: num('animaGuidance', 0, 20), animaStrength: num('animaStrength', 0, 2), animaEnd: num('animaEnd', 0, 1), sampler: str('sampler'), scheduler: str('scheduler'), width: Math.round(num('width', 256, 1536) / 64) * 64, height: Math.round(num('height', 256, 1536) / 64) * 64, steps: Math.round(num('steps', 1, 100)), cfg: num('cfg', 1, 20), seed: Math.round(num('seed', 0, 2147483646)), weight: num('weight', 0, 2), start: num('start', 0, 1), end: num('end', 0, 1), denoise: num('denoise', 0, 1), columns: Math.round(num('columns', 1, 8)), gutter: Math.round(num('gutter', 0, 100)), background: /^#[0-9a-f]{6}$/i.test(str('background')) ? str('background') : d.background, labels: r.labels !== false, useLoras: r.useLoras === true, tiles: Array.isArray(r.tiles) ? r.tiles.slice(0, 48).map(normalizeTile) : d.tiles };
 }

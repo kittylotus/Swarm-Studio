@@ -45,6 +45,20 @@ try {
         await openExpressionSettings(page, 'Generate');
         const sampling = page.locator('details').filter({has:page.locator('summary', {hasText:'Sampling & resolution'})});
         await sampling.locator('summary').click();
+        const width = page.getByRole('spinbutton', { name: 'Width (px)' });
+        const height = page.getByRole('spinbutton', { name: 'Height (px)' });
+        const widthSlider = page.getByRole('slider', { name: 'Width slider' });
+        const link = page.getByRole('button', { name: 'Link dimensions' });
+        await page.getByLabel('Aspect ratio', { exact: true }).selectOption('2:3');
+        assert.equal(await link.getAttribute('aria-pressed'), 'true');
+        assert.deepEqual([await width.inputValue(), await height.inputValue()], ['512', '768']);
+        await widthSlider.press('End');
+        assert.deepEqual([await width.inputValue(), await height.inputValue()], ['1024', '1536']);
+        await link.click();
+        await widthSlider.press('ArrowLeft');
+        assert.deepEqual([await width.inputValue(), await height.inputValue()], ['960', '1536']);
+        await link.click();
+        assert.equal(await link.getAttribute('aria-pressed'), 'true');
         await page.evaluate(()=>{window.originalSampler=document.querySelector('[data-setting="sampler"]');});
         for (const [key,value] of [['sampler','er_sde'],['scheduler','beta57'],['style','realistic'],['model','other.safetensors'],['adapter','PLUS FACE (portraits)']]) {
             const select=page.locator(`[data-setting="${key}"]`);
@@ -85,8 +99,12 @@ try {
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no horizontal mobile overflow');
         await page.waitForTimeout(400);
         await page.reload();await page.waitForFunction(()=>window.ready);
+        await openExpressionSettings(page, 'Generate');
+        await sampling.locator('summary').click();
         assert.equal(await page.locator('[data-setting="scheduler"]').inputValue(),'beta57');
         assert.equal(await page.locator('[data-setting="style"]').inputValue(),'realistic');
+        assert.equal(await link.getAttribute('aria-pressed'), 'true');
+        assert.deepEqual([await width.inputValue(), await height.inputValue()], ['960', '1536']);
         assert.equal(await page.locator('.expression-error').count(),0,'restoring a project clears transient render errors');
         await context.close();
     }
