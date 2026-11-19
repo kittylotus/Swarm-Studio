@@ -16,11 +16,11 @@ Default: **IPAdapter → SDXL**, semirealism preset, adapter PLUS, strength 0.65
 
 ## Anima Ref Adapter
 
-Choose **Anima Ref Adapter · reference-guided** as the render method for Anima checkpoints. This is separate from SDXL IPAdapter. Install [ComfyUI-Anima-Ref-Adapter](https://github.com/ArcAnima/ComfyUI-Anima-Ref-Adapter) in the backend, restart Comfy, then use **Check Anima setup**. Studio does not install nodes or model files. The adapter may download its 183 MB v2 weights on first use.
+Choose **Anima Ref Adapter · reference-guided** as the render method for Anima. Install the custom node, restart ComfyUI, and use **Check Anima setup**. Studio shows the matched loader or missing requirements next to the button and records the result in Logs. The adapter may download its v2 weights on first use. [Anima Ref Adapter installation guide](https://github.com/ArcAnima/ComfyUI-Anima-Ref-Adapter/blob/main/docs/guide.en.md)
 
-The pipeline uses separate Anima diffusion weights, a Qwen3 text encoder and Qwen Image VAE. Text encoder, VAE and adapter selections come from live Comfy node inventories; missing or ambiguous filenames block rendering. Default filenames match the upstream workflow. Describe framing and expression in **Character & framing**; the reference supplies character appearance and much of its style. The generic style preset is hidden for this method.
+Studio checks both ComfyUI’s diffusion-model and checkpoint inventories. By default it loads a separate Qwen3 text encoder and Qwen Image VAE, including when the model is listed under checkpoints. For an all-in-one checkpoint that bundles both components, open **Model files** and select **Use checkpoint’s encoder and VAE**. Describe framing and expression in **Character & framing** so the reference can supply appearance and style.
 
-Reference guidance defaults to 4.5, adapter strength to 1 and guidance end to 1, with APG correction. Guidance 1 avoids the extra reference-guidance model call. Around 30 steps / CFG 4.5 is an upstream starting point; shared sampling controls remain explicit and are not silently overwritten when switching methods. Composer LoRAs are inserted before the adapter.
+Reference guidance defaults to 4.5, adapter strength to 1 and guidance end to 1, with APG correction. Guidance 1 avoids the extra reference-guidance model call. For Anima base, around 30 steps and CFG 4.5 is an upstream starting point. The model author recommends 8–12 steps and CFG 1 for Turbo. Choose these settings under **Sampling & resolution**. Composer LoRAs are applied before the adapter. [Anima model card](https://huggingface.co/circlestone-labs/Anima)
 
 Anima also supports single-expression **Export API workflow**. Disable composer LoRAs for standalone export. The graph uses Swarm image bridge nodes and requires them in the target backend.
 
@@ -30,11 +30,23 @@ Anima also supports single-expression **Export API workflow**. Disable composer 
 2. Choose the compatible checkpoint and a semireal, realistic, or illustrated style. Edit the shared character/framing description and negative prompt.
 3. Choose 6, 12, or 24 expression presets, or add custom cards. Each card has an editable label and expression prompt. LivePortrait/Hybrid additionally exposes face controls.
 4. Optionally enable composer LoRAs. Studio checks model compatibility and snapshots the enabled stack at the start of the queue, so composer changes cannot alter later cards. Enabled Trigger toggles also append the LoRA trigger phrases to each expression prompt.
-5. Render missing cards. Every expression starts with the shared seed; a card reroll changes only its own seed offset. Lock approved portraits. Up to eight previous takes remain available as thumbnails.
+5. Use **Render missing** on Generate to make only the base portraits. Every expression starts with the shared seed. A card reroll changes only its own seed offset. Lock approved portraits. Up to eight previous takes remain available as thumbnails.
 6. Change order, exclude unwanted expressions, choose columns/gutter/paper color, and export a labeled PNG sheet.
 7. Use **Export → Export portrait pack** for individual PNGs, the sheet (if all selected cards are complete), and the project manifest. **Project → Save project / Open project** transfers reference images, expressions, settings, outputs, and previous takes. **Add expressions** groups preset sets and custom cards; **Options → Render unlocked** regenerates selected, unlocked portraits.
 
 Stop after current finishes the active portrait and prevents later submissions. It does not interrupt unrelated Swarm jobs. A render failure stays visible on its card. CUDA/OOM failures stop the remaining queue.
+
+## Refine and remove backgrounds
+
+**Generate**, **Refine**, and **Remove background** each have their own screen. Select a stage tab to see its settings and the images for that step. **Refine selected** and **Remove backgrounds** process the selected portraits whose input is ready. **Run pipeline** runs all remaining enabled steps in order and resumes failed portraits from their last successful image. **Render unlocked** starts over for selected, unlocked portraits. New sheets and older sheets with the original empty processing settings start with built-in methods. Choose **Skip this stage** to opt out.
+
+- **Refine** discovers models in ComfyUI’s `models/upscale_models` folder. Auto uses the first installed model. Refresh backend options to choose another model and set the output scale.
+- **Remove background** can use the built-in BiRefNet graph. Install `birefnet.safetensors` in `models/background_removal` and refresh backend options. The portrait PNG and portrait-pack images retain transparency. [ComfyUI BiRefNet setup](https://github.com/Comfy-Org/docs/blob/main/tutorials/utility/remove-background-birefnet.mdx)
+- **Saved Swarm workflow** lets you select a workflow and its exposed image parameter. **ComfyUI API JSON** accepts a file or pasted graph with a single image loader and a single image output. Studio connects the current image and displays which nodes it detected. Use an alpha-capable image output for custom cutouts.
+
+Enable **Options → Keep final results only** to save only completed pipeline results to Swarm. Studio keeps earlier stage images while the card is unfinished, then clears those images and older takes after the final stage succeeds. Use **View latest result** to jump to the available image when an earlier step has no saved result. Images already saved in Library are preserved.
+
+Open **Editor** in desktop navigation or **Visuals → Editor** on mobile to generate a single image, refine it, remove its background, or paint an Inpaint mask in the tab. Use **Browse Library** to pick from the searchable thumbnail grid, **Upload image** for a local file, or **Open in Editor** from an image’s inspector. Editor generation uses the checkpoint and sampling settings from Create.
 
 ## Persistence and exports
 

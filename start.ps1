@@ -547,7 +547,7 @@ function Read-StudioRunnerCommand {
     try {
         $Command = ([string](Get-Content -LiteralPath $RunnerCommandFile -Raw -ErrorAction Stop)).Trim().ToUpperInvariant()
         Remove-Item -LiteralPath $RunnerCommandFile -Force -ErrorAction SilentlyContinue
-        if ($Command -in @("W", "R", "C", "S", "X")) { return $Command }
+        if ($Command -in @("W", "R", "C", "S", "X", "Q")) { return $Command }
     } catch {
         Remove-Item -LiteralPath $RunnerCommandFile -Force -ErrorAction SilentlyContinue
     }
@@ -648,8 +648,9 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 
 if ($RefreshDependencies -or -not (Test-Path (Join-Path $Root "node_modules\@tauri-apps\api"))) {
     Write-Status "DEPS" "Installing JavaScript dependencies..." Yellow
-    npm install
-    if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE." }
+    # Keep the tracked lockfile clean on fresh installs and after self-updates.
+    npm ci
+    if ($LASTEXITCODE -ne 0) { throw "npm ci failed with exit code $LASTEXITCODE." }
 } else {
     Write-Status "DEPS" "JavaScript dependencies are ready." Green
 }
@@ -712,6 +713,7 @@ Write-Host '  ------------------------------------------------------------' -For
 Write-Host ""
 
 if ($WebOnly) {
+    $env:SWARM_STUDIO_LAUNCH_MODE = "web"
     Write-Status "MODE" "Starting browser/PWA mode." Cyan
     $ExitCode = Invoke-StudioProcess @("run", "dev", "--", "--host", "0.0.0.0", "--port", "1420")
     Write-Host ""
@@ -720,6 +722,7 @@ if ($WebOnly) {
 }
 
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    $env:SWARM_STUDIO_LAUNCH_MODE = "web"
     Write-Status "MODE" "Rust/Cargo was not found; falling back to browser/PWA mode." Yellow
     $ExitCode = Invoke-StudioProcess @("run", "dev", "--", "--host", "0.0.0.0", "--port", "1420")
     Write-Host ""
@@ -727,6 +730,7 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     exit $ExitCode
 }
 
+$env:SWARM_STUDIO_LAUNCH_MODE = "desktop"
 Write-Status "MODE" "Starting Tauri desktop runner with keyboard controls." Cyan
 $ExitCode = Invoke-StudioDesktopControlLoop
 Remove-Item -LiteralPath $DesktopPidFile -Force -ErrorAction SilentlyContinue

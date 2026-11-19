@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { defaultSheet, expressionTiles, normalizeSheet, expressionRequest } from '../src/expressions/pipeline.ts';
-import { animaWorkflow, isAnimaModel } from '../src/expressions/anima.ts';
+import { animaWorkflow, isAnimaModel, resolveAnimaSetup } from '../src/expressions/anima.ts';
 
 import { node, schema } from './fixtures/anima-schema.mjs';
 
@@ -20,8 +20,24 @@ const stacked = animaWorkflow({ ...project, useLoras: true }, tile, schema, [lor
 assert.deepEqual(stacked['5'].inputs.model, ['lora-0', 0]); assert.equal(stacked['lora-0'].inputs.lora_name, 'styles/detail.safetensors'); assert.match(stacked['6'].inputs.text, /^extra detail,/);
 assert.throws(() => animaWorkflow({ ...project, useLoras: true }, tile, schema), /standalone/);
 assert.throws(() => animaWorkflow({ ...project, reference: '' }, tile, schema), /reference/);
-assert.throws(() => animaWorkflow(project, tile, { ...schema, AnimaRefAdapter: undefined }), /adapter weights/);
+assert.throws(() => animaWorkflow(project, tile, { ...schema, AnimaRefAdapter: undefined }), /Anima Ref Adapter is missing/);
 assert.throws(() => animaWorkflow(project, tile, { ...schema, UNETLoader: node({ unet_name: ['a/anima-base.safetensors', 'b/anima-base.safetensors'] }) }), /ambiguous/);
 assert.throws(() => animaWorkflow(project, tile, { ...schema, AnimaRefAdapter: node({ ...Object.fromEntries(Object.entries(schema.AnimaRefAdapter.input.required).map(([key, [type]]) => [key, type])), surprise: 'MODEL' }, ['strength', 'ref_end', 'ref_megapixels']) }), /Unsupported required/);
 assert.throws(() => animaWorkflow({ ...project, scheduler: 'unavailable' }, tile, schema), /scheduler/);
+const turbo = { ...project, model: 'anima-turbo-v1.1.safetensors' };
+const checkpointGraph = animaWorkflow(turbo, tile, schema);
+assert.equal(checkpointGraph['1'].class_type, 'CheckpointLoaderSimple');
+assert.equal(checkpointGraph['1'].inputs.ckpt_name, 'anima/anima-turbo-v1.1.safetensors');
+assert.deepEqual(checkpointGraph['5'].inputs.model, ['1', 0]);
+assert.deepEqual(checkpointGraph['5'].inputs.vae, ['3', 0]);
+assert.deepEqual(checkpointGraph['6'].inputs.clip, ['2', 0]);
+const merge = { ...project, model: 'portrait-merge.safetensors', animaEmbedded: true };
+const embeddedGraph = animaWorkflow(merge, tile, { ...schema, CLIPLoader: undefined, VAELoader: undefined }, undefined, { name: merge.model, architecture: 'anima' });
+assert.equal(embeddedGraph['1'].class_type, 'CheckpointLoaderSimple');
+assert.equal(embeddedGraph['2'], undefined);
+assert.deepEqual(embeddedGraph['6'].inputs.clip, ['1', 1]);
+assert.deepEqual(embeddedGraph['5'].inputs.vae, ['1', 2]);
+assert.deepEqual(embeddedGraph['10'].inputs.vae, ['1', 2]);
+assert.equal(resolveAnimaSetup({ ...turbo, model: 'checkpoints/anima/anima-turbo-v1.1' }, schema).loader, 'CheckpointLoaderSimple');
+assert.throws(() => resolveAnimaSetup({ ...turbo, model: 'not-installed.safetensors' }, schema), /missing in the checkpoint and diffusion model inventories/);
 console.log('Anima reference graph and inventory contracts: ok');

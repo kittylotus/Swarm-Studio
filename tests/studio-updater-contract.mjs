@@ -12,17 +12,25 @@ const runner = readFileSync(new URL("../start.ps1", import.meta.url), "utf8");
 
 assert.match(rust, /studio_update_check/);
 assert.match(rust, /studio_update_apply/);
-assert.match(rust, /merge-base", "--is-ancestor"/);
-assert.match(rust, /"merge", "--ff-only"/);
+const updater = readFileSync(new URL("../scripts/studio-source-updater.mjs", import.meta.url), "utf8");
+const worker = readFileSync(new URL("../scripts/studio-source-worker.ps1", import.meta.url), "utf8");
+assert.match(updater, /merge-base', '--is-ancestor/);
+assert.ok(rust.includes('studio_source_command(&root, "--apply")'));
+assert.doesNotMatch(rust, /exit_app\.exit\(0\)/, "native updater must not close its window before scheduling succeeds");
+assert.match(worker, /"merge", "--ff-only"/);
 assert.doesNotMatch(rust, /reset --hard/);
 assert.doesNotMatch(rust, /git clean/);
 assert.match(rust, /GIT_TERMINAL_PROMPT/);
+assert.match(worker, /Invoke-CimMethod -ClassName Win32_Process -MethodName Create/);
+assert.match(worker, /Test-ProcessIdentity/);
 assert.match(runtime, /checkStudioUpdate\(\)/);
 assert.match(runtime, /applyStudioUpdate\(\)/);
 assert.match(app, /Update & restart/);
 assert.match(app, /studioUpdateHasPendingWork/);
 assert.match(runner, /SWARM_STUDIO_ROOT/);
 assert.match(runner, /RefreshDependencies/);
+assert.match(runner, /^    npm ci$/m, "runner dependency installs must preserve the tracked lockfile");
+assert.doesNotMatch(runner, /^\s*npm install\b/m, "runner must never rewrite the lockfile through npm install");
 
 const run = (cwd, args) => {
   const result = spawnSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });

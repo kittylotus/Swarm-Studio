@@ -1,10 +1,11 @@
 import './action-menu.css';
 
 const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+export const disclosureChevronSvg = '<svg class="studio-menu-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>';
 
 /** A disclosure of ordinary actions: native dismissal and Tab order, without fake menu roles. */
 export function actionMenu(id: string, label: string, title: string, content: string, primary = false): string {
-  return `<div class="studio-action-group"><button type="button" class="${primary ? 'primary-button' : 'secondary-button'} studio-menu-trigger" popovertarget="${id}" aria-controls="${id}" aria-expanded="false"><span>${escape(label)}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+  return `<div class="studio-action-group"><button type="button" class="${primary ? 'primary-button' : 'secondary-button'} studio-menu-trigger" popovertarget="${id}" aria-controls="${id}" aria-expanded="false"><span>${escape(label)}</span>${disclosureChevronSvg}</button>
     <section id="${id}" popover="auto" class="studio-action-menu" aria-labelledby="${id}-title"><header><span class="panel-kicker" id="${id}-title">${escape(title)}</span></header>${content}</section></div>`;
 }
 

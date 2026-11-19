@@ -1,18 +1,21 @@
 import { actionMenu, bindActionMenus } from '../ui/action-menu';
-import { animaWorkflow, isAnimaModel, nodeChoices } from './anima';
+import { ANIMA_INSTALL_GUIDE, animaWorkflow, isAnimaModel, nodeChoices, resolveAnimaSetup } from './anima';
 import { circleHelpIcon, openExpressionHelp } from './help';
 import { expressionFailure } from './errors';
-import { defaultSheet, normalizeSheet, expressionTiles, emptyMotion, motionLimits, expressionRequest, livePortraitWorkflow, ipAdapterWorkflow, advertisedValues, isAdapterModel, type SheetProject, type ExpressionTile, type NodeSchema, type ExpressionMotion } from './pipeline';
+import { defaultSheet, normalizeSheet, expressionTiles, emptyMotion, motionLimits, expressionRequest, livePortraitWorkflow, ipAdapterWorkflow, advertisedValues, isAdapterModel, imageForStage, recordStageImage, type ExpressionImage, type SheetProject, type ExpressionTile, type NodeSchema, type ExpressionMotion } from './pipeline';
+import { pendingStages, processingLabels, processingRequest, readProcessingImage, type PipelineStage, type ProcessingStage } from './processing';
+import { bindProcessingFields, resolveProcessing, type ProcessingChoices, type ProcessingHost } from './processing-ui';
 import type { ExpressionLora } from './loras';
 import type { SwarmGenerationRequest, SwarmModel, SwarmParamDefinition } from '../swarm/types';
 const esc = (value: unknown) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
 export interface ExpressionHost {
     models(): SwarmModel[];
+    processing?: ProcessingHost;
     params(): SwarmParamDefinition[];
     busy(): boolean;
     connected(): boolean;
     captureLoras(model: string): ExpressionLora[];
-    generate(request: SwarmGenerationRequest, loras: ExpressionLora[], progress: (n: number) => void): Promise<{
+    generate(request: SwarmGenerationRequest, loras: ExpressionLora[], progress: (n: number) => void, stage?: ProcessingStage): Promise<{
         image: string;
         path: string;
         seed: number;
@@ -20,7 +23,16 @@ export interface ExpressionHost {
     probe(): Promise<Record<string, NodeSchema>>;
     save(data: string, name: string): Promise<void>;
     notify(message: string, error?: boolean): void;
+    log?(message: string, error?: boolean): void;
+    openAnimaGuide?(): Promise<void>;
 }
+const stageLabels = { generate: 'Generate', ...processingLabels };
+const stageActions = { generate: 'Render missing', refine: 'Refine selected', background: 'Remove backgrounds' };
+const animaAssets = [
+    ['Text encoder', 'animaClip', 'CLIPLoader', 'clip_name'],
+    ['VAE', 'animaVae', 'VAELoader', 'vae_name'],
+    ['Adapter weights', 'animaAdapter', 'AnimaRefAdapter', 'lora_name'],
+] as const;
 const imageFrom = (src: string): Promise<HTMLImageElement> => new Promise((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error('Could not decode an expression image.')); image.src = src; });
 function db(): Promise<IDBDatabase> { return new Promise((resolve, reject) => { const request = indexedDB.open('swarm-studio-expressions-v1', 1); request.onupgradeneeded = () => request.result.createObjectStore('projects'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); }); }
 async function storedProject(write?: SheetProject): Promise<unknown> { const store = await db(); try {
@@ -43,10 +55,17 @@ export class ExpressionStudio {
     private stopped = false;
     private currentId = '';
     private progress = 0;
+    private currentStage: PipelineStage | null = null;
+    private screen: PipelineStage = 'generate';
+    private generateDisclosures = new Set<string>();
     private status = 'Ready to build your expression sheet.';
     private schema: Record<string, NodeSchema> = {};
     private setup = 'Not checked yet. Check backend setup to inspect loaded nodes.';
     private setupBusy = false;
+    private setupChecked = false;
+    private setupError = '';
+    private probeRequest: Promise<void> | null = null;
+    private processingChoices: Record<ProcessingStage, ProcessingChoices> = { refine: {}, background: {} };
     constructor(private readonly bridge: ExpressionHost) { }
     get busy(): boolean { return this.running; }
     async mount(host: HTMLElement): Promise<void> { this.host = host; if (!this.loaded) {
@@ -60,7 +79,16 @@ export class ExpressionStudio {
             this.bridge.notify(`Expression project could not be restored: ${String(error)}`, true);
         }
     } this.draw(); }
-    private persist(): void { window.clearTimeout(this.saveTimer); this.saveTimer = window.setTimeout(() => { const snapshot = structuredClone(this.project); this.saving = this.saving.catch(() => undefined).then(() => storedProject(snapshot)).catch(error => this.bridge.notify(`Expression project could not be saved: ${String(error)}`, true)); }, 250); }
+    private persist(immediate = false): void {
+        window.clearTimeout(this.saveTimer);
+        const write = () => {
+            const snapshot = structuredClone(this.project);
+            this.saving = this.saving.catch(() => undefined).then(() => storedProject(snapshot))
+                .catch(error => this.bridge.notify(`Expression project could not be saved: ${String(error)}`, true));
+        };
+        if (immediate) write();
+        else this.saveTimer = window.setTimeout(write, 250);
+    }
     private draw(): void {
         if (!this.host?.isConnected)
             return;
@@ -75,36 +103,201 @@ export class ExpressionStudio {
         const schedulers = advertisedValues(this.bridge.params(), 'scheduler');
         const options = (values: string[], chosen: string) => Array.from(new Set([chosen, ...values])).filter(Boolean).map(v => `<option ${v === chosen ? 'selected' : ''} value="${esc(v)}">${esc(v)}</option>`).join('');
         const field = (label: string, key: keyof SheetProject, min: number, max: number, step: number = 1) => `<label class="field"><span>${label}</span><input data-setting="${key}" type="number" min="${min}" max="${max}" step="${step}" value="${p[key]}" ${disabled}/></label>`;
+        this.host.querySelectorAll<HTMLDetailsElement>('details[data-generate-disclosure]').forEach(details => {
+            const name = details.dataset.generateDisclosure!;
+            if (details.open) this.generateDisclosures.add(name);
+            else this.generateDisclosures.delete(name);
+        });
+        const stage = this.screen;
+        const generatingScreen = stage === 'generate';
+        const focusedTab = document.activeElement?.matches('[data-stage-tab]');
         this.host.innerHTML = `<div class="expression-studio">
    <header class="expression-hero"><div><div class="expression-heading"><h1>Expression studio</h1><button type="button" class="expression-help-button" data-command="help" title="Expression sheet usage guide" aria-label="Expression sheet usage guide" aria-haspopup="dialog">${circleHelpIcon}</button></div><p>Keep the identity, direct the emotion, and build a sheet one portrait at a time.</p></div><div class="expression-hero-actions">${actionMenu('expression-project-menu', 'Project', 'Project files', `<div class="studio-menu-section"><button type="button" data-command="project-open" ${disabled}>Open project<small>Continue a saved expression project.</small></button><button type="button" data-command="project-export">Save project<small>Download the project JSON, including portraits.</small></button></div>`)}${actionMenu('expression-export-menu', 'Export', 'Export portraits', '<div class="studio-menu-section"><button type="button" data-command="sheet-export">Export sheet PNG<small>Arrange the selected portraits into one sheet.</small></button><button type="button" data-command="pack-export">Export portrait pack<small>Separate images with the project manifest.</small></button></div>')}<input data-project-import type="file" accept="application/json,.json" hidden ${disabled}/></div></header>
-   <div class="expression-layout"><aside class="expression-controls">
-    <section class="expression-section"><div class="expression-section-head"><b>01 / Identity</b><small>One clean reference</small></div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
+   ${this.pipelineTabs()}
+   <div class="expression-layout" id="expression-stage-panel" role="tabpanel" aria-labelledby="expression-tab-${stage}">
+   <aside class="expression-controls">
+    ${generatingScreen ? `<section class="expression-section"><div class="expression-section-head"><b>Identity</b></div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
     <div class="expression-reference">${p.reference ? `<img src="${esc(p.reference)}" alt="Character reference"/><span>${esc(p.referenceName)}</span>` : `<div class="expression-reference-empty"><b>＋</b><span>Add a face reference</span><small>Front-facing, neutral expression, clear eyes</small></div>`}</div>
     <div class="expression-button-row"><label class="secondary-button file-button">Upload portrait<input data-reference type="file" accept="image/png,image/jpeg,image/webp" hidden ${disabled}/></label><button data-command="clear-reference" class="ghost-button" ${disabled}>Clear</button></div><p class="helper-copy">Reference is resized to at most 1024 px and stored with this project. IPAdapter uses it to guide identity; LivePortrait edits the face directly.</p>
     <label class="field"><span>Character & framing</span><textarea rows="4" data-setting="subject" ${disabled}>${esc(p.subject)}</textarea></label><label class="field"><span>Avoid</span><textarea rows="3" data-setting="negative" ${disabled}>${esc(p.negative)}</textarea></label>
     <label class="check-row"><input data-setting="useLoras" type="checkbox" ${p.useLoras ? 'checked' : ''} ${disabled}/>Use enabled LoRAs from the composer</label></section>
-    <section class="expression-section"><div class="expression-section-head"><b>02 / Pipeline</b><small>Batch size 1</small></div>
+    <section class="expression-section"><div class="expression-section-head"><b>Generate</b></div>
     <label class="field"><span id="expression-engine-label">Render method</span><select data-setting="engine" aria-labelledby="expression-engine-label" ${disabled}>${[['ipadapter', 'IPAdapter · reference-guided'], ['anima', 'Anima Ref Adapter · reference-guided'], ['liveportrait', 'LivePortrait · facial edit'], ['hybrid', 'IPAdapter → LivePortrait · two passes'], ['img2img', 'Image-to-image · redraw'], ['text', 'Prompt only · baseline']].map(([v, label]) => `<option value="${v}" ${p.engine === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
     <label class="field" data-pipeline-part="style" ${p.engine === 'anima' ? 'hidden' : ''}><span id="expression-style-label">Style preset</span><select data-setting="style" aria-labelledby="expression-style-label" ${disabled}>${[['semireal', 'Semirealism'], ['realistic', 'Realistic portrait'], ['illustrated', 'Illustrated / anime']].map(([v, label]) => `<option value="${v}" ${p.style === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
-    <div data-pipeline-part="checkpoint" ${p.engine === 'liveportrait' ? 'hidden' : ''}><label class="field"><span>${['ipadapter', 'hybrid'].includes(p.engine) ? 'SDXL / SD1.5 checkpoint' : 'Checkpoint'}</span><select data-setting="model" ${disabled}>${models.map(m => `<option value="${esc(m.name)}" ${m.name === p.model ? 'selected' : ''}>${esc(m.title || m.name)}</option>`).join('') || '<option value="">No compatible checkpoint loaded</option>'}</select></label></div><p data-pipeline-part="portrait" class="helper-copy" ${p.engine !== 'liveportrait' ? 'hidden' : ''}>Works best on detectable portrait faces. Uses the ExpressionEditor sliders in each card; character prompts and LoRAs are not used.</p>
+    <div data-pipeline-part="checkpoint" ${p.engine === 'liveportrait' ? 'hidden' : ''}><label class="field"><span>${['ipadapter', 'hybrid'].includes(p.engine) ? 'SDXL / SD1.5 checkpoint' : p.engine === 'anima' ? 'Anima model' : 'Checkpoint'}</span><select data-setting="model" ${disabled}>${models.map(m => `<option value="${esc(m.name)}" ${m.name === p.model ? 'selected' : ''}>${esc(m.title || m.name)}</option>`).join('') || '<option value="">No compatible checkpoint loaded</option>'}</select></label></div><p data-pipeline-part="portrait" class="helper-copy" ${p.engine !== 'liveportrait' ? 'hidden' : ''}>Works best on detectable portrait faces. Uses the ExpressionEditor sliders in each card; character prompts and LoRAs are not used.</p>
     <div data-pipeline-part="adapter" ${['ipadapter', 'hybrid'].includes(p.engine) ? '' : 'hidden'}><label class="field"><span>Adapter</span><select data-setting="adapter" ${disabled}>${options(adapters, p.adapter)}</select></label><div class="expression-fields">${field('Identity strength', 'weight', 0, 2, .05)}${field('Start', 'start', 0, 1, .05)}${field('End', 'end', 0, 1, .05)}</div><p class="helper-copy">Start at 0.65 strength / 0.8 end. Lower strength or end if the reference expression is overpowering the requested emotion. Anima is not compatible with these SDXL adapters.</p></div>
-    <div data-pipeline-part="anima" ${p.engine === 'anima' ? '' : 'hidden'}><p class="helper-copy">Anima base + Qwen3 encoder + Qwen Image VAE. The reference supplies identity and style; describe framing and expression rather than repeating the outfit. Check loaded nodes to populate installed files. First render may download the adapter weights (183 MB).</p>
-      <button data-command="probe" class="secondary-button" ${this.setupBusy ? 'disabled' : ''}>Check Anima setup</button>
-      ${([['Text encoder', 'animaClip', 'CLIPLoader', 'clip_name'], ['VAE', 'animaVae', 'VAELoader', 'vae_name'], ['Adapter weights', 'animaAdapter', 'AnimaRefAdapter', 'lora_name']] as const).map(([label, key, node, input]) => `<label class="field"><span id="expression-${key}-label">${label}</span><select data-setting="${key}" aria-labelledby="expression-${key}-label" ${disabled}>${options(nodeChoices(this.schema, node, input), p[key])}</select></label>`).join('')}
-      <div class="expression-fields">${field('Reference guidance', 'animaGuidance', 0, 20, .1)}${field('Adapter strength', 'animaStrength', 0, 2, .05)}${field('Reference guidance end', 'animaEnd', 0, 1, .05)}</div><p class="helper-copy">APG correction. Start around CFG 4.5 / 30 steps; guidance 1 avoids an extra model call. Other LoRAs load before the adapter.</p><a href="https://github.com/ArcAnima/ComfyUI-Anima-Ref-Adapter" target="_blank" rel="noopener noreferrer">Anima adapter installation ↗</a></div>
+    <div class="anima-controls" data-pipeline-part="anima" ${p.engine === 'anima' ? '' : 'hidden'}>
+      <section class="anima-setup" aria-label="Anima backend setup">
+        <div class="anima-setup-heading"><b>Backend setup</b><button type="button" data-command="probe-anima" class="secondary-button" ${disabled}>Check Anima setup</button></div>
+        <div class="anima-setup-report" data-anima-report role="status" aria-live="polite"></div>
+        <details class="anima-model-files expression-disclosure" data-anima-files data-generate-disclosure="anima" ${this.generateDisclosures.has('anima') ? 'open' : ''}>
+          <summary>Model files</summary>
+          <label class="check-row"><input data-setting="animaEmbedded" type="checkbox" ${p.animaEmbedded ? 'checked' : ''} ${disabled}/>Use checkpoint’s encoder and VAE</label>
+          <div class="anima-separate-assets" data-anima-separate ${p.animaEmbedded ? 'hidden' : ''}>
+            ${animaAssets.slice(0, 2).map(([label, key, node, input]) => `<label class="field"><span id="expression-${key}-label">${label}</span><select data-setting="${key}" aria-labelledby="expression-${key}-label" ${disabled}>${options(nodeChoices(this.schema, node, input), p[key])}</select></label>`).join('')}
+          </div>
+          <label class="field"><span id="expression-animaAdapter-label">Adapter weights</span><select data-setting="animaAdapter" aria-labelledby="expression-animaAdapter-label" ${disabled}>${options(nodeChoices(this.schema, 'AnimaRefAdapter', 'lora_name'), p.animaAdapter)}</select></label>
+        </details>
+        <a class="anima-install-link" data-anima-guide href="${ANIMA_INSTALL_GUIDE}" target="_blank" rel="noopener noreferrer">Installation guide <span aria-hidden="true">↗</span></a>
+      </section>
+      <section class="anima-reference-controls" aria-label="Reference controls">
+        <b>Reference controls</b>
+        <div class="expression-fields">${field('Guidance', 'animaGuidance', 0, 20, .1)}${field('Adapter strength', 'animaStrength', 0, 2, .05)}${field('Guidance end', 'animaEnd', 0, 1, .05)}</div>
+        <p class="helper-copy" data-anima-sampling-note></p>
+      </section>
+    </div>
     <div data-pipeline-part="img2img" ${p.engine === 'img2img' ? '' : 'hidden'}>${field('Redraw / creativity', 'denoise', 0, 1, .05)}</div>
-    <details class="expression-details"><summary>Sampling & resolution</summary><div class="expression-fields">${field('Width', 'width', 256, 1536, 64)}${field('Height', 'height', 256, 1536, 64)}${field('Steps', 'steps', 1, 100)}${field('CFG', 'cfg', 1, 20, .5)}${field('Shared seed', 'seed', 0, 2147483646)}</div><label class="field"><span>Sampler</span><select data-setting="sampler" ${disabled}>${options(samplers, p.sampler)}</select></label><label class="field"><span>Scheduler</span><select data-setting="scheduler" ${disabled}>${options(schedulers, p.scheduler)}</select></label><p class="helper-copy">768² / 24 steps is a conservative starting point for an 8 GB GPU. Every card shares the seed; rerolls increment only that card.</p></details>
-    <details class="expression-details"><summary>Backend setup & research</summary><button data-command="probe" class="secondary-button" ${this.setupBusy ? 'disabled' : ''}>${this.setupBusy ? 'Checking…' : 'Check loaded nodes'}</button><p class="expression-setup">${esc(this.setup)}</p><p class="helper-copy">IPAdapter needs its model weights and CLIP Vision. LivePortrait additionally needs ExpressionEditor and its models; install through ComfyUI Manager, restart the backend, then recheck.</p><button data-command="workflow-export" class="ghost-button">Export API workflow</button><a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noopener noreferrer">IPAdapter setup ↗</a><a href="https://github.com/PowerHouseMan/ComfyUI-AdvancedLivePortrait" target="_blank" rel="noopener noreferrer">LivePortrait setup ↗</a><a href="https://github.com/ToTheBeginning/PuLID/blob/main/docs/pulid_for_flux.md" target="_blank" rel="noopener noreferrer">Why PuLID-FLUX needs more memory ↗</a></details></section>
-    <section class="expression-section"><div class="expression-section-head"><b>03 / Sheet layout</b></div><div class="expression-fields">${field('Columns', 'columns', 1, 8)}${field('Gutter', 'gutter', 0, 100)}<label class="field"><span>Paper</span><input data-setting="background" type="color" value="${p.background}" ${disabled}/></label></div><label class="check-row"><input data-setting="labels" type="checkbox" ${p.labels ? 'checked' : ''} ${disabled}/>Include expression labels</label><p class="helper-copy">Exports include enabled cards in their current order. Portrait packs include separate images and the project manifest.</p></section>
-   </aside><main class="expression-board"><div class="expression-toolbar"><div><input class="expression-title" aria-label="Expression sheet name" data-setting="name" value="${esc(p.name)}" ${disabled}/><p>${p.tiles.filter(t => t.image).length} rendered · ${p.tiles.filter(t => t.enabled).length} selected · ${p.tiles.filter(t => t.locked).length} locked</p></div><div class="expression-toolbar-actions">${actionMenu('expression-add-menu', 'Add expressions', 'Build the sheet', `<div class="studio-menu-section"><label class="field"><span>Preset set</span><select data-preset-count ${disabled}><option value="6">Essential 6</option><option value="12" selected>Classic 12</option><option value="24">Full range 24</option></select></label><button type="button" data-command="load-presets" ${disabled}>Add preset expressions<small>Add the chosen preset set to this sheet.</small></button></div><div class="studio-menu-section"><button type="button" data-command="add-card" ${disabled}>Add custom expression<small>Start with a blank direction.</small></button></div>`)}<div class="expression-render-actions"><button type="button" data-command="run-missing" class="primary-button" ${disabled}>Render missing</button>${actionMenu('expression-render-menu', 'Options', 'Render options', `<div class="studio-menu-section"><button type="button" data-command="run-all" ${disabled}>Render unlocked<small>Regenerate selected portraits, keeping locked ones.</small></button></div>`)}</div>${this.running ? '<button type="button" data-command="stop" class="danger-soft">Stop after current</button>' : ''}</div></div>
-    <div class="expression-run-status" role="status" aria-live="polite"><span class="${this.running ? 'is-running' : ''}"></span><b>${esc(this.status)}</b><small>${this.running ? `${Math.round(this.progress * 100)}% of current portrait` : 'Reference → expression → individual portrait → sheet'}</small></div>
-    <div class="expression-grid" style="--expression-columns:${Math.min(p.columns, 4)}">${p.tiles.map((t, index) => this.card(t, index, disabled)).join('')}</div>
-   </main></div></div>`;
+    <details class="expression-details expression-disclosure" data-generate-disclosure="sampling" ${this.generateDisclosures.has('sampling') ? 'open' : ''}><summary>Sampling & resolution</summary><div class="expression-fields">${field('Width', 'width', 256, 1536, 64)}${field('Height', 'height', 256, 1536, 64)}${field('Steps', 'steps', 1, 100)}${field('CFG', 'cfg', 1, 20, .5)}${field('Shared seed', 'seed', 0, 2147483646)}</div><label class="field"><span>Sampler</span><select data-setting="sampler" ${disabled}>${options(samplers, p.sampler)}</select></label><label class="field"><span>Scheduler</span><select data-setting="scheduler" ${disabled}>${options(schedulers, p.scheduler)}</select></label><p class="helper-copy">768² / 24 steps is a conservative starting point for an 8 GB GPU. Every card shares the seed; rerolls increment only that card.</p></details>
+    <details class="expression-details expression-disclosure" data-generate-disclosure="backend" ${this.generateDisclosures.has('backend') ? 'open' : ''}><summary>Backend setup & research</summary><button data-command="probe" class="secondary-button" ${this.setupBusy ? 'disabled' : ''}>${this.setupBusy ? 'Checking…' : 'Check loaded nodes'}</button><p class="expression-setup">${esc(this.setup)}</p><p class="helper-copy">IPAdapter needs its model weights and CLIP Vision. LivePortrait additionally needs ExpressionEditor and its models; install through ComfyUI Manager, restart the backend, then recheck.</p><button data-command="workflow-export" class="ghost-button">Export API workflow</button><a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noopener noreferrer">IPAdapter setup ↗</a><a href="https://github.com/PowerHouseMan/ComfyUI-AdvancedLivePortrait" target="_blank" rel="noopener noreferrer">LivePortrait setup ↗</a><a href="https://github.com/ToTheBeginning/PuLID/blob/main/docs/pulid_for_flux.md" target="_blank" rel="noopener noreferrer">Why PuLID-FLUX needs more memory ↗</a></details></section>
+    <section class="expression-section"><div class="expression-section-head"><b>Sheet layout</b></div><div class="expression-fields">${field('Columns', 'columns', 1, 8)}${field('Gutter', 'gutter', 0, 100)}<label class="field"><span>Paper</span><input data-setting="background" type="color" value="${p.background}" ${disabled}/></label></div><label class="check-row"><input data-setting="labels" type="checkbox" ${p.labels ? 'checked' : ''} ${disabled}/>Include expression labels</label><p class="helper-copy">Exports include enabled cards in their current order. Portrait packs include separate images and the project manifest.</p></section>
+    ` : `<section class="expression-section" data-processing-stage="${stage}">
+        <div class="expression-section-head"><b>${stageLabels[stage]} settings</b></div>
+        <div class="processing-fields" data-processing-fields></div>
+    </section>`}
+   </aside>
+   <section class="expression-board" aria-labelledby="expression-stage-heading">
+    <div class="expression-toolbar">
+      <div>
+        ${generatingScreen ? `<input class="expression-title" id="expression-stage-heading" aria-label="Expression sheet name" data-setting="name" value="${esc(p.name)}" ${disabled}/>` : `<h2 id="expression-stage-heading" class="expression-stage-heading">${stageLabels[stage]}</h2>`}
+        <p data-stage-count></p>
+      </div>
+      <div class="expression-toolbar-actions">
+        ${generatingScreen ? this.addExpressionsMenu(disabled) : ''}
+        <div class="expression-render-actions">
+          <button type="button" data-command="run-stage" class="primary-button" ${disabled}>${stageActions[stage]}</button>
+          ${actionMenu('expression-render-menu', 'Options', 'Render options', `<div class="studio-menu-section"><button type="button" data-command="run-all" ${disabled}>Render unlocked<small>Start again from Generate on selected, unlocked portraits.</small></button></div><div class="studio-menu-section"><label class="check-row"><input type="checkbox" data-setting="autoDeleteDrafts" ${p.autoDeleteDrafts ? 'checked' : ''} ${disabled}/> Keep final results only</label><small>Keep earlier steps until the portrait finishes. Successful pipelines discard earlier steps and takes for that card.</small></div>`)}
+        </div>
+        ${this.running ? '<button type="button" data-command="stop" class="danger-soft">Stop after current</button>'
+            : this.bridge.processing ? '<button type="button" data-command="run-pipeline" class="secondary-button">Run pipeline</button>' : ''}
+      </div>
+    </div>
+    <div class="expression-run-status" role="status"><span class="${this.running ? 'is-running' : ''}"></span><b>${esc(this.status)}</b></div>
+    ${p.tiles.length ? `<div class="expression-grid" style="--expression-columns:${Math.min(p.columns, 4)}">${p.tiles.map((tile, index) => this.card(tile, index, disabled)).join('')}</div>`
+        : '<p class="expression-stage-empty">Add expressions on the Generate screen to build your sheet.</p>'}
+   </section></div></div>`;
         this.bind();
+        this.syncSetupFeedback();
+        this.syncStageStatus();
+        if (focusedTab) this.host.querySelector<HTMLElement>('[data-stage-tab][aria-selected="true"]')?.focus({ preventScroll: true });
+        const processing = this.bridge.processing;
+        const fields = this.host.querySelector<HTMLElement>('[data-processing-fields]');
+        if (processing && fields && stage !== 'generate') {
+            const key = stage === 'refine' ? 'refine' : 'backgroundRemoval';
+            bindProcessingFields(fields, processing, stage, p[key], recipe => {
+                this.project[key] = recipe;
+                this.persist();
+                this.syncStageStatus();
+            }, this.processingChoices[stage], true, this.running);
+        }
     }
-    private card(t: ExpressionTile, index: number, disabled: string): string {
-        const failure = t.error ? expressionFailure(t.error) : null;
-        return `<article class="expression-card ${t.locked ? 'is-locked' : ''} ${!t.enabled ? 'is-excluded' : ''} ${this.currentId === t.id ? 'is-rendering' : ''}" data-card="${t.id}"><div class="expression-card-head"><label><input type="checkbox" data-tile="enabled" ${t.enabled ? 'checked' : ''} ${disabled}/><span>${String(index + 1).padStart(2, '0')}</span></label><input data-tile="name" value="${esc(t.name)}" aria-label="Expression name" ${disabled}/><button data-tile-command="lock" title="${t.locked ? 'Unlock portrait' : 'Lock portrait'}" ${disabled}>${t.locked ? '●' : '○'}</button></div><div class="expression-card-image" style="aspect-ratio:${this.project.width}/${this.project.height}">${t.image ? `<img src="${esc(t.image)}" alt="${esc(t.name)}"/>` : `<div><b>${esc(t.name.slice(0, 1))}</b><span>${esc(t.name)}</span><small>Ready for direction</small></div>`}${this.currentId === t.id ? '<span class="expression-render-overlay">Rendering…</span>' : ''}</div><div class="expression-card-body"><textarea data-tile="prompt" rows="2" aria-label="Expression direction" ${disabled}>${esc(t.prompt)}</textarea>${failure ? `<p class="expression-error">${esc(failure.message)}</p>${failure.setup ? '<a class="expression-error-setup" href="https://github.com/cubiq/ComfyUI_IPAdapter_plus#installation" target="_blank" rel="noopener noreferrer">Get the matching CLIP Vision encoder ↗</a><details class="expression-error-details"><summary>Technical details</summary><p>' + esc(t.error) + '</p></details>' : ''}` : ''}${t.variants?.length ? `<div class="expression-variants" aria-label="Previous takes">${t.variants.map((v, i) => `<button data-take="${i}" title="Restore take with seed ${v.seed}" ${disabled}><img src="${esc(v.image)}" alt="Previous ${esc(t.name)}"/></button>`).join('')}</div>` : ''}<small>${t.seed >= 0 ? `Seed ${t.seed}` : 'Shared seed'}${t.locked ? ' · locked' : ''}</small><details data-pipeline-part="motion" ${['liveportrait', 'hybrid'].includes(this.project.engine) ? '' : 'hidden'}><summary>Face controls</summary><div class="expression-motion">${Object.entries(t.motion).map(([key, value]) => `<label><span>${esc(key.replaceAll('_', ' '))}</span><input data-motion="${key}" type="number" min="${motionLimits[key as keyof ExpressionMotion][0]}" max="${motionLimits[key as keyof ExpressionMotion][1]}" step="${key === 'smile' ? .05 : .5}" value="${value}" ${disabled}/></label>`).join('')}</div></details><div class="expression-card-actions"><button data-tile-command="render" class="primary-button" ${disabled || t.locked ? 'disabled' : ''}>${this.project.engine === 'liveportrait' ? 'Apply face' : t.image ? 'Reroll' : 'Render'}</button><button data-tile-command="reference" class="ghost-button" title="Use this portrait as the character reference" ${t.image && !this.running ? '' : 'disabled'}>Ref</button><button data-tile-command="download" class="ghost-button" ${t.image ? '' : 'disabled'}>PNG</button><button data-tile-command="up" title="Move earlier" ${disabled}>↑</button><button data-tile-command="down" title="Move later" ${disabled}>↓</button><button data-tile-command="remove" title="Remove card" ${disabled}>×</button></div></div></article>`;
+    private availableStages(): PipelineStage[] {
+        return this.bridge.processing ? ['generate', 'refine', 'background'] : ['generate'];
+    }
+    private nextStages(tile: ExpressionTile, project = this.project): PipelineStage[] {
+        return pendingStages(tile.image, tile.stage, project.refine, project.backgroundRemoval)
+            .filter(stage => stage === 'generate' || this.bridge.processing);
+    }
+    private pipelineTabs(): string {
+        return `<div class="expression-pipeline" role="tablist" aria-label="Expression pipeline">
+            ${this.availableStages().map(stage => {
+                const selected = stage === this.screen;
+                const active = stage === this.currentStage;
+                return `<button type="button" id="expression-tab-${stage}" role="tab" aria-label="${stageLabels[stage]}" aria-controls="expression-stage-panel"
+                    aria-selected="${selected}" tabindex="${selected ? 0 : -1}" data-stage-tab="${stage}" data-pipeline-stage="${stage}" ${active ? 'aria-current="step"' : ''}>
+                    <span><b>${stageLabels[stage]}</b><small></small></span>
+                    ${active ? `<progress aria-label="${stageLabels[stage]} progress" max="1" ${this.progress ? `value="${this.progress}"` : ''}></progress>` : ''}
+                </button>`;
+            }).join('')}
+        </div>`;
+    }
+    private syncStageStatus(): void {
+        const root = this.host;
+        if (!root) return;
+        const tiles = this.project.tiles;
+        const selected = tiles.filter(tile => tile.enabled && !tile.locked);
+        const ready = (stage: PipelineStage) => selected.filter(tile => this.nextStages(tile)[0] === stage).length;
+        const done = (stage: PipelineStage) => tiles.filter(tile => imageForStage(tile, stage)).length;
+        for (const stage of this.availableStages()) {
+            const recipe = stage === 'refine' ? this.project.refine : this.project.backgroundRemoval;
+            const waiting = ready(stage);
+            const complete = done(stage);
+            const failed = tiles.filter(tile => tile.error && tile.errorStage === stage).length;
+            const badge = root.querySelector(`[data-stage-tab="${stage}"] small`);
+            if (badge) badge.textContent = stage === this.currentStage ? 'Running' : stage !== 'generate' && recipe.mode === 'off'
+                ? 'Skipped' : failed ? `${failed} failed` : waiting ? `${waiting} ready` : complete ? `${complete} shown` : 'Waiting';
+        }
+        const count = root.querySelector('[data-stage-count]');
+        if (count) count.textContent = `${done(this.screen)} results · ${ready(this.screen)} ready · ${tiles.filter(tile => tile.locked).length} locked`;
+        const run = root.querySelector<HTMLButtonElement>('[data-command="run-stage"]');
+        if (run) run.disabled = this.running || !ready(this.screen);
+        const pipeline = root.querySelector<HTMLButtonElement>('[data-command="run-pipeline"]');
+        if (pipeline) pipeline.disabled = !selected.some(tile => this.nextStages(tile).length);
+        if (this.screen !== 'generate') {
+            root.querySelectorAll<HTMLElement>('[data-stage-state]').forEach(element => {
+                const tile = tiles.find(item => item.id === element.dataset.stageState);
+                if (tile) element.textContent = this.processingStatus(tile, this.screen as ProcessingStage);
+            });
+        }
+    }
+    private addExpressionsMenu(disabled: string): string {
+        return actionMenu('expression-add-menu', 'Add expressions', 'Build the sheet', `<div class="studio-menu-section"><label class="field"><span>Preset set</span><select data-preset-count ${disabled}><option value="6">Essential 6</option><option value="12" selected>Classic 12</option><option value="24">Full range 24</option></select></label><button type="button" data-command="load-presets" ${disabled}>Add preset expressions<small>Add the chosen preset set to this sheet.</small></button></div><div class="studio-menu-section"><button type="button" data-command="add-card" ${disabled}>Add custom expression<small>Start with a blank direction.</small></button></div>`);
+    }
+    private processingStatus(tile: ExpressionTile, stage: ProcessingStage): string {
+        if (imageForStage(tile, stage)) return 'Result';
+        const next = this.nextStages(tile)[0];
+        if (next === stage) return 'Source ready';
+        if (!tile.image) return 'Awaiting generation';
+        const recipe = stage === 'refine' ? this.project.refine : this.project.backgroundRemoval;
+        if (recipe.mode === 'off') return 'Stage skipped';
+        if (tile.stage === 'background') return 'Earlier result unavailable';
+        return 'Awaiting refinement';
+    }
+    private cardError(tile: ExpressionTile): string {
+        if (!tile.error || (tile.errorStage ?? 'generate') !== this.screen) return '';
+        const failure = expressionFailure(tile.error);
+        return `<p class="expression-error">${esc(failure.message)}</p>${failure.setup ? `<a class="expression-error-setup" href="https://github.com/cubiq/ComfyUI_IPAdapter_plus#installation" target="_blank" rel="noopener noreferrer">Get the matching CLIP Vision encoder ↗</a><details class="expression-error-details expression-disclosure"><summary>Technical details</summary><p>${esc(tile.error)}</p></details>` : ''}`;
+    }
+    private card(tile: ExpressionTile, index: number, disabled: string): string {
+        const stage = this.screen;
+        const generate = stage === 'generate';
+        const result = imageForStage(tile, stage);
+        const source = stage === 'refine' ? imageForStage(tile, 'generate')
+            : stage === 'background' ? imageForStage(tile, 'refine') ?? imageForStage(tile, 'generate') : undefined;
+        const preview = result ?? source;
+        const working = this.currentId === tile.id && this.currentStage === stage;
+        const actions = generate ? `
+            <textarea data-tile="prompt" rows="2" aria-label="Expression direction" ${disabled}>${esc(tile.prompt)}</textarea>
+            ${this.cardError(tile)}
+            ${tile.variants?.length ? `<div class="expression-variants" aria-label="Previous takes">${tile.variants.map((take, i) => `<button data-take="${i}" title="Restore take with seed ${take.seed}" ${disabled}><img src="${esc(take.image)}" alt="Previous ${esc(tile.name)}"/></button>`).join('')}</div>` : ''}
+            <small>${result && result.seed >= 0 ? `Seed ${result.seed}` : 'Shared seed'}</small>
+            <details class="expression-disclosure" data-pipeline-part="motion" ${['liveportrait', 'hybrid'].includes(this.project.engine) ? '' : 'hidden'}><summary>Face controls</summary><div class="expression-motion">${Object.entries(tile.motion).map(([key, value]) => `<label><span>${esc(key.replaceAll('_', ' '))}</span><input data-motion="${key}" type="number" min="${motionLimits[key as keyof ExpressionMotion][0]}" max="${motionLimits[key as keyof ExpressionMotion][1]}" step="${key === 'smile' ? .05 : .5}" value="${value}" ${disabled}/></label>`).join('')}</div></details>
+            <div class="expression-card-actions">
+                <button data-tile-command="render" class="primary-button" ${disabled || tile.locked ? 'disabled' : ''}>${this.project.engine === 'liveportrait' ? 'Apply face' : tile.image ? 'Reroll' : 'Render'}</button>
+                <button data-tile-command="reference" class="ghost-button" title="Use this portrait as the character reference" ${result && !this.running ? '' : 'disabled'}>Ref</button>
+                <button data-tile-command="download" class="ghost-button" ${result ? '' : 'disabled'}>PNG</button>
+                <button data-tile-command="up" title="Move earlier" ${disabled}>↑</button><button data-tile-command="down" title="Move later" ${disabled}>↓</button><button data-tile-command="remove" title="Remove card" ${disabled}>×</button>
+            </div>` : `
+            ${this.cardError(tile)}
+            <div class="expression-processing-meta"><small data-stage-state="${tile.id}"></small>${result ? '<button data-tile-command="download" class="ghost-button">PNG</button>' : ''}</div>`;
+        const lastStage = tile.stage ?? 'generate';
+        const latest = !preview && tile.image && lastStage !== stage && this.availableStages().includes(lastStage);
+        const empty = latest ? 'Earlier image unavailable' : generate ? 'Ready for direction' : 'No image yet';
+        return `<article class="expression-card ${tile.locked ? 'is-locked' : ''} ${tile.enabled ? '' : 'is-excluded'} ${working ? 'is-rendering' : ''}" data-card="${tile.id}">
+            <div class="expression-card-head">
+                <label><input type="checkbox" data-tile="enabled" aria-label="Select ${esc(tile.name)}" ${tile.enabled ? 'checked' : ''} ${disabled}/><span>${String(index + 1).padStart(2, '0')}</span></label>
+                ${generate ? `<input data-tile="name" value="${esc(tile.name)}" aria-label="Expression name" ${disabled}/>` : `<b>${esc(tile.name)}</b>`}
+                <button data-tile-command="lock" title="${tile.locked ? 'Unlock portrait' : 'Lock portrait'}" aria-label="${tile.locked ? 'Unlock' : 'Lock'} ${esc(tile.name)}" ${disabled}>${tile.locked ? '●' : '○'}</button>
+            </div>
+            <div class="expression-card-image" ${stage === 'background' && result ? 'data-cutout' : ''} style="aspect-ratio:${this.project.width}/${this.project.height}">
+                ${preview ? `<img src="${esc(preview.image)}" alt="${esc(tile.name)} · ${result ? stageLabels[stage] : 'Source'}"/>`
+                    : `<div><span>${esc(tile.name)}</span><small>${empty}</small></div>`}
+                ${working ? `<span class="expression-render-overlay">${stageLabels[stage]}…</span>` : ''}
+            </div>
+            <div class="expression-card-body">
+                ${latest ? `<button type="button" class="ghost-button" data-open-stage="${lastStage}">View latest result</button>` : ''}
+                ${actions}
+            </div>
+        </article>`;
     }
     private syncPipelineControls(): void {
         const root = this.host;
@@ -119,7 +312,7 @@ export class ExpressionStudio {
         if (select) {
             select.innerHTML = models.map(model => `<option value="${esc(model.name)}" ${model.name === p.model ? 'selected' : ''}>${esc(model.title || model.name)}</option>`).join('') || '<option value="">No compatible checkpoint loaded</option>';
             const label = select.parentElement?.querySelector('span');
-            if (label) label.textContent = adapter ? 'SDXL / SD1.5 checkpoint' : 'Checkpoint';
+            if (label) label.textContent = adapter ? 'SDXL / SD1.5 checkpoint' : p.engine === 'anima' ? 'Anima model' : 'Checkpoint';
         }
         root.querySelectorAll<HTMLElement>('[data-card]').forEach(card => {
             const tile = p.tiles.find(item => item.id === card.dataset.card);
@@ -130,6 +323,29 @@ export class ExpressionStudio {
     }
     private bind(): void {
         const root = this.host!;
+        const switchStage = (stage: PipelineStage) => {
+            if (this.screen !== stage) {
+                this.screen = stage;
+                this.draw();
+            }
+            this.host?.querySelector<HTMLElement>('[data-stage-tab][aria-selected="true"]')?.focus({ preventScroll: true });
+        };
+        root.querySelectorAll<HTMLButtonElement>('[data-stage-tab]').forEach(button => {
+            button.addEventListener('click', () => switchStage(button.dataset.stageTab as PipelineStage));
+            button.addEventListener('keydown', event => {
+                const stages = this.availableStages();
+                const index = stages.indexOf(this.screen);
+                const next = event.key === 'ArrowRight' ? stages[(index + 1) % stages.length]
+                    : event.key === 'ArrowLeft' ? stages[(index + stages.length - 1) % stages.length]
+                    : event.key === 'Home' ? stages[0] : event.key === 'End' ? stages.at(-1) : undefined;
+                if (!next) return;
+                event.preventDefault();
+                switchStage(next);
+            });
+        });
+        root.querySelectorAll<HTMLButtonElement>('[data-open-stage]').forEach(button => {
+            button.addEventListener('click', () => switchStage(button.dataset.openStage as PipelineStage));
+        });
         root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('[data-setting]').forEach(input => input.addEventListener(input instanceof HTMLSelectElement ? 'change' : 'input', () => {
             if (this.running)
                 return;
@@ -140,6 +356,7 @@ export class ExpressionStudio {
             this.project.tiles = previous.tiles;
             this.persist();
             if (key === 'engine') this.syncPipelineControls();
+            if (key === 'engine' || key === 'model' || key.startsWith('anima')) this.syncSetupFeedback();
             if (key === 'columns')
                 this.host?.querySelector<HTMLElement>('.expression-grid')?.style.setProperty('--expression-columns', String(Math.min(this.project.columns, 4)));
             if (key === 'name')
@@ -149,16 +366,22 @@ export class ExpressionStudio {
         root.querySelector<HTMLInputElement>('[data-reference]')?.addEventListener('change', e => void this.loadReference((e.currentTarget as HTMLInputElement).files?.[0]));
         root.querySelector<HTMLInputElement>('[data-project-import]')?.addEventListener('change', e => void this.importProject((e.currentTarget as HTMLInputElement).files?.[0]));
         bindActionMenus(root);
+        const openGuide = this.bridge.openAnimaGuide;
+        if (openGuide) root.querySelector('[data-anima-guide]')?.addEventListener('click', event => {
+            event.preventDefault();
+            void openGuide().catch(error => this.bridge.notify(`Could not open the installation guide: ${String(error)}`, true));
+        });
         root.querySelectorAll<HTMLButtonElement>('[data-command]').forEach(button => button.addEventListener('click', () => void this.command(button.dataset.command!)));
         root.querySelectorAll<HTMLElement>('[data-card]').forEach(card => {
             const tile = this.project.tiles.find(t => t.id === card.dataset.card)!;
             card.querySelectorAll<HTMLButtonElement>('[data-take]').forEach(button => button.addEventListener('click', () => { if (this.running)
                 return; const index = Number(button.dataset.take); const take = tile.variants?.[index]; if (!take)
-                return; tile.variants![index] = { image: tile.image, path: tile.path, seed: tile.seed }; Object.assign(tile, take); this.persist(); this.draw(); }));
+                return; tile.variants![index] = { image: tile.image, path: tile.path, seed: tile.seed, stage: tile.stage }; Object.assign(tile, take); tile.earlierStages = undefined; tile.error = ''; this.persist(); this.draw(); }));
             card.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-tile]').forEach(input => input.addEventListener('change', () => { if (this.running)
                 return; const key = input.dataset.tile!; if (key === 'enabled') {
                 tile.enabled = (input as HTMLInputElement).checked;
                 card.classList.toggle('is-excluded', !tile.enabled);
+                this.syncStageStatus();
             }
             else if (key === 'name')
                 tile.name = input.value.slice(0, 80);
@@ -166,11 +389,12 @@ export class ExpressionStudio {
                 tile.prompt = input.value.slice(0, 3000); this.persist(); }));
             card.querySelectorAll<HTMLInputElement>('[data-motion]').forEach(input => input.addEventListener('change', () => { const key = input.dataset.motion as keyof ExpressionMotion; tile.motion[key] = Number.isFinite(input.valueAsNumber) ? Math.max(motionLimits[key][0], Math.min(motionLimits[key][1], input.valueAsNumber)) : 0; this.persist(); }));
             card.querySelectorAll<HTMLButtonElement>('[data-tile-command]').forEach(button => button.addEventListener('click', () => { const command = button.dataset.tileCommand; if (command === 'download') {
-                void this.saveTile(tile).catch(error => this.bridge.notify(String(error), true));
+                const result = imageForStage(tile, this.screen);
+                if (result) void this.saveTile(tile.name, result).catch(error => this.bridge.notify(String(error), true));
                 return;
             } if (this.running)
                 return; if (command === 'reference') {
-                this.project.reference = tile.image;
+                this.project.reference = imageForStage(tile, 'generate')?.image ?? '';
                 this.project.referenceName = tile.name;
                 this.persist();
                 this.draw();
@@ -178,7 +402,7 @@ export class ExpressionStudio {
             } if (command === 'render') {
                 if (tile.image && this.project.engine !== 'liveportrait')
                     tile.seedOffset++;
-                void this.run([tile]);
+                void this.run([tile], true, 'generate');
                 return;
             } if (command === 'lock')
                 tile.locked = !tile.locked; if (command === 'remove')
@@ -227,22 +451,27 @@ export class ExpressionStudio {
                     throw new Error('Select an expression first.');
                 if (!['ipadapter', 'anima', 'liveportrait'].includes(this.project.engine))
                     throw new Error('Workflow export supports IPAdapter, Anima Ref Adapter or LivePortrait; choose a single-pass method.');
-                const workflow = this.project.engine === 'anima' ? animaWorkflow(this.project, tile, this.schema) : this.project.engine === 'liveportrait' ? livePortraitWorkflow(this.project.reference, tile.motion, this.schema) : ipAdapterWorkflow(this.project, tile, this.schema);
+                const workflow = this.project.engine === 'anima' ? this.animaGraph(this.project, tile) : this.project.engine === 'liveportrait' ? livePortraitWorkflow(this.project.reference, tile.motion, this.schema) : ipAdapterWorkflow(this.project, tile, this.schema);
                 download(new Blob([JSON.stringify(workflow, null, 2)], { type: 'application/json' }), `${slug(this.project.name)}-${slug(tile.name)}-api.json`);
                 return;
             }
-            if (command === 'probe') {
+            if (command === 'probe' || command === 'probe-anima') {
+                if (this.setupBusy) return;
                 await this.probe();
+                if (command === 'probe-anima') {
+                    const report = this.animaSetupReport();
+                    this.bridge.log?.(`Anima setup · ${report.message}`, report.state === 'error');
+                }
                 return;
             }
             if (this.running)
                 return;
-            if (command === 'run-missing') {
-                await this.run(this.project.tiles.filter(t => t.enabled && !t.locked && !t.image));
+            if (command === 'run-stage' || command === 'run-pipeline') {
+                await this.run(this.project.tiles.filter(t => t.enabled && !t.locked), false, command === 'run-stage' ? this.screen : undefined);
                 return;
             }
             if (command === 'run-all') {
-                await this.run(this.project.tiles.filter(t => t.enabled && !t.locked));
+                await this.run(this.project.tiles.filter(t => t.enabled && !t.locked), true);
                 return;
             }
             if (command === 'clear-reference') {
@@ -294,125 +523,216 @@ export class ExpressionStudio {
     } }
     private async importProject(file?: File): Promise<void> { if (!file)
         return; try {
-        if (file.size > 150 * 1024 * 1024)
-            throw new Error('Project exceeds the 150 MB import limit.');
         const imported = normalizeSheet(JSON.parse(await file.text()));
         if (this.running)
             throw new Error('Wait for the sheet queue to finish before opening a project.');
         this.project = imported;
+        this.screen = 'generate';
         this.persist();
         this.draw();
     }
     catch (error) {
         this.bridge.notify(String(error), true);
     } }
-    private async probe(): Promise<void> { this.setupBusy = true; this.draw(); try {
-        this.schema = await this.bridge.probe();
-        const ipa = Boolean(this.schema.IPAdapterUnifiedLoader);
-        const portrait = Boolean(this.schema.ExpressionEditor);
-        this.setup = `Anima Ref Adapter: ${this.schema.AnimaRefAdapter ? 'loaded' : 'not loaded'}. IPAdapter loader: ${ipa ? 'loaded' : 'not loaded'}. ExpressionEditor: ${portrait ? 'loaded' : 'not installed or not loaded'}. Swarm image bridge: ${this.schema.SwarmLoadImageB64 && this.schema.SwarmSaveImageWS ? 'loaded' : 'missing'}. Installed files alone do not mean a node is loaded.`;
+    private animaSetupReport(): { state: string; title: string; message: string } {
+        if (this.setupBusy) return { state: 'checking', title: 'Checking…', message: 'Reading the connected ComfyUI model inventory.' };
+        if (this.setupError) return { state: 'error', title: 'Check failed', message: this.setupError };
+        if (!this.setupChecked) return { state: 'idle', title: 'Unchecked', message: 'Check which model files and nodes ComfyUI can see.' };
+        try {
+            const setup = resolveAnimaSetup(this.project, this.schema);
+            const source = setup.loader === 'CheckpointLoaderSimple' ? 'checkpoint loader' : 'diffusion loader';
+            const components = this.project.animaEmbedded ? 'Checkpoint encoder and VAE selected.' : 'Separate encoder and VAE found.';
+            return { state: 'ready', title: 'Files found', message: `${setup.name} · ${source}. ${components} Adapter node and weights are listed.` };
+        } catch (error) {
+            return { state: 'error', title: 'Needs attention', message: error instanceof Error ? error.message : String(error) };
+        }
     }
-    catch (error) {
-        this.schema = {};
-        this.setup = `Could not inspect backend nodes: ${String(error)}. The Swarm account needs direct Comfy access.`;
+    private syncSetupFeedback(): void {
+        const root = this.host;
+        if (!root) return;
+        const report = root.querySelector<HTMLElement>('[data-anima-report]');
+        if (report) {
+            const result = this.animaSetupReport();
+            report.dataset.state = result.state;
+            report.innerHTML = `<b>${esc(result.title)}</b><p>${esc(result.message)}</p>`;
+        }
+        const button = root.querySelector('[data-command="probe-anima"]');
+        button?.setAttribute('aria-disabled', String(this.setupBusy || this.running));
+        const general = root.querySelector('.expression-setup');
+        if (general) general.textContent = this.setupBusy ? 'Reading ComfyUI nodes…' : this.setup;
+        const note = root.querySelector('[data-anima-sampling-note]');
+        if (note) note.textContent = /turbo/i.test(this.project.model)
+            ? 'Turbo model starting point · CFG 1, 8–12 steps. Reference guidance 1 avoids an extra model pass.'
+            : 'Reference guidance 1 avoids an extra model pass. Higher values give the reference more influence.';
+        const separate = root.querySelector<HTMLElement>('[data-anima-separate]');
+        if (separate) separate.hidden = this.project.animaEmbedded;
+        for (const [, key, node, input] of animaAssets) {
+            const select = root.querySelector<HTMLSelectElement>(`[data-setting="${key}"]`);
+            if (!select) continue;
+            const values = [...new Set([this.project[key], ...nodeChoices(this.schema, node, input)])].filter(Boolean);
+            if (values.length === select.options.length && values.every((value, i) => select.options[i]?.value === value)) continue;
+            select.replaceChildren(...values.map(value => new Option(value, value, false, value === this.project[key])));
+        }
     }
-    finally {
-        this.setupBusy = false;
-        this.draw();
-    } }
-    private async run(tiles: ExpressionTile[]): Promise<void> {
-        if (this.running)
-            return;
-        if (!tiles.length) {
-            this.bridge.notify('No unlocked expressions are selected.');
+    private probe(): Promise<void> {
+        if (this.probeRequest) return this.probeRequest;
+        this.setupBusy = true;
+        this.syncSetupFeedback();
+        this.probeRequest = Promise.resolve().then(() => this.bridge.probe()).then(schema => {
+            this.schema = schema;
+            this.setupChecked = true;
+            this.setupError = '';
+            this.setup = [
+                ['Anima Ref Adapter', Boolean(schema.AnimaRefAdapter)],
+                ['IPAdapter loader', Boolean(schema.IPAdapterUnifiedLoader)],
+                ['ExpressionEditor', Boolean(schema.ExpressionEditor)],
+                ['Swarm image bridge', Boolean(schema.SwarmLoadImageB64 && schema.SwarmSaveImageWS)],
+            ].map(([label, present]) => `${label}: ${present ? 'loaded' : 'missing'}`).join(' · ');
+        }).catch(error => {
+            this.schema = {};
+            this.setupError = `Could not read the connected ComfyUI inventory. ${error instanceof Error ? error.message : String(error)}`;
+            this.setup = this.setupError;
+        }).finally(() => {
+            this.setupBusy = false;
+            this.probeRequest = null;
+            this.syncSetupFeedback();
+        });
+        return this.probeRequest;
+    }
+    private animaGraph(project: SheetProject, tile: ExpressionTile, loras?: ExpressionLora[]) {
+        if (this.setupError) throw new Error(this.setupError);
+        return animaWorkflow(project, tile, this.schema, loras, this.bridge.models().find(model => model.name === project.model));
+    }
+    private async generateTile(snapshot: SheetProject, tile: ExpressionTile, loras: ExpressionLora[], transient: boolean) {
+        const request = expressionRequest(snapshot, tile, this.bridge.params());
+        if (snapshot.engine === 'anima')
+            request.comfyworkflowraw = JSON.stringify(this.animaGraph(snapshot, tile, loras));
+        if (snapshot.engine === 'liveportrait')
+            request.comfyworkflowraw = JSON.stringify(livePortraitWorkflow(snapshot.reference, tile.motion, this.schema));
+        if (transient || (snapshot.autoDeleteDrafts && snapshot.engine === 'hybrid')) request.donotsave = true;
+        const output = await this.bridge.generate(request, loras, fraction => this.updateProgress(snapshot.engine === 'hybrid' ? fraction / 2 : fraction));
+        if (snapshot.engine !== 'hybrid') return output;
+        const facial: SwarmGenerationRequest = {
+            ...request, promptimages: undefined, useipadapter: undefined, steps: 1, cfgscale: 1, seed: output.seed,
+            donotsave: transient || undefined,
+            comfyworkflowraw: JSON.stringify(livePortraitWorkflow(output.image, tile.motion, this.schema)),
+        };
+        return this.bridge.generate(facial, [], fraction => this.updateProgress(.5 + fraction / 2));
+    }
+    private updateProgress(value: number): void {
+        this.progress = value;
+        const meter = this.host?.querySelector<HTMLProgressElement>('.expression-pipeline progress');
+        if (meter) meter.value = value;
+    }
+    private async run(tiles: ExpressionTile[], regenerate = false, stageOnly?: PipelineStage): Promise<void> {
+        if (this.running) return;
+        const snapshot = { ...this.project };
+        const queue = tiles.map(tile => {
+            const stages = this.nextStages(regenerate ? { ...tile, image: '' } : tile, snapshot);
+            return { tile, stages: stageOnly ? stages.slice(0, 1).filter(stage => stage === stageOnly) : stages };
+        }).filter(item => item.stages.length);
+        if (!queue.length) {
+            this.bridge.notify('No selected, unlocked portraits have pending stages.');
             return;
         }
-        if (!this.bridge.connected()) {
-            this.bridge.notify('Connect Studio to Swarm first.', true);
+        if (!this.bridge.connected() || this.bridge.busy()) {
+            this.bridge.notify(!this.bridge.connected() ? 'Connect Studio to Swarm first.' : 'Wait for the current Studio generation to finish.', true);
             return;
         }
-        if (this.bridge.busy()) {
-            this.bridge.notify('Wait for the current Studio generation to finish.', true);
-            return;
-        }
-        const snapshot = structuredClone(this.project);
         this.running = true;
         this.stopped = false;
+        this.status = 'Checking pipeline settings…';
+        this.draw();
         let completed = 0;
         let failed = 0;
         try {
-            const loras = snapshot.useLoras && snapshot.engine !== 'liveportrait' ? this.bridge.captureLoras(snapshot.model) : [];
-            if (snapshot.engine === 'anima') {
-                await this.probe();
-                animaWorkflow(snapshot, tiles[0]!, this.schema, loras); // Validate the complete graph before submitting any card.
+            const required = new Set(queue.flatMap(item => item.stages));
+            const workflows = new Map<ProcessingStage, Awaited<ReturnType<typeof resolveProcessing>>>();
+            for (const stage of ['refine', 'background'] as const) {
+                if (!required.has(stage) || this.stopped) continue;
+                if (!this.bridge.processing) throw new Error('Image processing is unavailable.');
+                const recipe = stage === 'refine' ? snapshot.refine : snapshot.backgroundRemoval;
+                try {
+                    workflows.set(stage, await resolveProcessing(this.bridge.processing, stage, recipe));
+                } catch (error) {
+                    throw new Error(`${processingLabels[stage]} · ${error instanceof Error ? error.message : String(error)}`);
+                }
             }
-            if (['ipadapter', 'hybrid'].includes(snapshot.engine)) {
-                await this.probe();
-                if (Object.keys(this.schema).length && !this.schema.IPAdapterUnifiedLoader)
+            const loras = required.has('generate') && snapshot.useLoras && snapshot.engine !== 'liveportrait'
+                ? this.bridge.captureLoras(snapshot.model) : [];
+            if (required.has('generate') && !this.stopped) {
+                if (['anima', 'liveportrait', 'ipadapter', 'hybrid'].includes(snapshot.engine)) await this.probe();
+                if (snapshot.engine === 'anima') {
+                    const first = queue.find(item => item.stages[0] === 'generate')!;
+                    this.animaGraph(snapshot, first.tile, loras);
+                }
+                if (['ipadapter', 'hybrid'].includes(snapshot.engine) && Object.keys(this.schema).length && !this.schema.IPAdapterUnifiedLoader)
                     throw new Error('IPAdapter Unified Loader is not loaded in this backend. Check setup.');
-            }
-            if (['liveportrait', 'hybrid'].includes(snapshot.engine)) {
-                if (snapshot.engine === 'liveportrait')
-                    await this.probe();
-                if (!this.schema.ExpressionEditor)
+                if (['liveportrait', 'hybrid'].includes(snapshot.engine) && !this.schema.ExpressionEditor)
                     throw new Error('ExpressionEditor is not loaded. Open backend setup for installation instructions.');
             }
-            for (const tile of tiles) {
-                if (this.stopped)
-                    break;
+            for (const [index, { tile, stages }] of queue.entries()) {
+                if (this.stopped) break;
                 this.currentId = tile.id;
-                this.progress = 0;
                 tile.error = '';
-                this.status = `${completed + failed + 1} / ${tiles.length} · ${tile.name}`;
-                this.draw();
+                tile.errorStage = undefined;
                 try {
-                    const request = expressionRequest(snapshot, tile, this.bridge.params());
-                    if (snapshot.engine === 'anima')
-                        request.comfyworkflowraw = JSON.stringify(animaWorkflow(snapshot, tile, this.schema, loras));
-                    if (snapshot.engine === 'liveportrait')
-                        request.comfyworkflowraw = JSON.stringify(livePortraitWorkflow(snapshot.reference, tile.motion, this.schema));
-                    let output = await this.bridge.generate(request, loras, n => { this.progress = n; const label = this.host?.querySelector('.expression-run-status small'); if (label)
-                        label.textContent = `${Math.round(n * 100)}% of current portrait`; });
-                    if (snapshot.engine === 'hybrid') {
-                        this.status = `Facial refinement · ${tile.name}`;
+                    for (const stage of stages) {
+                        const transient = snapshot.autoDeleteDrafts
+                            && pendingStages('completed', stage, snapshot.refine, snapshot.backgroundRemoval)
+                                .some(next => this.availableStages().includes(next));
+                        this.currentStage = stage;
+                        this.status = `${index + 1} / ${queue.length} · ${tile.name} · ${stageLabels[stage]}`;
+                        this.progress = 0;
                         this.draw();
-                        const facial: SwarmGenerationRequest = { model: snapshot.model, prompt: request.prompt, negativeprompt: request.negativeprompt, width: snapshot.width, height: snapshot.height, steps: 1, cfgscale: 1, seed: output.seed, images: 1, imageformat: 'PNG', comfyworkflowraw: JSON.stringify(livePortraitWorkflow(output.image, tile.motion, this.schema)) };
-                        output = await this.bridge.generate(facial, [], n => { this.progress = n; });
+                        let output;
+                        if (stage === 'generate') {
+                            output = await this.generateTile(snapshot, tile, loras, transient);
+                            if (tile.image) {
+                                tile.variants = [...(tile.variants ?? []), { image: tile.image, path: tile.path, seed: tile.seed, stage: tile.stage }].slice(-8);
+                            }
+                        } else {
+                            const source = await readProcessingImage(tile.image);
+                            const request = processingRequest(source, workflows.get(stage)!(source), {
+                                model: snapshot.model, seed: tile.seed, prompt: tile.prompt, negativeprompt: snapshot.negative,
+                            });
+                            if (transient) request.donotsave = true;
+                            output = await this.bridge.generate(request, [], value => this.updateProgress(value), stage);
+                        }
+                        recordStageImage(tile, stage, output);
+                        this.persist();
                     }
-                    if (tile.image) {
-                        tile.variants = [...(tile.variants ?? []), { image: tile.image, path: tile.path, seed: tile.seed }].slice(-8);
+                    if (snapshot.autoDeleteDrafts && !this.nextStages(tile, snapshot).length) {
+                        tile.variants = [];
+                        tile.earlierStages = undefined;
                     }
-                    tile.image = output.image;
-                    tile.path = output.path;
-                    tile.seed = output.seed;
                     completed++;
-                }
-                catch (error) {
-                    tile.error = error instanceof Error ? error.message : String(error);
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    const failure = expressionFailure(message);
+                    const stage = this.currentStage;
+                    tile.errorStage = stage ?? undefined;
+                    tile.error = stage && stage !== 'generate' ? `${processingLabels[stage]} · ${message}` : message;
                     failed++;
-                    const failure = expressionFailure(tile.error);
-                    this.bridge.notify(`${tile.name}: ${failure.message}`, true);
-                    if (failure.stop) {
-                        this.stopped = true;
-                    }
+                    this.bridge.notify(`${tile.name}: ${stage && stage !== 'generate' ? processingLabels[stage] + ' · ' : ''}${failure.message}`, true);
+                    if (failure.stop) this.stopped = true;
                 }
                 this.persist();
-                this.draw();
             }
-            this.status = `${this.stopped ? 'Stopped' : 'Finished'} · ${completed} rendered${failed ? ` · ${failed} failed` : ''}.`;
-        }
-        catch (error) {
+            this.status = `${this.stopped ? 'Stopped' : 'Finished'} · ${completed} complete${failed ? ` · ${failed} failed` : ''}.`;
+        } catch (error) {
             this.status = error instanceof Error ? error.message : String(error);
             this.bridge.notify(this.status, true);
-        }
-        finally {
-            this.running = false;
+        } finally {
             this.currentId = '';
-            this.persist();
+            this.currentStage = null;
+            this.persist(true);
+            await this.saving;
+            this.running = false;
             this.draw();
         }
     }
-    private async saveTile(tile: ExpressionTile): Promise<void> { const image = await imageFrom(tile.image); const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height; canvas.getContext('2d')!.drawImage(image, 0, 0); await this.bridge.save(canvas.toDataURL('image/png'), `${slug(tile.name)}.png`); }
+    private async saveTile(name: string, result: ExpressionImage): Promise<void> { const image = await imageFrom(result.image); const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height; canvas.getContext('2d')!.drawImage(image, 0, 0); await this.bridge.save(canvas.toDataURL('image/png'), `${slug(name)}.png`); }
     private async sheetPng(): Promise<string> { const p = this.project; const tiles = p.tiles.filter(t => t.enabled); if (!tiles.length || tiles.some(t => !t.image))
         throw new Error('Render every selected expression before exporting, or deselect unfinished cards.'); const labelHeight = p.labels ? 48 : 0; const titleHeight = 80; const rows = Math.ceil(tiles.length / p.columns); const canvas = document.createElement('canvas'); canvas.width = p.columns * p.width + (p.columns + 1) * p.gutter; canvas.height = titleHeight + rows * (p.height + labelHeight) + (rows + 1) * p.gutter; if (canvas.width * canvas.height > 70000000)
         throw new Error('Sheet is too large. Reduce tile size or export the portrait pack.'); const ctx = canvas.getContext('2d')!; ctx.fillStyle = p.background; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.fillStyle = '#24212b'; ctx.font = '600 28px system-ui'; ctx.fillText(p.name.slice(0, 90), p.gutter, 46); ctx.font = '14px system-ui'; ctx.fillText(`${tiles.length} expressions · ${p.style} · ${p.engine}`, p.gutter, 68); for (const [i, tile] of tiles.entries()) {

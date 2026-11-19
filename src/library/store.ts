@@ -120,7 +120,7 @@ function cloneDefaults(): PersistedStudioState {
 }
 
 function validView(value: unknown): StudioView {
-  return ["create", "expressions", "library", "identities", "models", "civitai", "logs", "settings"].includes(String(value))
+  return ["create", "expressions", "editor", "library", "identities", "models", "civitai", "logs", "settings"].includes(String(value))
     ? value as StudioView
     : "create";
 }
@@ -423,6 +423,7 @@ export class StudioStore {
       identity.folderId === id ? { ...identity, folderId: UNFILED_ID } : identity,
     );
     this.state.folders = this.state.folders.filter((folder) => folder.id !== id);
+    if (this.state.ui.libraryFolder === id) this.state.ui.libraryFolder = "all";
     this.save();
   }
 

@@ -1,4 +1,4 @@
-export type StudioView = "create" | "expressions" | "library" | "identities" | "models" | "civitai" | "logs" | "settings";
+export type StudioView = "create" | "expressions" | "editor" | "library" | "identities" | "models" | "civitai" | "logs" | "settings";
 
 export interface ConnectionSettings {
   mode: "local" | "remote";
@@ -143,6 +143,7 @@ export interface OutputRecord {
   starred: boolean;
   createdAt: number;
   metadata: string;
+  processingStage?: "refine" | "background";
   request: Record<string, unknown>;
   loras: LoraStackItem[];
   presets: string[];

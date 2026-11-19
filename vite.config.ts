@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import { llmRelayPlugin } from "./scripts/llm-relay.mjs";
+import { createStudioSourceUpdater, handleStudioSourceRequest } from "./scripts/studio-source-updater.mjs";
 import { VitePWA } from "vite-plugin-pwa";
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -90,6 +91,7 @@ export default defineConfig({
     {
       name: "studio-host-control-bridge",
       configureServer(server) {
+        const sourceUpdater = createStudioSourceUpdater({ root: configRoot });
         server.middlewares.use(async (req, res, next) => {
           if (!req.url?.startsWith("/__studio/host-control")) return next();
           res.setHeader("cache-control", "no-store");
@@ -109,6 +111,15 @@ export default defineConfig({
           }
 
           try {
+            if (requestUrl.pathname.startsWith("/__studio/host-control/studio-source/")) {
+              if (req.method === "POST" && !sameOriginRequest(req)) {
+                res.statusCode = 403;
+                res.end(JSON.stringify({ error: "Studio source actions require a same-origin Studio request." }));
+                return;
+              }
+              await handleStudioSourceRequest(sourceUpdater, requestUrl.pathname, req, res);
+              return;
+            }
             if (requestUrl.pathname === "/__studio/host-control/status" && req.method === "GET") {
               res.end(JSON.stringify(await invokeHostControl(["status"])));
               return;

@@ -26,11 +26,17 @@ For separate installs without StabilityMatrix, see [standalone startup](docs/STA
 
 ## Studio updates
 
-Desktop Studio can update its own source checkout after the repository has been cloned once. A bounded startup check fetches the checkout's `origin` and shows a small **Update available** card only when the remote default branch is ahead. **Update & restart** refuses local edits, untracked files, or divergent history, fast-forwards with `git merge --ff-only`, then restarts through `start.ps1`; it never runs `git reset --hard` or `git clean`.
+Desktop Studio and the mobile remote can update the host's source checkout after the repository has been cloned once. A bounded startup check fetches the checkout's `origin` and shows a small **Update available** card only when the remote default branch is ahead. **Update & restart** refuses local edits, untracked files, divergent history, or a checkout on a different branch, fast-forwards with `git merge --ff-only`, then restarts through `start.ps1`; it never runs `git reset --hard` or `git clean`.
 
-The same status and a manual **Check for updates** button live under **Settings → Backends**. If Studio owns the running Swarm process, it stops that process tree before the update so the old log pipes are not orphaned, then normal startup reconnects or relaunches it. ZIP-only copies without a `.git` checkout simply report that source updating is unavailable rather than attempting to overwrite themselves.
+The **Studio Source** card and manual **Check for updates** button live under **Settings → Backends**, including on the phone. They update the Windows computer serving that Studio page. Launch the host with `start.ps1` (desktop) or `start.ps1 -WebOnly` (browser/PWA); restart the runner once after first installing this updater so it publishes its launch mode. Static hosting, ZIP-only copies, and a manually started Vite server cannot perform the managed restart.
+
+An independent update helper verifies the host launcher and its child processes before closing anything. It stops the old Studio window and web server, lets the old runner exit, then starts one replacement in the same desktop/browser mode. Studio-owned child backends close with that process tree, and normal startup reconnects or relaunches them. Current generation/review work in this client blocks updating, and active connected Studio sessions report their busy state to the host too.
+
+All remote clients briefly disconnect during an update. Keep the initiating phone page open: it waits for the replacement host at the requested commit, renews its host session, and reloads automatically. A failed operation reports its error when the host is reachable; if startup takes longer than six minutes, the page directs you to the host log and a manual reload.
 
 If a future release changes JavaScript dependencies, the detached updater asks the restarted runner to refresh them. Update diagnostics are written to `.swarm-studio-update.log`, which is intentionally ignored by Git.
+
+Older launchers could rewrite `package-lock.json` during dependency installation and block the next one-click update. If `git status --short` shows only an unstaged change to `package-lock.json` and you have reviewed it with `git diff -- package-lock.json`, discard that generated change with `git restore --worktree -- package-lock.json`, then check for updates again.
 
 ## Current workflow
 
@@ -87,7 +93,7 @@ Studio canonicalizes CivitAI model/API navigation through `https://civitai.red`.
 ## Development
 
 ```bash
-npm install
+npm ci
 npm run check
 npm run preflight
 npm run build
@@ -104,6 +110,6 @@ npm run tauri:build
 
 ## Repository hygiene
 
-Generated builds, dependency folders, runtime logs, local recovery backups, editor state, and Tauri target output are ignored by Git. Source lockfiles are intentionally **not** ignored: after the first normal `npm install`, commit `package-lock.json`; after Cargo/Tauri resolves the Rust application, commit `src-tauri/Cargo.lock` as well. Those files make a known-good desktop build substantially easier to reproduce.
+Generated builds, dependency folders, runtime logs, local recovery backups, editor state, and Tauri target output are ignored by Git. Git tracks `package-lock.json` and `src-tauri/Cargo.lock` for reproducible builds. The launcher and the development setup above use `npm ci` to install from the committed lockfile. When intentionally changing JavaScript dependencies, update `package-lock.json` with `npm install` and commit it alongside `package.json`.
 
 The repository enforces LF line endings for source files (including `start.ps1`) through `.gitattributes`, so Windows checkouts do not silently rewrite the editable tree to CRLF.

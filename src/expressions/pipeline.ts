@@ -1,4 +1,6 @@
 import type { SwarmGenerationRequest, SwarmModel, SwarmParamDefinition } from '../swarm/types';
+import { createId } from '../id.ts';
+import { normalizeRecipe, type PipelineStage, type ProcessingRecipe } from './processing.ts';
 export type SheetEngine = 'ipadapter' | 'anima' | 'liveportrait' | 'hybrid' | 'img2img' | 'text';
 export type SheetStyle = 'semireal' | 'realistic' | 'illustrated';
 export interface ExpressionMotion {
@@ -12,7 +14,13 @@ export interface ExpressionMotion {
     rotate_yaw: number;
     rotate_pitch: number;
 }
-export interface ExpressionTile {
+export interface ExpressionImage {
+    image: string;
+    path: string;
+    seed: number;
+}
+export interface ExpressionTile extends ExpressionImage {
+    stage?: PipelineStage;
     id: string;
     name: string;
     prompt: string;
@@ -20,18 +28,14 @@ export interface ExpressionTile {
     locked: boolean;
     seedOffset: number;
     motion: ExpressionMotion;
-    image: string;
-    path: string;
-    seed: number;
     error: string;
-    variants?: Array<{
-        image: string;
-        path: string;
-        seed: number;
-    }>;
+    errorStage?: PipelineStage;
+    earlierStages?: Partial<Record<PipelineStage, ExpressionImage>>;
+    variants?: Array<ExpressionImage & { stage?: PipelineStage }>;
 }
 export interface SheetProject {
-    version: 1;
+    version: 2;
+    autoDeleteDrafts: boolean;
     name: string;
     style: SheetStyle;
     engine: SheetEngine;
@@ -48,6 +52,7 @@ export interface SheetProject {
     sampler: string;
     scheduler: string;
     adapter: string;
+    animaEmbedded: boolean;
     animaClip: string;
     animaVae: string;
     animaAdapter: string;
@@ -64,6 +69,8 @@ export interface SheetProject {
     labels: boolean;
     background: string;
     tiles: ExpressionTile[];
+    refine: ProcessingRecipe;
+    backgroundRemoval: ProcessingRecipe;
 }
 export const emptyMotion = (): ExpressionMotion => ({ smile: 0, blink: 0, eyebrow: 0, wink: 0, aaa: 0, eee: 0, woo: 0, rotate_yaw: 0, rotate_pitch: 0 });
 export const motionLimits: Record<keyof ExpressionMotion, [
@@ -88,8 +95,8 @@ const expressions: Array<[
     ['Pain', 'wincing in pain, eyes squeezed shut', { blink: -16, aaa: 20, eyebrow: -8 }], ['Bored', 'bored expression, half lidded eyes, unimpressed', { blink: -6, smile: -.1 }],
     ['Excited', 'excited expression, eager smile, wide eyes', { smile: 1, eyebrow: 8, aaa: 15 }], ['Tender', 'tender affectionate expression, gentle eyes, small smile', { smile: .4 }],
 ];
-export function expressionTiles(count = 12): ExpressionTile[] { return (count === 6 ? [0, 1, 4, 6, 8, 10].map(index => expressions[index]!) : expressions.slice(0, count)).map(([name, prompt, motion]) => ({ id: crypto.randomUUID(), name, prompt, enabled: true, locked: false, seedOffset: 0, motion: { ...emptyMotion(), ...motion }, image: '', path: '', seed: -1, error: '' })); }
-export function defaultSheet(): SheetProject { return { version: 1, name: 'Character expressions', style: 'semireal', engine: 'ipadapter', model: '', subject: 'one character, head and shoulders portrait, facing camera, consistent hairstyle and outfit, soft studio lighting, plain background', negative: 'different person, multiple people, duplicate face, text, watermark, cropped head, deformed face, blurry', reference: '', referenceName: '', width: 768, height: 768, steps: 24, cfg: 5.5, seed: 123456, sampler: 'euler', scheduler: 'normal', adapter: 'PLUS (high strength)', animaClip: 'qwen_3_06b_base.safetensors', animaVae: 'qwen_image_vae.safetensors', animaAdapter: 'anima_ref_adapter_v2_r64.safetensors', animaGuidance: 4.5, animaStrength: 1, animaEnd: 1, weight: .65, start: 0, end: .8, denoise: .55, useLoras: false, columns: 4, gutter: 24, labels: true, background: '#f4f0eb', tiles: expressionTiles() }; }
+export function expressionTiles(count = 12): ExpressionTile[] { return (count === 6 ? [0, 1, 4, 6, 8, 10].map(index => expressions[index]!) : expressions.slice(0, count)).map(([name, prompt, motion]) => ({ id: createId(), name, prompt, enabled: true, locked: false, seedOffset: 0, motion: { ...emptyMotion(), ...motion }, image: '', path: '', seed: -1, error: '' })); }
+export function defaultSheet(): SheetProject { return { version: 2, autoDeleteDrafts: false, name: 'Character expressions', style: 'semireal', engine: 'ipadapter', model: '', subject: 'one character, head and shoulders portrait, facing camera, consistent hairstyle and outfit, soft studio lighting, plain background', negative: 'different person, multiple people, duplicate face, text, watermark, cropped head, deformed face, blurry', reference: '', referenceName: '', width: 768, height: 768, steps: 24, cfg: 5.5, seed: 123456, sampler: 'euler', scheduler: 'normal', adapter: 'PLUS (high strength)', animaEmbedded: false, animaClip: 'qwen_3_06b_base.safetensors', animaVae: 'qwen_image_vae.safetensors', animaAdapter: 'anima_ref_adapter_v2_r64.safetensors', animaGuidance: 4.5, animaStrength: 1, animaEnd: 1, weight: .65, start: 0, end: .8, denoise: .55, useLoras: false, columns: 4, gutter: 24, labels: true, background: '#f4f0eb', tiles: expressionTiles(), refine: normalizeRecipe({ mode: 'builtin' }), backgroundRemoval: normalizeRecipe({ mode: 'builtin' }) }; }
 export function isAdapterModel(model: SwarmModel): boolean { return /stable-diffusion-xl|sdxl|stable-diffusion-v1|sd1|sd15/i.test([model.architecture, model.compat_class].join(' ')); }
 export function advertisedValues(params: SwarmParamDefinition[], id: string): string[] { return (params.find(p => p.id === id)?.values ?? []).map(v => typeof v === 'string' ? v : String(v.value ?? v.name ?? '')).filter(Boolean); }
 export function expressionPrompt(project: SheetProject, tile: ExpressionTile): string {
@@ -124,12 +131,14 @@ export interface NodeSchema {
             unknown,
             {
                 default?: unknown;
+                options?: unknown[];
             }?
         ]>;
         optional?: Record<string, [
             unknown,
             {
                 default?: unknown;
+                options?: unknown[];
             }?
         ]>;
     };
@@ -185,15 +194,80 @@ export function livePortraitWorkflow(reference: string, motion: ExpressionMotion
     Object.assign(inputs, { src_image: ['1', 0], src_ratio: 1, sample_ratio: 1, sample_parts: 'OnlyExpression', crop_factor: 1.7 });
     return { '1': { class_type: 'SwarmLoadImageB64', inputs: { image_base64: reference.split(',')[1] } }, '2': { class_type: 'ExpressionEditor', inputs }, '9': { class_type: 'SwarmSaveImageWS', inputs: { images: ['2', 0] } } };
 }
+function tileStage(value: unknown): PipelineStage {
+    return value === 'refine' || value === 'background' ? value : 'generate';
+}
+export function imageForStage(tile: ExpressionTile, stage: PipelineStage): ExpressionImage | undefined {
+    if ((tile.stage ?? 'generate') === stage) return tile.image ? tile : undefined;
+    return tile.earlierStages?.[stage];
+}
+
+export function recordStageImage(tile: ExpressionTile, stage: PipelineStage, result: ExpressionImage): void {
+    if (stage === 'generate') {
+        tile.earlierStages = undefined;
+    } else if (tile.image && (tile.stage ?? 'generate') !== stage) {
+        tile.earlierStages = {
+            ...tile.earlierStages,
+            [tile.stage ?? 'generate']: { image: tile.image, path: tile.path, seed: tile.seed },
+        };
+    }
+    Object.assign(tile, result, { stage });
+}
+
+function normalizeImage(value: unknown): ExpressionImage | undefined {
+    if (!value || typeof value !== 'object') return;
+    const image = value as Partial<ExpressionImage>;
+    if (typeof image.image !== 'string' || !/^data:image\/(png|jpeg|webp);base64,/.test(image.image)) return;
+    return { image: image.image, path: String(image.path ?? ''), seed: Number.isSafeInteger(image.seed) ? Number(image.seed) : -1 };
+}
+
+function normalizeTile(raw: unknown): ExpressionTile {
+    if (!raw || typeof raw !== 'object') throw new Error('Invalid expression card.');
+    const t = raw as Partial<ExpressionTile>;
+    const stage = tileStage(t.stage);
+    const image = normalizeImage(t);
+    const earlierStages: ExpressionTile['earlierStages'] = {};
+    if (image && stage !== 'generate') {
+        const generated = normalizeImage(t.earlierStages?.generate);
+        if (generated) earlierStages.generate = generated;
+        if (stage === 'background') {
+            const refined = normalizeImage(t.earlierStages?.refine);
+            if (refined) earlierStages.refine = refined;
+        }
+    }
+    const variants = Array.isArray(t.variants) ? t.variants.slice(-8).flatMap(take => {
+        const result = normalizeImage(take);
+        return result ? [{ ...result, stage: tileStage(take.stage) }] : [];
+    }) : [];
+    return {
+        ...(image ?? { image: '', path: '', seed: -1 }), stage, earlierStages, variants,
+        id: createId(), name: String(t.name ?? 'Expression').slice(0, 80),
+        prompt: String(t.prompt ?? '').slice(0, 3000), enabled: t.enabled !== false, locked: t.locked === true,
+        seedOffset: Math.max(0, Math.min(1000000, Number(t.seedOffset) || 0)),
+        motion: Object.fromEntries(Object.entries(emptyMotion()).map(([key, fallback]) => {
+            const value = Number(t.motion?.[key as keyof ExpressionMotion]);
+            return [key, Number.isFinite(value) ? Math.max(-120, Math.min(120, value)) : fallback];
+        })) as unknown as ExpressionMotion,
+        error: '',
+    };
+}
 export function normalizeSheet(raw: unknown): SheetProject {
-    if (!raw || typeof raw !== 'object' || (raw as SheetProject).version !== 1)
-        throw new Error('Choose a Studio expression project JSON.');
+    if (!raw || typeof raw !== 'object') throw new Error('Choose a Studio expression project JSON.');
     const r = raw as Record<string, unknown>, d = defaultSheet();
+    if (r.version !== 1 && r.version !== 2) throw new Error('Choose a Studio expression project JSON.');
+    const recipe = (key: 'refine' | 'backgroundRemoval') => {
+        if (r[key] == null) return d[key];
+        const saved = normalizeRecipe(r[key]);
+        // Version 1 wrote an empty off recipe for both stages on every project.
+        if (r.version === 1 && saved.mode === 'off' && !saved.model && !saved.graph && !saved.workflow) {
+            return { ...saved, mode: 'builtin' as const };
+        }
+        return saved;
+    };
     const num = (k: string, min: number, max: number) => Math.max(min, Math.min(max, Number.isFinite(Number(r[k])) ? Number(r[k]) : Number(d[k as keyof SheetProject])));
     const str = (k: string) => typeof r[k] === 'string' ? String(r[k]) : String(d[k as keyof SheetProject] ?? '');
     const reference = str('reference');
     if (reference && !/^data:image\/(png|jpeg|webp);base64,/.test(reference))
         throw new Error('Project reference must be an embedded PNG, JPEG, or WebP.');
-    return { ...d, name: str('name').slice(0, 120), subject: str('subject').slice(0, 20000), negative: str('negative').slice(0, 20000), model: str('model'), reference, referenceName: str('referenceName'), style: ['semireal', 'realistic', 'illustrated'].includes(str('style')) ? str('style') as SheetStyle : d.style, engine: ['ipadapter', 'anima', 'liveportrait', 'hybrid', 'img2img', 'text'].includes(str('engine')) ? str('engine') as SheetEngine : d.engine, adapter: str('adapter'), animaClip: str('animaClip'), animaVae: str('animaVae'), animaAdapter: str('animaAdapter'), animaGuidance: num('animaGuidance', 0, 20), animaStrength: num('animaStrength', 0, 2), animaEnd: num('animaEnd', 0, 1), sampler: str('sampler'), scheduler: str('scheduler'), width: Math.round(num('width', 256, 1536) / 64) * 64, height: Math.round(num('height', 256, 1536) / 64) * 64, steps: Math.round(num('steps', 1, 100)), cfg: num('cfg', 1, 20), seed: Math.round(num('seed', 0, 2147483646)), weight: num('weight', 0, 2), start: num('start', 0, 1), end: num('end', 0, 1), denoise: num('denoise', 0, 1), columns: Math.round(num('columns', 1, 8)), gutter: Math.round(num('gutter', 0, 100)), background: /^#[0-9a-f]{6}$/i.test(str('background')) ? str('background') : d.background, labels: r.labels !== false, useLoras: r.useLoras === true, tiles: Array.isArray(r.tiles) ? r.tiles.slice(0, 48).map((raw) => { const t = raw as Partial<ExpressionTile>; if (!t || typeof t !== 'object')
-            throw new Error('Invalid expression card.'); return { id: crypto.randomUUID(), name: String(t.name ?? 'Expression').slice(0, 80), prompt: String(t.prompt ?? '').slice(0, 3000), enabled: t.enabled !== false, locked: t.locked === true, seedOffset: Math.max(0, Math.min(1000000, Number(t.seedOffset) || 0)), variants: Array.isArray(t.variants) ? t.variants.slice(-8).filter(v => v && typeof v.image === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(v.image)).map(v => ({ image: v.image, path: String(v.path ?? ''), seed: Number.isSafeInteger(v.seed) ? v.seed : -1 })) : [], motion: Object.fromEntries(Object.entries(emptyMotion()).map(([k, v]) => [k, Number.isFinite(Number(t.motion?.[k as keyof ExpressionMotion])) ? Math.max(-120, Math.min(120, Number(t.motion?.[k as keyof ExpressionMotion]))) : v])) as unknown as ExpressionMotion, image: typeof t.image === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(t.image) ? t.image : '', path: typeof t.path === 'string' ? t.path : '', seed: Number.isSafeInteger(t.seed) ? Number(t.seed) : -1, error: '' }; }) : d.tiles };
+    return { ...d, autoDeleteDrafts: r.autoDeleteDrafts === true, refine: recipe('refine'), backgroundRemoval: recipe('backgroundRemoval'), name: str('name').slice(0, 120), subject: str('subject').slice(0, 20000), negative: str('negative').slice(0, 20000), model: str('model'), reference, referenceName: str('referenceName'), style: ['semireal', 'realistic', 'illustrated'].includes(str('style')) ? str('style') as SheetStyle : d.style, engine: ['ipadapter', 'anima', 'liveportrait', 'hybrid', 'img2img', 'text'].includes(str('engine')) ? str('engine') as SheetEngine : d.engine, adapter: str('adapter'), animaEmbedded: r.animaEmbedded === true, animaClip: str('animaClip'), animaVae: str('animaVae'), animaAdapter: str('animaAdapter'), animaGuidance: num('animaGuidance', 0, 20), animaStrength: num('animaStrength', 0, 2), animaEnd: num('animaEnd', 0, 1), sampler: str('sampler'), scheduler: str('scheduler'), width: Math.round(num('width', 256, 1536) / 64) * 64, height: Math.round(num('height', 256, 1536) / 64) * 64, steps: Math.round(num('steps', 1, 100)), cfg: num('cfg', 1, 20), seed: Math.round(num('seed', 0, 2147483646)), weight: num('weight', 0, 2), start: num('start', 0, 1), end: num('end', 0, 1), denoise: num('denoise', 0, 1), columns: Math.round(num('columns', 1, 8)), gutter: Math.round(num('gutter', 0, 100)), background: /^#[0-9a-f]{6}$/i.test(str('background')) ? str('background') : d.background, labels: r.labels !== false, useLoras: r.useLoras === true, tiles: Array.isArray(r.tiles) ? r.tiles.slice(0, 48).map(normalizeTile) : d.tiles };
 }

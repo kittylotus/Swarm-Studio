@@ -1,5 +1,5 @@
 import { createId } from "./id";
-import { actionMenu, bindActionMenus } from "./ui/action-menu";
+import { actionMenu, bindActionMenus, disclosureChevronSvg } from "./ui/action-menu";
 import { openLoraFilters, type LoraFilterSelection } from "./models/filters";
 import "./models/library-controls.css";
 import { normalizeModelPath, modelFolderPaths, modelInFolder, folderDepth } from "./models/folders";
@@ -14,7 +14,7 @@ import { normalizeLibraryFolderSelection, shouldAutoSyncLibraryHistory } from ".
 import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
 import { importLumiSwarmStack } from "./lora/import";
 import { loraRequestValue, resolveLoraModelName } from "./lora/request";
-import { applyExpressionLoras } from "./expressions/loras";
+import { applyExpressionLoras, type ExpressionLora } from "./expressions/loras";
 import {
   REGION_LAYOUT_PRESETS,
   applyRegionLayoutPreset,
@@ -47,7 +47,7 @@ import {
 import { dimensionsForRatio, ratioReversedForDimensions, swapResolutionDimensions } from "./resolution";
 import { STUDIO_KEYBIND_ACTIONS, STUDIO_KEYBIND_STORAGE_KEY, defaultStudioKeybinds, eventToKeybind, keybindDisplay, keybindMatches, normalizeStudioKeybindPreferences, type StudioKeybindAction, type StudioKeybindMap } from "./keybinds";
 import { GENERATION_NOTIFICATIONS_STORAGE_KEY, generationNotificationsSupported, requestGenerationNotificationPermission, shouldShowGenerationNotification, showGenerationNotification, type GenerationNotificationPayload } from "./notifications";
-import { runtime, type RuntimeHostControlStatus, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
+import { runtime, openNativeAnimaGuide, reportStudioActivity, type RuntimeHostControlStatus, type RuntimeProcessStatus, type RuntimeRepoStatus, type StudioUpdateStatus } from "./runtime";
 import { formatLaunchArgs, hasCliFlag, mergeComfyRuntimeFlags, parseLaunchArgs, readCliFlagValue } from "./runtime/args";
 import { findParam, normalizeBaseUrl, normalizeGenerationImage, SwarmClient, getParamValues } from "./swarm/client";
 import { normalizeGenerationRequest, normalizeParamKey } from "./swarm/request";
@@ -55,6 +55,10 @@ import { swarmImageMutationPath, swarmImageViewPath } from "./swarm/history";
 import { imageMetadata } from "./swarm/image-metadata";
 import { generationTiming, historyCreatedAt, compareOutputDates } from "./swarm/history-metadata";
 import { recoverPresetParameters } from "./swarm/preset-recovery";
+import type { EditorImage, ImageEditor } from "./expressions/editor";
+import { nodeChoices } from "./expressions/anima";
+import { BIREFNET_MODEL, processingLabels, readProcessingImage, type ProcessingStage } from "./expressions/processing";
+import type { ProcessingHost } from "./expressions/processing-ui";
 import type { ExpressionStudio } from "./expressions/studio";
 import type { NodeSchema } from "./expressions/pipeline";
 import type {
@@ -368,6 +372,9 @@ interface PendingGenerationApproval {
 
 export class StudioApp {
   private expressionStudio: ExpressionStudio | null = null;
+  private imageEditor: ImageEditor | null = null;
+  private editorPickingImage = false;
+  private pendingEditorImage: { id: string; inpaint: boolean } | null = null;
 
   private readonly root: HTMLElement;
   private readonly store = new StudioStore();
@@ -392,7 +399,6 @@ export class StudioApp {
   private libraryStarFilter: "all" | "starred" | "unstarred" = "all";
   private libraryFiltersOpen = false;
   private libraryFiltersDocked = false;
-  private libraryBrowseScrollTop = 0;
   private libraryMoveOpen = false;
   private librarySelectMode = false;
   private librarySelected = new Set<string>();
@@ -565,6 +571,7 @@ export class StudioApp {
   private externalImageDragDepth = 0;
   private inpaintOpen = false;
   private inpaintSourceId = "";
+  private inpaintApplyingResult = false;
   private inpaintSourceUrl = "";
   private inpaintSourceDataUrl = "";
   private inpaintSourceName = "";
@@ -747,9 +754,12 @@ export class StudioApp {
 
   private navigateToView(requested: StudioView): void {
     if (requested === "settings" && this.view === "settings") return;
+    if (requested !== "library") this.editorPickingImage = false;
+    if (requested !== "editor") this.pendingEditorImage = null;
     if (this.view !== "settings") this.lastNonSettingsView = this.view;
     this.view = requested;
     if (this.view !== "settings") this.lastNonSettingsView = this.view;
+    if (requested === "editor" && !this.root.querySelector("#image-editor-host")) this.resetMobileScrollAfterRender = true;
     if (requested === "create" && window.matchMedia("(max-width: 760px)").matches) {
       this.store.updateUi({ mobileCreatePane: "output" });
       this.resetMobileScrollAfterRender = true;
@@ -761,7 +771,7 @@ export class StudioApp {
   }
 
   private handleStudioKeybind(event: KeyboardEvent): void {
-    if (!this.keybindsEnabled || event.defaultPrevented || event.repeat || this.inpaintOpen) return;
+    if (!this.keybindsEnabled || event.defaultPrevented || event.repeat) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     const editing = Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
     const blockingDialog = Boolean(document.querySelector("dialog[open]")) || Boolean(this.root.querySelector("[role='dialog'][aria-modal='true'], .modal-backdrop:not([hidden]), .download-backdrop:not([hidden]), .quicknav-overlay.is-open"));
@@ -820,6 +830,15 @@ export class StudioApp {
     if (!source) return "";
     if (/^(data:|blob:)/i.test(source)) return source;
     return this.client.imageUrl(this.normalizeSwarmPath(source));
+  }
+
+  private libraryPreviewUrl(output: OutputRecord): string {
+    const source = this.outputImageUrl(output);
+    if (!/^https?:\/\//i.test(source)) return source;
+    const url = new URL(source);
+    url.searchParams.set("preview", "true");
+    url.searchParams.set("noanim", "true");
+    return url.href;
   }
 
   private swarmImageAttributes(url: unknown): string {
@@ -1039,8 +1058,12 @@ export class StudioApp {
       }
     });
     void this.refreshProcessStatus(false);
+    const reportActivity = () => void reportStudioActivity(this.studioUpdateHasPendingWork());
+    reportActivity();
+    window.setInterval(reportActivity, 1000);
     void this.refreshHostControlStatus(false).then(() => {
       if (runtime.kind === "browser") {
+        if (this.hostControlStatus?.available) window.setTimeout(() => void this.checkStudioUpdate(false), 2600);
         if (this.store.state.connection.autoStart && this.hostControlStatus?.available) void this.connect(true);
         else void this.connect(false, true);
       }
@@ -1142,19 +1165,19 @@ export class StudioApp {
   }
 
   private studioUpdateHasPendingWork(): boolean {
-    return this.generating || this.inpaintAwaitingResult || this.pendingGenerationApprovals.length > 0 || Boolean(this.inpaintPendingResultRecord);
+    return this.generating || Boolean(this.expressionStudio?.busy) || Boolean(this.imageEditor?.busy) || this.inpaintAwaitingResult || this.pendingGenerationApprovals.length > 0 || Boolean(this.inpaintPendingResultRecord);
   }
 
   private renderStudioUpdatePopup(): string {
     const status = this.studioUpdateStatus;
-    if (!this.studioUpdatePopupOpen || !status?.available || runtime.kind !== "tauri") return "";
+    if (!this.studioUpdatePopupOpen || !status?.available) return "";
     const target = this.studioUpdateTargetLabel(status);
     const highlights = status.highlights.slice(0, 3);
     const pendingWork = this.studioUpdateHasPendingWork();
     return `
-      <aside class="studio-update-popup" role="status" aria-live="polite">
-        <header><span class="studio-update-glyph">↑</span><div><span class="panel-kicker">SWARM STUDIO UPDATE</span><h3>${escapeHtml(target)} is ready</h3></div></header>
-        <p>${escapeHtml(status.message)}</p>
+      <aside class="studio-update-popup" aria-label="Studio source update">
+        <header><span class="studio-update-glyph" aria-hidden="true">↑</span><div><span class="panel-kicker">SWARM STUDIO UPDATE</span><h3>${escapeHtml(target)} is ready</h3></div></header>
+        <p role="status">${escapeHtml(this.studioUpdateApplying ? "Updating the host Studio source. Keep this page open while Studio restarts." : status.message)}</p>
         ${highlights.length ? `<ul>${highlights.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
         <div class="studio-update-meta"><span>${escapeHtml(status.currentVersion ? `v${status.currentVersion}` : status.currentCommit)}</span><b>→</b><span>${escapeHtml(target)}</span></div>
         <div class="form-actions">
@@ -1165,20 +1188,23 @@ export class StudioApp {
   }
 
   private renderStudioUpdateSettingsCard(): string {
-    if (runtime.kind !== "tauri") return "";
     const status = this.studioUpdateStatus;
     const pendingWork = this.studioUpdateHasPendingWork();
-    const state = this.studioUpdateChecking ? "checking" : status?.available ? (status.canApply ? "available" : "blocked") : status?.supported === false ? "unavailable" : status ? "current" : "unknown";
-    const label = this.studioUpdateChecking
+    const blocked = status?.supported && (status.dirty || (status.available && !status.canApply));
+    const state = this.studioUpdateApplying ? "updating" : this.studioUpdateChecking ? "checking" : blocked ? "blocked" : status?.available ? "available" : status?.supported === false ? "unavailable" : status ? "current" : "unknown";
+    const label = this.studioUpdateApplying && runtime.kind === "browser"
+      ? "Updating the host Studio source… Waiting for it to restart. Keep this page open; it will reconnect and reload."
+      : this.studioUpdateChecking
       ? "Checking origin…"
-      : status?.message || "Studio can check its own Git checkout and fast-forward it without opening a terminal.";
-    const version = status ? `v${escapeHtml(status.currentVersion)}` : "Current build";
+      : status?.message || "Studio can check the host Git checkout and fast-forward it without opening a terminal.";
+    const version = status?.currentVersion ? `v${escapeHtml(status.currentVersion)}` : "Host source";
+    const applyLabel = this.studioUpdateApplying ? "Updating…" : pendingWork && status?.available ? "Finish current work" : blocked ? "Update blocked" : status?.available ? "Update & restart" : status?.supported ? "Up to date" : status?.supported === false ? "Unavailable" : "Check first";
     return `
-      <section class="studio-update-settings-card">
-        <div class="studio-update-settings-copy"><span class="panel-kicker">STUDIO SOURCE</span><div><h3>${version}</h3><span class="backend-state studio-update-state studio-update-state--${state}">${state}</span></div><p>${escapeHtml(label)}</p>${status?.supported && status.repoPath ? `<small>${escapeHtml(status.repoPath)}</small>` : ""}</div>
+      <section class="studio-update-settings-card" aria-label="Studio source updates" aria-busy="${this.studioUpdateChecking || this.studioUpdateApplying}">
+        <div class="studio-update-settings-copy"><span class="panel-kicker">STUDIO SOURCE</span><div><h3>${version}</h3><span class="backend-state studio-update-state studio-update-state--${state}">${state}</span></div><p role="status">${escapeHtml(label)}</p>${runtime.kind === "browser" ? `<p class="helper-copy">Updates Studio on the computer serving this remote. All connected Studio clients briefly disconnect.</p>` : ""}${status?.supported && status.repoPath ? `<small>${escapeHtml(status.repoPath)}</small>` : ""}</div>
         <div class="backend-button-row">
           <button type="button" class="ghost-button" data-action="check-studio-update" ${this.studioUpdateChecking || this.studioUpdateApplying ? "disabled" : ""}>${this.studioUpdateChecking ? "Checking…" : "Check for updates"}</button>
-          <button type="button" class="primary-button" data-action="apply-studio-update" ${status?.canApply && !this.studioUpdateApplying && !pendingWork ? "" : "disabled"}>${this.studioUpdateApplying ? "Updating…" : pendingWork && status?.available ? "Finish current work" : status?.available ? "Update & restart" : "Up to date"}</button>
+          <button type="button" class="primary-button" data-action="apply-studio-update" ${status?.canApply && !this.studioUpdateApplying && !pendingWork ? "" : "disabled"}>${applyLabel}</button>
         </div>
       </section>`;
   }
@@ -1191,7 +1217,8 @@ export class StudioApp {
   }
 
   private async checkStudioUpdate(userInitiated = false): Promise<void> {
-    if (runtime.kind !== "tauri" || this.studioUpdateChecking || this.studioUpdateApplying) return;
+    if (this.studioUpdateChecking || this.studioUpdateApplying) return;
+    const restoreCheckFocus = userInitiated && document.activeElement?.getAttribute("data-action") === "check-studio-update";
     this.studioUpdateChecking = true;
     if (userInitiated && this.view === "settings") this.render();
     try {
@@ -1208,8 +1235,9 @@ export class StudioApp {
       if (userInitiated) this.notify(message, "error");
     } finally {
       this.studioUpdateChecking = false;
-      if (userInitiated && this.view === "settings") this.render();
+      if (this.view === "settings") this.render();
       else this.renderStudioUpdateHost();
+      if (restoreCheckFocus && this.view === "settings") this.root.querySelector<HTMLElement>("[data-action='check-studio-update']")?.focus({ preventScroll: true });
     }
   }
 
@@ -1223,20 +1251,16 @@ export class StudioApp {
       if (status?.message) this.notify(status.message, "info");
       return;
     }
+    const restoreApplyFocus = document.activeElement?.getAttribute("data-action") === "apply-studio-update";
     this.studioUpdateApplying = true;
     this.renderStudioUpdateHost();
     if (this.view === "settings") this.render();
     try {
-      const processStatus = await runtime.processStatus().catch(() => this.processStatus);
-      if (processStatus.owned && processStatus.running) {
-        this.addLog("Stopping Studio-owned Swarm before self-update so the launcher/log pipes restart cleanly.", "info", "studio");
-        await runtime.stopLocalSwarm();
-        this.connected = false;
-        this.session = null;
-      }
+      await reportStudioActivity(false);
       const message = await runtime.applyStudioUpdate();
       this.notify(message, "success");
       this.addLog(message, "info", "studio");
+      if (runtime.kind === "browser") window.location.reload();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.studioUpdateApplying = false;
@@ -1244,6 +1268,7 @@ export class StudioApp {
       this.notify(message, "error");
       if (this.view === "settings") this.render();
       else this.renderStudioUpdateHost();
+      if (restoreApplyFocus) this.root.querySelector<HTMLElement>("[data-action='apply-studio-update']:not(:disabled)")?.focus({ preventScroll: true });
     }
   }
 
@@ -1254,6 +1279,7 @@ export class StudioApp {
       this.studioUpdatePopupOpen = false;
       this.studioUpdateDismissed = true;
       this.renderStudioUpdateHost();
+      (this.root.querySelector<HTMLElement>("[data-action='check-studio-update']") ?? this.root.querySelector<HTMLElement>("[data-nav='settings']"))?.focus({ preventScroll: true });
     }));
   }
 
@@ -1705,14 +1731,17 @@ export class StudioApp {
     // Models and CivitAI both use .content as the desktop scroll owner, then become document-scrolled
     // at narrower breakpoints. Preserve both candidates across every stateful rerender so dynamic
     // chrome (especially the CivitAI install queue appearing/disappearing) cannot move the viewport.
-    const preserveVisualScroll = (this.view === "models" || this.view === "civitai" || this.view === "library" || this.view === "settings") && !this.resetMobileScrollAfterRender;
+    const sameEditorView = this.view === "editor" && this.root.querySelector("#image-editor-host");
+    const preserveVisualScroll = (sameEditorView || this.view === "models" || this.view === "civitai" || this.view === "library" || this.view === "settings") && !this.resetMobileScrollAfterRender;
     const previousVisualContentScrollTop = preserveVisualScroll
       ? (this.root.querySelector<HTMLElement>(".content")?.scrollTop ?? 0)
       : null;
     const previousVisualWindowScrollY = preserveVisualScroll ? window.scrollY : null;
+    const browseScrollTop = this.root.querySelector(".library-browse-scroll")?.scrollTop;
+    const dateFoldersScrollTop = this.root.querySelector(".library-date-folders")?.scrollTop;
     this.applyTheme();
     this.nativeImageObserver?.disconnect();
-    const compactHeader = this.view === "create" || this.view === "expressions" ? "" : `
+    const compactHeader = ["create", "expressions", "editor"].includes(this.view) ? "" : `
       <header class="section-header">
         <div><p class="eyebrow">${this.viewLabel()}</p><h1>${this.viewTitle()}</h1></div>
       </header>`;
@@ -1726,6 +1755,7 @@ export class StudioApp {
           <nav class="utility-nav utility-nav--desktop" aria-label="Studio sections">
             ${this.navButton("create", "Create", tabCreateSvg)}
             ${this.navButton("expressions", "Expressions", tabIdentitiesSvg)}
+            ${this.navButton("editor", "Editor", inpaintBrushSvg)}
             ${this.navButton("library", "Library", tabLibrarySvg)}
             ${this.navButton("identities", "Identities", tabIdentitiesSvg)}
             ${this.navButton("models", "Models", tabModelsSvg)}
@@ -1739,13 +1769,13 @@ export class StudioApp {
           </nav>
           <div class="utility-spacer"></div>
           <div class="utility-readout" title="Current checkpoint">${escapeHtml(prettyName(this.store.state.draft.model) || "No checkpoint")}</div>
-          <div class="utility-readout utility-readout--small">${this.store.state.outputs.length} images</div>
+          <div class="utility-readout utility-readout--small" data-output-count>${this.store.state.outputs.length} images</div>
           <button class="status-chip" id="connection-status" data-action="connect"></button>
           <button class="icon-button settings-desktop-button ${this.view === "settings" ? "is-active" : ""}" data-nav="settings" aria-label="Settings" title="Settings">${tabSettingsSvg}</button>
           <button class="icon-button mobile-nav" data-action="mobile-menu" aria-label="Open navigation">☰</button>
         </header>
         <main class="main-area ${this.libraryBrowseDockActive() ? "has-library-browse-dock" : ""}">
-          ${compactHeader}
+          ${this.view === "library" && this.editorPickingImage ? this.renderEditorPickerHeader() : compactHeader}
           <section class="content ${this.view === "create" ? "content--create" : ""} ${this.view === "civitai" ? "content--civitai" : ""}" id="view-host">${this.renderView()}</section>
         </main>
       </div>
@@ -1775,7 +1805,6 @@ export class StudioApp {
       ${this.renderLibrarySelectionRail()}
       ${this.renderLoraBatchRail()}
       ${this.renderGenerationMini()}
-      ${this.renderInpaintEditor()}
     `;
     if (this.mobileEnterDirection) {
       const host = this.root.querySelector<HTMLElement>("#view-host");
@@ -1786,7 +1815,7 @@ export class StudioApp {
         this.mobileSwipeBusy = false;
       }, 230);
     }
-    if (this.resetMobileScrollAfterRender && window.matchMedia("(max-width: 760px)").matches) {
+    if (this.resetMobileScrollAfterRender && (this.view === "editor" || window.matchMedia("(max-width: 760px)").matches)) {
       this.resetMobileScrollAfterRender = false;
       window.requestAnimationFrame(() => window.scrollTo({ top: 0, left: 0, behavior: "auto" }));
     } else if (previousVisualContentScrollTop != null || previousVisualWindowScrollY != null) {
@@ -1816,12 +1845,10 @@ export class StudioApp {
     if (this.view === "settings" && this.store.state.ui.settingsPane === "backend" && this.connected && !this.backendControlLoaded && !this.backendControlLoading) {
       void this.refreshBackendControl(true);
     }
-    if (this.libraryFiltersOpen && this.libraryBrowseScrollTop > 0) {
-      window.requestAnimationFrame(() => {
-        const browseScroll = this.root.querySelector<HTMLElement>(".library-browse-scroll");
-        if (browseScroll) browseScroll.scrollTop = this.libraryBrowseScrollTop;
-      });
-    }
+    const dateFolders = this.root.querySelector(".library-date-folders");
+    if (dateFolders && dateFoldersScrollTop != null) dateFolders.scrollTop = dateFoldersScrollTop;
+    const browseScroll = this.root.querySelector(".library-browse-scroll");
+    if (browseScroll && browseScrollTop != null) browseScroll.scrollTop = browseScrollTop;
     // LocalStorage intentionally keeps only a compact recent-output cache. On the first Library
     // visit of a connected session, quietly rehydrate the authoritative Swarm history when the
     // in-memory index is still at/below that cache ceiling. Large libraries therefore come back
@@ -1841,7 +1868,7 @@ export class StudioApp {
 
   private mobileSection(): "create" | "visuals" | "library" | "settings" {
     if (this.view === "create") return "create";
-    if (this.view === "expressions" || this.view === "identities" || this.view === "models" || this.view === "civitai") return "visuals";
+    if (this.view === "expressions" || this.view === "editor" || this.view === "identities" || this.view === "models" || this.view === "civitai") return "visuals";
     if (this.view === "library") return "library";
     return "settings";
   }
@@ -1861,9 +1888,10 @@ export class StudioApp {
         <button class="${pane === "output" ? "is-active" : ""}" data-mobile-pane="output"><span>${tabOutputSvg}</span>Output</button>
         <button class="${pane === "tune" ? "is-active" : ""}" data-mobile-pane="tune"><span>${tabTuneSvg}</span>Tune</button>`;
     } else if (section === "visuals") {
-      count = 4;
+      count = 5;
       tabs = `<button class="${this.view === "identities" ? "is-active" : ""}" data-nav="identities"><span>${tabIdentitiesSvg}</span>Identities</button>
         <button class="${this.view === "expressions" ? "is-active" : ""}" data-nav="expressions"><span>${tabIdentitiesSvg}</span>Expressions</button>
+        <button class="${this.view === "editor" ? "is-active" : ""}" data-nav="editor"><span>${inpaintBrushSvg}</span>Editor</button>
         <button class="${this.view === "models" ? "is-active" : ""}" data-nav="models"><span>${tabModelsSvg}</span>Models</button>
         <button class="${this.view === "civitai" ? "is-active" : ""}" data-nav="civitai"><span>${tabSearchSvg}</span>CivitAI</button>`;
     } else if (section === "library") {
@@ -1886,7 +1914,7 @@ export class StudioApp {
     const current = this.mobileSection();
     const items: Array<{ id: "create" | "visuals" | "library" | "settings"; label: string; icon: string; hint: string }> = [
       { id: "create", label: "Create", icon: tabCreateSvg, hint: "Generation · Output · Tune" },
-      { id: "visuals", label: "Visuals", icon: tabVisualsSvg, hint: "Identities · Models · CivitAI" },
+      { id: "visuals", label: "Visuals", icon: tabVisualsSvg, hint: "Identities · Expressions · Editor · Models · CivitAI" },
       { id: "library", label: "Library", icon: tabLibrarySvg, hint: "Outputs and folders" },
       { id: "settings", label: "Settings", icon: tabSettingsSvg, hint: "Logs · Connection · Backends · Appearance · Keybinds" },
     ];
@@ -1949,7 +1977,7 @@ export class StudioApp {
       return;
     }
     if (section === "visuals") {
-      const options: StudioView[] = ["identities", "expressions", "models", "civitai"];
+      const options: StudioView[] = ["identities", "expressions", "editor", "models", "civitai"];
       const current = Math.max(0, options.indexOf(this.view));
       this.view = options[(current + direction + options.length) % options.length]!;
       this.lastNonSettingsView = this.view;
@@ -1984,6 +2012,7 @@ export class StudioApp {
     return ({
       create: "Prompt workspace",
       expressions: "Reference-guided character expression sheets",
+      editor: "Image generation and editing",
       library: "Your Swarm assets",
       identities: "Reusable visual profiles",
       models: "Server inventory",
@@ -1997,6 +2026,7 @@ export class StudioApp {
     return ({
       create: "Create",
       expressions: "Expression studio",
+      editor: "Image editor",
       library: "Library",
       identities: "Identity library",
       models: "Models and LoRAs",
@@ -2176,7 +2206,7 @@ export class StudioApp {
     return `
       <div class="inspector-backdrop" data-action="close-inspector">
         <section class="inspector" role="dialog" aria-modal="true" aria-label="Output inspector" data-inspector-panel>
-          <header><div><span class="panel-kicker">INSPECT</span><h2>${escapeHtml(prettyName(output.model) || "Swarm output")}</h2></div><button class="icon-button" data-action="close-inspector">×</button></header>
+          <header><div><span class="panel-kicker">INSPECT</span><h2>${escapeHtml(prettyName(output.model) || "Swarm output")}</h2></div><div class="inspector-header-actions"><button class="primary-button" data-edit-output="${escapeHtml(output.id)}">Open in Editor</button><button class="icon-button" data-action="close-inspector" aria-label="Close inspector">×</button></div></header>
           <div class="inspector-grid">
             <div class="inspector-media"><img ${this.swarmImageAttributes(this.outputImageUrl(output))} alt="Swarm output" /></div>
             <div class="inspector-copy">
@@ -2219,9 +2249,17 @@ export class StudioApp {
     };
     const modelName = prettyName(this.inpaintSourceOutputContext?.model || this.store.state.draft.model) || "Source checkpoint";
     const stackCount = (this.inpaintSourceOutputContext?.loras ?? this.store.state.draft.loras).filter((item) => item.enabled).length;
-    return `<div class="download-backdrop inpaint-backdrop" data-action="close-inpaint">
-      <section class="inpaint-editor" role="dialog" aria-modal="true" aria-label="Inpaint editor" data-inpaint-panel tabindex="-1">
-        <header class="inpaint-header"><div class="inpaint-heading-copy"><span class="panel-kicker">INPAINT</span><b class="inpaint-mobile-title">Edit image</b><h2>${escapeHtml(this.inpaintSourceName || "Swarm output")}</h2><small>Paint a mask here; Swarm only handles inference.</small></div><div class="inpaint-header-actions"><button class="inpaint-round-action" data-action="open-inpaint-help" title="Inpaint help" aria-label="Inpaint help">${inpaintHelpSvg}</button><button class="inpaint-round-action" data-action="open-inpaint-settings" title="Generation settings" aria-label="Generation settings">${inpaintSettingsSvg}</button><button class="ghost-button inpaint-reset-view" data-action="reset-inpaint-view">Reset view</button><button class="primary-button" data-action="generate-inpaint" ${this.generating || !loaded || !hasMask ? "disabled" : ""}>${this.generating && this.inpaintAwaitingResult ? "Generating…" : "Generate edit"}<b>✦</b></button><button class="icon-button" data-action="close-inpaint">×</button></div></header>
+    return `<section class="inpaint-editor" aria-label="Inpaint editor" data-inpaint-panel tabindex="-1">
+        <header class="inpaint-header">
+          <h2>Inpaint</h2>
+          <div class="inpaint-header-actions">
+            <div class="inpaint-source-actions" data-inpaint-source-actions></div>
+            <button class="inpaint-round-action" data-action="open-inpaint-help" title="Inpaint help" aria-label="Inpaint help">${inpaintHelpSvg}</button>
+            <button class="inpaint-round-action" data-action="open-inpaint-settings" title="Generation settings" aria-label="Generation settings">${inpaintSettingsSvg}</button>
+            <button class="ghost-button inpaint-reset-view" data-action="reset-inpaint-view">Reset view</button>
+            <button class="primary-button" data-action="generate-inpaint" ${this.generating || !loaded || !hasMask ? "disabled" : ""}>${this.generating && this.inpaintAwaitingResult ? "Generating…" : "Generate edit"}<b>✦</b></button>
+          </div>
+        </header>
         <div class="inpaint-layout" data-no-swipe>
           <section class="inpaint-stage-shell panel">
             <div class="inpaint-stage-toolbar">
@@ -2267,14 +2305,13 @@ export class StudioApp {
               <label class="field"><span>Inpaint prompt</span><textarea id="inpaint-prompt" rows="8" placeholder="Describe only what should change…">${escapeHtml(this.inpaintPrompt)}</textarea></label>
               <label class="field"><span>Negative prompt</span><textarea id="inpaint-negative" rows="5" placeholder="Things to avoid in the masked area…">${escapeHtml(this.inpaintNegativePrompt)}</textarea></label>
             </section>
-            <div class="form-actions inpaint-form-actions"><button class="ghost-button" data-action="use-inpaint-result-as-init" ${this.store.state.outputs[0] ? "" : "disabled"}>Use latest as init</button><button class="ghost-button" data-action="close-inpaint">Close</button><button class="primary-button" data-action="generate-inpaint" ${this.generating || !loaded || !hasMask ? "disabled" : ""}>${this.generating && this.inpaintAwaitingResult ? "Generating…" : "Generate edit"}</button></div>
+            <div class="form-actions inpaint-form-actions"><button class="ghost-button" data-action="use-inpaint-result-as-init" ${this.store.state.outputs[0] ? "" : "disabled"}>Use latest as init</button><button class="primary-button" data-action="generate-inpaint" ${this.generating || !loaded || !hasMask ? "disabled" : ""}>${this.generating && this.inpaintAwaitingResult ? "Generating…" : "Generate edit"}</button></div>
           </aside>
         </div>
         ${this.renderInpaintResultReview()}
         ${this.renderInpaintSettingsModal()}
         ${this.renderInpaintHelpModal()}
-      </section>
-    </div>`;
+      </section>`;
   }
 
   private renderInpaintResultReview(): string {
@@ -2333,6 +2370,7 @@ export class StudioApp {
   private renderView(): string {
     switch (this.view) {
       case "create": return this.renderCreate();
+      case "editor": return `<div class="editor-workspace"><div id="image-editor-host"></div>${this.renderInpaintEditor()}</div>`;
       case "expressions": return '<div id="expression-studio-host"></div>';
       case "library": return this.renderLibrary();
       case "identities": return this.renderIdentities();
@@ -3293,6 +3331,9 @@ export class StudioApp {
   private renderLibraryFiltersModal(): string {
     if (this.view !== "library" || !this.libraryFiltersOpen || this.store.state.ui.selectedOutputId) return "";
     const docked = this.libraryBrowseDockActive();
+    const customFolder = this.store.state.folders.find((folder) =>
+      folder.id === this.libraryFolder && folder.id !== folderIds.unfiled && folder.id !== folderIds.favorites,
+    );
     const folderCounts = new Map<string, number>();
     for (const output of this.store.state.outputs) folderCounts.set(output.folderId, (folderCounts.get(output.folderId) ?? 0) + 1);
     folderCounts.set(folderIds.favorites, this.store.state.outputs.filter((output) => output.starred).length);
@@ -3334,7 +3375,10 @@ export class StudioApp {
           </section>
 
           <section class="library-filter-section">
-            <div class="section-minihead"><b>Studio folders</b><button type="button" class="ghost-button" data-action="new-folder">＋ New</button></div>
+            <div class="section-minihead"><b>Studio folders</b><div class="library-folder-actions">
+              ${customFolder ? `<button type="button" class="ghost-button danger-icon" data-delete-library-folder="${escapeHtml(customFolder.id)}" aria-label="Delete folder ${escapeHtml(customFolder.name)}">${trashSvg}<span>Delete</span></button>` : ""}
+              <button type="button" class="ghost-button" data-action="new-folder">＋ New</button>
+            </div></div>
             <div class="library-folder-tiles">
               <button type="button" class="library-folder-tile ${this.libraryFolder === "all" ? "is-active" : ""}" data-library-modal-folder="all"><span>✦</span><b>All outputs</b><small>${this.store.state.outputs.length}</small></button>
               ${this.store.state.folders.map((folder) => `<button type="button" class="library-folder-tile ${this.libraryFolder === folder.id ? "is-active" : ""}" data-library-modal-folder="${folder.id}"><span>${folder.id === folderIds.favorites ? "★" : "▱"}</span><b>${escapeHtml(folder.name)}</b><small>${folder.id === folderIds.favorites ? folderCounts.get(folderIds.favorites) ?? 0 : folderCounts.get(folder.id) ?? 0}</small></button>`).join("")}
@@ -3416,10 +3460,17 @@ export class StudioApp {
   }
 
   private renderLibrarySelectionRail(): string {
-    if (this.view !== "library" || !this.librarySelectMode || this.librarySyncing) return "";
+    if (this.view !== "library" || !this.librarySelectMode || this.librarySyncing || this.editorPickingImage) return "";
     const selectedCount = this.librarySelected.size;
     const outputs = this.libraryVisibleOutputs().slice(0, this.libraryRenderLimit);
     return `<div class="library-selection-rail ${this.libraryBatchBusy ? "is-busy" : ""}"><span><b>${selectedCount}</b> selected${this.libraryBatchBusy ? `<small>Working…</small>` : ""}</span><div class="library-selection-actions"><button class="ghost-button" data-action="select-mounted-outputs" ${outputs.length && !this.libraryBatchBusy ? "" : "disabled"}>Select shown</button><button class="ghost-button" data-action="favorite-selected-outputs" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>★ Favorite</button><button class="ghost-button" data-action="unfavorite-selected-outputs" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>☆ Unfavorite</button><button class="ghost-button" data-action="open-library-move" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>Move</button><button class="danger-soft" data-action="delete-selected-outputs" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>Delete</button><button class="ghost-button" data-action="clear-output-selection" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>Clear</button><button class="secondary-button" data-action="finish-library-selection" ${this.libraryBatchBusy ? "disabled" : ""}>Done</button></div></div>`;
+  }
+
+  private renderEditorPickerHeader(): string {
+    return `<header class="section-header editor-picker-heading">
+      <div><h1>Choose an image for Editor</h1></div>
+      <button type="button" class="secondary-button" data-action="cancel-editor-picker">Cancel</button>
+    </header>`;
   }
 
   private renderLibrary(): string {
@@ -3433,34 +3484,38 @@ export class StudioApp {
 
     const allOutputs = this.libraryVisibleOutputs();
     const outputs = allOutputs.slice(0, this.libraryRenderLimit);
-    const selectedCount = this.librarySelected.size;
+    const selecting = this.librarySelectMode && !this.editorPickingImage;
+    const selectedCount = this.editorPickingImage ? 0 : this.librarySelected.size;
     const remaining = Math.max(0, allOutputs.length - outputs.length);
     const syncDisabled = !this.connected || this.libraryBatchBusy;
-    return `<div class="library-layout library-layout--single"><section class="library-main ${this.librarySelectMode ? "is-selecting" : ""}">
+    return `<div class="library-layout library-layout--single"><section class="library-main ${selecting ? "is-selecting" : ""}">
       <div class="library-toolbar library-toolbar--simple">
         <div class="library-toolbar-count"><b>${allOutputs.length}</b> matching output${allOutputs.length === 1 ? "" : "s"}<small>${outputs.length < allOutputs.length ? ` · ${outputs.length} mounted` : ""}${selectedCount ? ` · ${selectedCount} selected` : ""}</small></div>
         <div class="library-toolbar-actions library-toolbar-actions--grouped">
-          <div class="library-browse-actions"><button type="button" class="secondary-button" data-action="open-library-filters">${filterSvg} Browse</button><button type="button" class="secondary-button library-select-toggle ${this.librarySelectMode ? "is-active" : ""}" data-action="toggle-library-selection" aria-pressed="${this.librarySelectMode}" aria-label="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}">${batchSelectSvg}<span>${this.librarySelectMode ? "Done selecting" : "Select"}</span></button></div>
-          <div class="library-maintenance-actions">${actionMenu("library-tools-menu", "Tools", "Library tools", `<div class="studio-menu-section"><button type="button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}<small>Reconcile the index with files saved in Swarm.</small></button></div><div class="studio-menu-section"><small>CLEAN UP CURRENT RESULTS</small><button type="button" class="danger-soft" aria-labelledby="library-delete-name" aria-describedby="library-delete-help" data-action="delete-nonfavorite-outputs" ${!syncDisabled && allOutputs.some(output => !output.starred) ? "" : "disabled"}><span id="library-delete-name">Delete all non-favorited</span><small id="library-delete-help">Favorites are preserved. Review the count before confirming.</small></button></div>`)}<button type="button" class="primary-button library-generate-action" data-nav="create">Generate</button></div>
+          <div class="library-browse-actions"><button type="button" class="secondary-button" data-action="open-library-filters">${filterSvg} Browse</button>${this.editorPickingImage ? "" : `<button type="button" class="secondary-button library-select-toggle ${this.librarySelectMode ? "is-active" : ""}" data-action="toggle-library-selection" aria-pressed="${this.librarySelectMode}" aria-label="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}">${batchSelectSvg}<span>${this.librarySelectMode ? "Done selecting" : "Select"}</span></button>`}</div>
+          <div class="library-maintenance-actions">${this.editorPickingImage ? `<button type="button" class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button>` : `${actionMenu("library-tools-menu", "Tools", "Library tools", `<div class="studio-menu-section"><button type="button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}<small>Reconcile the index with files saved in Swarm.</small></button></div><div class="studio-menu-section"><small>CLEAN UP CURRENT RESULTS</small><button type="button" class="danger-soft" aria-labelledby="library-delete-name" aria-describedby="library-delete-help" data-action="delete-nonfavorite-outputs" ${!syncDisabled && allOutputs.some(output => !output.starred) ? "" : "disabled"}><span id="library-delete-name">Delete all non-favorited</span><small id="library-delete-help">Favorites are preserved. Review the count before confirming.</small></button></div>`)}<button type="button" class="primary-button library-generate-action" data-nav="create">Generate</button>`}</div>
         </div>
       </div>
-      <div class="library-filter-readout"><span>${escapeHtml(this.libraryFilterSummary())}</span>${this.librarySelectMode ? `<b>Selection active · Shift-click for ranges</b>` : ""}</div>
-      ${outputs.length ? `<div class="image-grid ${this.librarySelectMode ? "is-selecting" : ""}">${outputs.map((output) => this.outputCard(output.id)).join("")}</div>${remaining ? `<div class="library-load-more"><button class="secondary-button" data-action="load-more-library">Load ${Math.min(240, remaining)} more</button><small>${remaining} still indexed, not mounted</small></div><div class="library-scroll-runway" aria-hidden="true"></div>` : ""}` : `<div class="panel empty-state"><span>▦</span><h2>No outputs match.</h2><p>Open Browse to change folders, dates, checkpoint, or search.</p><div><button class="secondary-button" data-action="open-library-filters">Browse</button><button class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button></div></div>`}
+      <div class="library-filter-readout"><span>${escapeHtml(this.libraryFilterSummary())}</span>${selecting ? `<b>Selection active · Shift-click for ranges</b>` : ""}</div>
+      ${outputs.length ? `<div class="image-grid ${selecting ? "is-selecting" : ""}">${outputs.map(output => this.outputCard(output)).join("")}</div>${remaining ? `<div class="library-load-more"><button class="secondary-button" data-action="load-more-library">Load ${Math.min(240, remaining)} more</button><small>${remaining} still indexed, not mounted</small></div><div class="library-scroll-runway" aria-hidden="true"></div>` : ""}` : `<div class="panel empty-state"><span>▦</span><h2>No outputs match.</h2><p>Open Browse to change folders, dates, checkpoint, or search.</p><div><button class="secondary-button" data-action="open-library-filters">Browse</button><button class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button></div></div>`}
     </section></div>`;
   }
 
-  private outputCard(id: string): string {
-    const output = this.store.state.outputs.find((item) => item.id === id);
-    if (!output) return "";
+  private outputCard(output: OutputRecord): string {
+    const picking = this.editorPickingImage;
+    const selecting = this.librarySelectMode && !picking;
+    const selected = selecting && this.librarySelected.has(output.id);
+    const preview = this.libraryPreviewUrl(output);
+    const pickLabel = escapeHtml(output.prompt || output.swarmPath || "Swarm output");
     return `
-      <article class="image-card ${this.librarySelected.has(output.id) ? "is-selected" : ""}" data-output-card="${output.id}">
-        ${this.librarySelectMode ? `<button class="output-select-check" data-select-output="${output.id}" aria-label="${this.librarySelected.has(output.id) ? "Deselect" : "Select"} output">${this.librarySelected.has(output.id) ? "✓" : ""}</button>` : ""}
-        <div class="image-card-media-wrap"><button class="image-card-media" ${this.librarySelectMode ? `data-select-output="${output.id}"` : `data-inspect-output="${output.id}"`}><img ${this.swarmImageAttributes(this.outputImageUrl(output))} alt="${escapeHtml(output.prompt || "Swarm output")}" loading="lazy" /></button>${this.librarySelectMode ? "" : `<button class="star-button ${output.starred ? "is-starred" : ""}" data-star="${output.id}" title="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}" aria-label="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}">${heartSvg}</button>`}</div>
+      <article class="image-card ${selected ? "is-selected" : ""}" data-output-card="${output.id}">
+        ${selecting ? `<button class="output-select-check" data-select-output="${output.id}" aria-label="${this.librarySelected.has(output.id) ? "Deselect" : "Select"} output">${this.librarySelected.has(output.id) ? "✓" : ""}</button>` : ""}
+        <div class="image-card-media-wrap"><button class="image-card-media" ${picking ? `data-edit-output="${output.id}" aria-label="Load ${pickLabel} in Editor"` : selecting ? `data-select-output="${output.id}"` : `data-inspect-output="${output.id}"`}><img ${this.swarmImageAttributes(preview)} alt="${escapeHtml(output.prompt || "Swarm output")}" loading="lazy" decoding="async" /></button>${picking || selecting ? "" : `<button class="star-button ${output.starred ? "is-starred" : ""}" data-star="${output.id}" title="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}" aria-label="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}">${heartSvg}</button>`}</div>
         <div class="image-card-body">
           <b>${escapeHtml(prettyName(output.model) || "Swarm output")}</b>
           <p>${escapeHtml(output.prompt || output.sentPrompt || "No prompt recorded")}</p>
           <div class="card-meta"><span>${output.width || "?"}×${output.height || "?"}</span><span>seed ${output.seed ?? "?"}</span><span>${output.loras?.length ?? 0} LoRAs</span></div>
-          ${this.librarySelectMode ? `<div class="card-actions image-card-actions image-card-actions--placeholder" aria-hidden="true"><div class="image-card-action-buttons"><button class="icon-button image-card-action" disabled>${reuseSvg}</button><button class="icon-button image-card-action" disabled>${initImageSvg}</button><button class="icon-button image-card-action" disabled>${inpaintBrushSvg}</button><button class="icon-button image-card-action danger-icon" disabled>${trashSvg}</button></div><label class="image-card-folder-select">${folderSvg}<select disabled tabindex="-1">${this.store.state.folders.filter((folder) => folder.id !== folderIds.favorites).map((folder) => `<option ${folder.id === output.folderId ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}</select></label></div>` : `<div class="card-actions image-card-actions"><div class="image-card-action-buttons"><button class="icon-button image-card-action" data-reuse-output="${output.id}" title="Reuse settings" aria-label="Reuse settings">${reuseSvg}</button><button class="icon-button image-card-action" data-init-output="${output.id}" title="Use as init image" aria-label="Use as init image">${initImageSvg}</button><button class="icon-button image-card-action" data-inpaint-output="${output.id}" title="Inpaint" aria-label="Inpaint">${inpaintBrushSvg}</button><button class="icon-button image-card-action danger-icon" data-delete-output="${output.id}" title="Delete from Swarm history" aria-label="Delete from Swarm history">${trashSvg}</button></div><label class="image-card-folder-select" title="Move output to folder">${folderSvg}<select data-move-output="${output.id}" aria-label="Move output to folder">${this.store.state.folders.filter((folder) => folder.id !== folderIds.favorites).map((folder) => `<option value="${folder.id}" ${folder.id === output.folderId ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}</select></label></div>`}
+          ${picking ? "" : selecting ? `<div class="card-actions image-card-actions image-card-actions--placeholder" aria-hidden="true"><div class="image-card-action-buttons"><button class="icon-button image-card-action" disabled>${reuseSvg}</button><button class="icon-button image-card-action" disabled>${initImageSvg}</button><button class="icon-button image-card-action" disabled>${inpaintBrushSvg}</button><button class="icon-button image-card-action danger-icon" disabled>${trashSvg}</button></div><label class="image-card-folder-select">${folderSvg}<select disabled tabindex="-1">${this.store.state.folders.filter((folder) => folder.id !== folderIds.favorites).map((folder) => `<option ${folder.id === output.folderId ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}</select></label></div>` : `<div class="card-actions image-card-actions"><div class="image-card-action-buttons"><button class="icon-button image-card-action" data-reuse-output="${output.id}" title="Reuse settings" aria-label="Reuse settings">${reuseSvg}</button><button class="icon-button image-card-action" data-init-output="${output.id}" title="Use as init image" aria-label="Use as init image">${initImageSvg}</button><button class="icon-button image-card-action" data-inpaint-output="${output.id}" title="Inpaint" aria-label="Inpaint">${inpaintBrushSvg}</button><button class="icon-button image-card-action danger-icon" data-delete-output="${output.id}" title="Delete from Swarm history" aria-label="Delete from Swarm history">${trashSvg}</button></div><label class="image-card-folder-select" title="Move output to folder">${folderSvg}<select data-move-output="${output.id}" aria-label="Move output to folder">${this.store.state.folders.filter((folder) => folder.id !== folderIds.favorites).map((folder) => `<option value="${folder.id}" ${folder.id === output.folderId ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}</select></label></div>`}
         </div>
       </article>`;
   }
@@ -3949,9 +4004,9 @@ export class StudioApp {
             <button class="secondary-button" data-action="refresh-models">Refresh</button>
           </section>
           <section class="checkpoint-section ${this.checkpointsOpen ? "is-open" : ""}">
-            <button class="section-heading checkpoint-collapse" data-action="toggle-checkpoints" aria-expanded="${this.checkpointsOpen}" aria-controls="checkpoint-browser"><div><span class="panel-kicker">MODELS · ${this.models.length}</span><h2>Checkpoints</h2></div><span>${this.checkpointsOpen ? "⌃" : "⌄"}</span></button>
+            <button type="button" class="section-heading checkpoint-collapse" data-action="toggle-checkpoints" aria-expanded="${this.checkpointsOpen}" aria-controls="checkpoint-browser"><div><span class="panel-kicker">MODELS · ${this.models.length}</span><h2>Checkpoints</h2></div>${disclosureChevronSvg}</button>
             <div id="checkpoint-browser" ${this.checkpointsOpen ? "" : "hidden"}>
-            <div class="panel checkpoint-folder-toolbar"><button type="button" class="secondary-button lora-organizer-action" data-action="toggle-checkpoint-tree" aria-expanded="${this.checkpointFolderTreeOpen}" aria-controls="checkpoint-folder-navigator">${folderTreeSvg}<span>Folders</span></button><b class="model-folder-location">${escapeHtml(this.checkpointFolderPath || "Checkpoint root")} · ${visibleCheckpoints.length}</b>${this.modelFolderDepthMarkup("checkpoint")}</div>
+            <div class="panel checkpoint-folder-toolbar"><button type="button" class="secondary-button lora-organizer-action" data-action="toggle-checkpoint-tree" aria-expanded="${this.checkpointFolderTreeOpen}" aria-controls="checkpoint-folder-navigator">${folderTreeSvg}<span>Folders</span></button><b class="model-folder-location">${escapeHtml(this.checkpointFolderPath || "Checkpoint root")} · ${visibleCheckpoints.length}</b><div class="checkpoint-depth-control">${this.modelFolderDepthMarkup("checkpoint")}</div></div>
             <div class="lora-library-browser">${this.modelFolderTreeMarkup("checkpoint")}
             ${this.checkpointsOpen ? ((this.models.length || this.loras.length) ? `<div class="model-grid"><article class="model-card orphan-model-card ${this.loraOrphanMode ? "is-active" : ""}"><div class="model-preview orphan-model-preview"><span>∅</span></div><div class="model-card-copy"><span class="tiny-tag">LIBRARY VIEW</span><h3>Orphaned LoRAs</h3><p>${orphaned.length} LoRA${orphaned.length === 1 ? "" : "s"} match none of the installed checkpoints.</p></div><button class="ghost-button" data-action="show-orphaned-loras">${this.loraOrphanMode ? "Viewing" : "Browse"}</button></article>${visibleCheckpoints.map((model) => this.modelCard(model, false)).join("")}</div>` : this.inventoryEmpty("Connect to browse checkpoints directly from SwarmUI.")) : ""}
             ${this.checkpointsOpen && this.models.length && !visibleCheckpoints.length ? this.inventoryEmpty("No checkpoints at this folder depth.") : ""}
@@ -4936,9 +4991,12 @@ export class StudioApp {
       event.stopPropagation();
       void this.useOutputAsInit(button.dataset.initOutput ?? "");
     }));
+    this.root.querySelectorAll<HTMLElement>("[data-edit-output]").forEach(button => button.addEventListener("click", () => {
+      this.openOutputInEditor(button.dataset.editOutput ?? "");
+    }));
     this.root.querySelectorAll<HTMLElement>("[data-inpaint-output]").forEach((button) => button.addEventListener("click", (event) => {
       event.stopPropagation();
-      void this.openInpaintForOutput(button.dataset.inpaintOutput ?? "");
+      this.openOutputInEditor(button.dataset.inpaintOutput ?? "", true);
     }));
     this.root.querySelectorAll<HTMLElement>("[data-copy-resolved-prompt]").forEach((button) => button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -5048,12 +5106,7 @@ export class StudioApp {
       event.preventDefault();
       void this.savePresetFromEditor(event.currentTarget as HTMLFormElement);
     });
-    this.root.querySelectorAll<HTMLElement>("[data-action='close-inpaint']").forEach((element) => element.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest("[data-inpaint-panel]") && !(event.target as HTMLElement).closest("[data-action='close-inpaint']")) return;
-      this.closeInpaintEditor();
-    }));
     const inpaintPanel = this.root.querySelector<HTMLElement>("[data-inpaint-panel]");
-    inpaintPanel?.addEventListener("click", (event) => event.stopPropagation());
     this.root.querySelector<HTMLElement>("[data-action='open-inpaint-settings']")?.addEventListener("click", () => {
       this.inpaintSettingsOpen = true;
       this.inpaintHelpOpen = false;
@@ -5215,6 +5268,7 @@ export class StudioApp {
     inpaintPanel?.addEventListener("keydown", (event) => {
       const target = event.target as HTMLElement;
       const editingText = Boolean(target.closest("textarea,input,select"));
+      if (editingText) return;
       const modifier = event.ctrlKey || event.metaKey;
       if (modifier && event.key.toLowerCase() === "z") {
         event.preventDefault();
@@ -5230,7 +5284,6 @@ export class StudioApp {
         this.render();
         return;
       }
-      if (editingText) return;
       const key = event.key.toLowerCase();
       const tool = key === "b" ? "paint" : key === "e" ? "erase" : key === "r" ? "rect" : key === "l" ? "lasso" : key === "h" ? "pan" : "";
       if (tool) {
@@ -5252,6 +5305,7 @@ export class StudioApp {
 
   private bindViewEvents(): void {
     if (this.view === "create") this.bindCreateEvents();
+    if (this.view === "editor") void this.bindImageEditor().catch(error => this.notify(String(error), "error"));
     if (this.view === "expressions") void this.bindExpressionStudio().catch((error) => this.notify(`Could not open Expression Studio: ${String(error)}`, "error"));
     if (this.view === "library") this.bindLibraryEvents();
     if (this.view === "identities") this.bindIdentityEvents();
@@ -5261,22 +5315,162 @@ export class StudioApp {
     if (this.view === "settings") this.bindSettingsEvents();
   }
 
+  private async probeComfyNodes(): Promise<Record<string, NodeSchema>> {
+    if (!this.connected) throw new Error("Connect to Swarm first.");
+    const client = this.client;
+    const url = client.imageUrl("ComfyBackendDirect/object_info");
+    const body = await runtime.getText(url, client.authToken);
+    if (client !== this.client) throw new Error("The Swarm connection changed during the check. Try again.");
+    let schema: unknown;
+    try { schema = JSON.parse(body); }
+    catch { throw new Error("Swarm did not return JSON for its ComfyUI node inventory. Check direct Comfy access."); }
+    if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+      throw new Error("Swarm did not return its ComfyUI node inventory. Check direct Comfy access.");
+    }
+    if ("error" in schema) throw new Error(String(schema.error));
+    return schema as Record<string, NodeSchema>;
+  }
+
+  private imageProcessingHost(): ProcessingHost {
+    return {
+      connected: () => this.connected,
+      inventory: async () => {
+        const schema = await this.probeComfyNodes();
+        return {
+          upscaleModels: nodeChoices(schema, "UpscaleModelLoader", "model_name"),
+          backgroundReady: ["RemoveBackground", "InvertMask", "JoinImageWithAlpha"].every(node => Boolean(schema[node]))
+            && nodeChoices(schema, "LoadBackgroundRemovalModel", "bg_removal_name").includes(BIREFNET_MODEL),
+        };
+      },
+      listWorkflows: () => this.client.listComfyWorkflows(),
+      savedWorkflow: name => this.client.readComfyWorkflow(name),
+    };
+  }
+
+  private async renderToolImage(
+    request: SwarmGenerationRequest, loras: ExpressionLora[], progress: (value: number) => void,
+    label: string, stage?: ProcessingStage,
+  ) {
+    if (!this.connected || this.generating) throw new Error("Swarm is disconnected or another generation is running.");
+    const client = this.client;
+    const submitted = applyExpressionLoras(request, loras);
+    const normalized = normalizeGenerationRequest({ ...submitted, model: submitted.model || undefined } as SwarmGenerationRequest, this.params).request;
+    let finalMetadata = "";
+    this.addLog(`${label} · ${request.model || "Comfy workflow"} · seed ${request.seed}`, "info", "api");
+    const images = await client.generateStream(normalized, event => {
+      const current = event.gen_progress?.current_percent;
+      const overall = event.gen_progress?.overall_percent;
+      const fraction = Number(stage ? overall ?? current : current ?? overall);
+      if (Number.isFinite(fraction)) progress(clamp(fraction > 1 ? fraction / 100 : fraction, 0, 1));
+      const metadata = this.metadataFromGenerationPayload(event);
+      if (metadata) finalMetadata = metadata;
+    });
+    const result = images[0];
+    if (!result?.image) throw new Error(`Swarm returned no image for ${label.toLowerCase()}.`);
+    const path = result.image;
+    const url = client.imageUrl(path);
+    const image = url.startsWith("data:") ? url : await runtime.fetchDataUrl(url, client.authToken);
+    const decoded = await readProcessingImage(image);
+    if (this.client !== client) throw new Error("The Swarm connection changed during generation.");
+    const metadata = result.metadata || finalMetadata;
+    const seed = this.resolvedSeedFor(result, metadata, request.seed);
+    if (request.donotsave) return {
+      ...decoded, path: "", seed, id: "", name: `${label}.png`,
+      model: request.model, prompt: request.prompt, negativeprompt: request.negativeprompt,
+    };
+    const requestSummary = Object.fromEntries(Object.entries(normalized).filter(([key, value]) =>
+      key !== "comfyworkflowraw" && key !== "comfyworkflowparammetadata" && !(typeof value === "string" && value.startsWith("data:image/"))));
+    const record = this.store.addOutput({
+      url, swarmPath: path.startsWith("data:") ? "" : path,
+      swarmSourcePath: path.startsWith("data:") ? "" : this.swarmMutationPath(path),
+      prompt: request.prompt, sentPrompt: submitted.prompt, negativePrompt: request.negativeprompt,
+      model: request.model, width: decoded.width, height: decoded.height, seed, metadata,
+      processingStage: stage,
+      request: { ...requestSummary, width: decoded.width, height: decoded.height },
+      loras: cloneStack(loras), presets: [],
+    });
+    const count = this.root.querySelector("[data-output-count]");
+    if (count) count.textContent = `${this.store.state.outputs.length} images`;
+    return {
+      ...decoded, path, seed, id: record.id, name: path.startsWith("data:") ? `${label}.png` : path.split(/[\\/]/).pop() || `${label}.png`,
+      model: record.model, prompt: record.prompt, negativeprompt: record.negativePrompt,
+    };
+  }
+
+  private openOutputInEditor(id: string, inpaint = false): void {
+    if (!this.outputById(id)) return;
+    if (this.imageEditor?.busy || this.inpaintApplyingResult || this.inpaintAwaitingResult) {
+      this.notify("Wait for the current edit to finish.", "info");
+      return;
+    }
+    this.pendingEditorImage = { id, inpaint };
+    if (this.editorPickingImage) this.libraryFiltersOpen = false;
+    this.navigateToView("editor");
+  }
+
+  private async bindImageEditor(): Promise<void> {
+    const { ImageEditor } = await import("./expressions/editor");
+    this.imageEditor ??= new ImageEditor({
+      ...this.imageProcessingHost(),
+      busy: () => this.generating || Boolean(this.expressionStudio?.busy),
+      checkpoint: () => this.store.state.draft.model,
+      browseLibrary: () => {
+        this.editorPickingImage = true;
+        this.libraryFiltersOpen = false;
+        this.navigateToView("library");
+      },
+      inpaintBusy: () => this.inpaintAwaitingResult || this.inpaintApplyingResult,
+      load: async id => {
+        const output = this.outputById(id);
+        if (!output) throw new Error("This Library image is unavailable.");
+        const url = this.outputImageUrl(output);
+        const image = url.startsWith("data:") ? url : await runtime.fetchDataUrl(url, this.client.authToken);
+        return {
+          ...await readProcessingImage(image), id: output.id,
+          name: output.swarmPath.split(/[\\/]/).pop() || "Swarm output.png",
+          model: output.model, seed: output.seed, prompt: output.prompt, negativeprompt: output.negativePrompt,
+        };
+      },
+      generate: (request, progress, stage) => this.renderToolImage(request, [], progress, stage ? processingLabels[stage] : "Editor generation", stage),
+      generationRequest: prompt => {
+        const draft = this.store.state.draft;
+        if (!prompt || !draft.model) throw new Error("Enter a prompt and choose a checkpoint in Create.");
+        return {
+          prompt, negativeprompt: draft.negativePrompt, model: draft.model,
+          width: draft.width, height: draft.height, steps: draft.steps, cfgscale: draft.cfgScale, seed: draft.seed,
+          sampler: draft.sampler || undefined, scheduler: draft.scheduler || undefined, images: 1, batchsize: 1, imageformat: "PNG",
+        };
+      },
+      inpaint: source => this.setEditorInpaintSource(source),
+      save: async (image, name) => {
+        const ext = /^data:image\/(jpeg|webp);/i.exec(image)?.[1] ?? "png";
+        await runtime.saveDataUrl(image, `${name.replace(/\.[^.]+$/, "")}.${ext === "jpeg" ? "jpg" : ext}`);
+      },
+    });
+    const host = this.root.querySelector<HTMLElement>("#image-editor-host");
+    if (!host) return;
+    this.imageEditor.mount(host, this.root.querySelector<HTMLElement>("[data-inpaint-panel]"));
+    const pending = this.pendingEditorImage;
+    this.pendingEditorImage = null;
+    if (pending) await this.imageEditor.loadOutput(pending.id, pending.inpaint);
+  }
+
   private async bindExpressionStudio(): Promise<void> {
     const host = this.root.querySelector<HTMLElement>("#expression-studio-host");
     if (!host) return;
     const { ExpressionStudio } = await import("./expressions/studio");
+    if (!host.isConnected) return;
     this.expressionStudio ??= new ExpressionStudio({
       models: () => this.models,
       params: () => this.params,
-      busy: () => this.generating,
+      busy: () => this.generating || Boolean(this.imageEditor?.busy),
+      processing: this.imageProcessingHost(),
       connected: () => this.connected,
       notify: (message, error) => { this.addLog(message, error ? "error" : "info", "studio"); this.notify(message, error ? "error" : "info"); },
       save: async (data, name) => { await runtime.saveDataUrl(data, name); },
-      probe: async () => {
-        if (!this.connected) throw new Error("Connect to Swarm first.");
-        const url = this.client.imageUrl("ComfyBackendDirect/object_info");
-        return JSON.parse(await runtime.getText(url, this.store.state.connection.authToken)) as Record<string, NodeSchema>;
-      },
+      probe: () => this.probeComfyNodes(),
+      log: (message, error) => this.addLog(message, error ? "error" : "info", "studio"),
+      openAnimaGuide: runtime.kind === "tauri" ? openNativeAnimaGuide : undefined,
       captureLoras: (model) => {
         const checkpoint = this.models.find((item) => item.name === model);
         return cloneStack(this.store.state.draft.loras.filter((item) => item.enabled)).map((item) => {
@@ -5287,26 +5481,10 @@ export class StudioApp {
           return { ...item, name, triggerPhrase: String(lora?.trigger_phrase ?? "") };
         });
       },
-      generate: async (request, loras, progress) => {
-        if (!this.connected || this.generating) throw new Error("Swarm is disconnected or another generation is running.");
-        request = applyExpressionLoras(request, loras);
-        const normalized = normalizeGenerationRequest(request, this.params).request;
-        let finalMetadata = "";
-        this.addLog(`Expression render: ${request.model} · seed ${request.seed} · ${request.width}×${request.height}`, "info", "api");
-        const images = await this.client.generateStream(normalized, (event) => {
-          const fraction = Number(event.gen_progress?.current_percent ?? event.gen_progress?.overall_percent ?? 0);
-          progress(Math.max(0, Math.min(1, fraction > 1 ? fraction / 100 : fraction)));
-          const metadata = this.metadataFromGenerationPayload(event);
-          if (metadata) finalMetadata = metadata;
-        });
-        const output = images[0];
-        if (!output?.image) throw new Error("Swarm returned no expression image.");
-        const path = output.image;
-        const source = this.client.imageUrl(path);
-        const image = source.startsWith("data:") ? source : await runtime.fetchDataUrl(source, this.store.state.connection.authToken);
-        const metadata = output.metadata || finalMetadata;
-        const seed = this.resolvedSeedFor(output, metadata, request.seed);
-        this.store.addOutput({ url: source, swarmPath: path.startsWith("data:") ? "" : path, swarmSourcePath: path.startsWith("data:") ? "" : this.swarmMutationPath(path), prompt: request.prompt, sentPrompt: request.prompt, negativePrompt: request.negativeprompt, model: request.model, width: request.width, height: request.height, seed, metadata: metadata || "", request: { ...normalized, promptimages: undefined, initimage: undefined, comfyworkflowraw: undefined }, loras: cloneStack(loras), presets: [] });
+      generate: async (request, loras, progress, stage) => {
+        const { image, path, seed } = await this.renderToolImage(
+          request, loras, progress, stage ? processingLabels[stage] : "Expression render", stage,
+        );
         return { image, path, seed };
       },
     });
@@ -6908,7 +7086,7 @@ export class StudioApp {
   }
 
   private async generate(draftOverride?: GenerationDraft, options: { allowPendingApprovals?: boolean; focusNewestApproval?: boolean } = {}): Promise<void> {
-    if (this.generating || this.expressionStudio?.busy) return;
+    if (this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) return;
     if (this.pendingGenerationApprovals.length && !options.allowPendingApprovals) {
       this.notify("Save or review the pending result before starting another batch.", "info");
       return;
@@ -7127,6 +7305,11 @@ export class StudioApp {
     const params = this.metadataParams(output.metadata);
     const request = output.request ?? {};
     const current = this.store.state.draft;
+    if (output.processingStage) return {
+      model: output.model || current.model,
+      width: output.width,
+      height: output.height,
+    };
     const get = (...keys: string[]) => this.metadataValue(params, ...keys);
     const width = asNumber(String(get("width") ?? request.width ?? output.width ?? current.width), current.width);
     const height = asNumber(String(get("height") ?? request.height ?? output.height ?? current.height), current.height);
@@ -7145,12 +7328,12 @@ export class StudioApp {
       "loras", "loraweights", "initimage", "initimagecreativity", "maskimage", "maskbehavior",
       "maskshrinkgrow", "maskblur", "maskgrow", "maskcompositeunthresholded",
       "initimagerecompositemask", "useinpaintingencode", "nointernalspecialhandling",
-      "forwardswarmdata", "forwardrawbackenddata", "wildcardseed", "studioregionalprompt"
+      "forwardswarmdata", "forwardrawbackenddata", "wildcardseed", "studioregionalprompt", "comfyworkflowraw", "comfyworkflowparammetadata"
     ]);
     const source = Object.keys(params).length ? params : request;
     const extraParams = Object.fromEntries(Object.entries(source).filter(([key]) => {
       const normalized = normalize(key);
-      return !blocked.has(normalized) && !normalized.includes("customworkflow") && normalized !== "workflow";
+      return !blocked.has(normalized) && !normalized.includes("customworkflow") && !normalized.startsWith("comfyrawworkflowinput") && normalized !== "workflow";
     }));
     const model = String(get("model") ?? output.model ?? current.model);
     return {
@@ -7192,11 +7375,12 @@ export class StudioApp {
       "initimage", "initimagecreativity", "initimageresettonorm", "initimagenoise",
       "maskimage", "maskbehavior", "maskshrinkgrow", "maskblur", "maskgrow",
       "maskcompositeunthresholded", "initimagerecompositemask", "useinpaintingencode",
-      "nointernalspecialhandling", "forwardswarmdata", "forwardrawbackenddata"
+      "nointernalspecialhandling", "forwardswarmdata", "forwardrawbackenddata",
+      "comfyworkflowraw", "comfyworkflowparammetadata"
     ]);
     for (const key of Object.keys(extras)) {
       const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "");
-      if (blocked.has(normalized) || normalized.includes("customworkflow") || normalized === "workflow") delete extras[key];
+      if (blocked.has(normalized) || normalized.includes("customworkflow") || normalized.startsWith("comfyrawworkflowinput") || normalized === "workflow") delete extras[key];
     }
     return extras;
   }
@@ -7279,59 +7463,70 @@ export class StudioApp {
 
   private async applyApprovedInpaintResult(): Promise<void> {
     const record = this.inpaintPendingResultRecord;
-    if (!record) return;
-    this.inpaintSourceId = record.id;
-    this.inpaintSourceUrl = this.outputImageUrl(record);
-    this.inpaintSourceDataUrl = "";
-    this.inpaintSourceName = prettyName(record.swarmPath) || this.inpaintSourceName;
-    this.inpaintSourceOutputContext = this.buildInpaintSourceContext(record);
-    this.inpaintPrompt = record.prompt || this.inpaintPrompt;
-    this.inpaintNegativePrompt = record.negativePrompt || this.inpaintNegativePrompt;
-    this.clearInpaintReview();
+    if (!record || this.inpaintApplyingResult) return;
+    this.inpaintApplyingResult = true;
+    this.root.querySelectorAll<HTMLButtonElement>("[data-action='apply-inpaint-result'], [data-action='dismiss-inpaint-result']")
+      .forEach(button => { button.disabled = true; });
     try {
-      const dataUrl = this.inpaintSourceUrl.startsWith("data:") ? this.inpaintSourceUrl : await runtime.fetchDataUrl(this.inpaintSourceUrl, this.store.state.connection.authToken);
-      if (!/^data:image\//i.test(dataUrl)) throw new Error("The edited output route returned non-image data.");
+      const url = this.outputImageUrl(record);
+      const dataUrl = url.startsWith("data:") ? url : await runtime.fetchDataUrl(url, this.client.authToken);
+      const processed = await readProcessingImage(dataUrl);
+      this.inpaintSourceId = record.id;
+      this.inpaintSourceUrl = url;
       this.inpaintSourceDataUrl = dataUrl;
+      this.inpaintSourceName = prettyName(record.swarmPath) || this.inpaintSourceName;
+      this.inpaintSourceOutputContext = this.buildInpaintSourceContext(record);
+      this.inpaintPrompt = record.prompt || this.inpaintPrompt;
+      this.inpaintNegativePrompt = record.negativePrompt || this.inpaintNegativePrompt;
+      this.inpaintImageElement = null;
+      this.inpaintMaskCanvas = null;
+      this.inpaintProcessedMaskCanvas = null;
+      this.resetInpaintMaskSession();
+      this.clearInpaintReview();
+      this.imageEditor?.useInpaintResult({
+        ...processed, id: record.id, name: this.inpaintSourceName,
+        model: record.model, seed: record.seed, prompt: record.prompt, negativeprompt: record.negativePrompt,
+      });
+      this.notify("Approved edit loaded as the new inpaint base.", "success");
     } catch (error) {
-      this.addLog(`Could not prefetch the approved inpaint result: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
+      this.notify(`Could not load the edited image: ${error instanceof Error ? error.message : String(error)}`, "error");
+    } finally {
+      this.inpaintApplyingResult = false;
+      this.render();
     }
-    this.inpaintImageElement = null;
-    this.inpaintMaskCanvas = null;
-    this.inpaintProcessedMaskCanvas = null;
-    this.resetInpaintMaskSession();
-    this.notify("Approved edit loaded as the new inpaint base.", "success");
-    this.render();
   }
 
-  private closeInpaintEditor(): void {
-    this.inpaintOpen = false;
-    this.inpaintAwaitingResult = false;
-    window.clearTimeout(this.inpaintMaskShapeTimer);
-    this.inpaintMaskShapeTimer = 0;
-    this.inpaintResizeObserver?.disconnect();
-    this.inpaintResizeObserver = null;
-    this.inpaintSourceOutputContext = null;
-    this.inpaintSettingsOpen = false;
-    this.inpaintHelpOpen = false;
-    this.clearInpaintReview();
-    this.render();
-  }
-
-  private async openInpaintForOutput(id: string): Promise<void> {
-    const output = this.outputById(id);
-    if (!output) return;
+  private setEditorInpaintSource(source: EditorImage | null): void {
+    if (!source) {
+      if (!this.inpaintOpen) return;
+      this.inpaintOpen = false;
+      this.inpaintSourceDataUrl = "";
+      this.inpaintSourceUrl = "";
+      this.inpaintImageElement = null;
+      this.inpaintMaskCanvas = null;
+      this.inpaintProcessedMaskCanvas = null;
+      this.resetInpaintMaskSession();
+      window.clearTimeout(this.inpaintMaskShapeTimer);
+      this.inpaintMaskShapeTimer = 0;
+      this.clearInpaintReview();
+      if (this.view === "editor") this.render();
+      return;
+    }
+    const id = source.id || "editor-upload";
+    if (this.inpaintOpen && this.inpaintSourceId === id && this.inpaintSourceDataUrl === source.image) return;
+    const output = source.id ? this.outputById(source.id) : null;
     this.inpaintOpen = true;
-    this.inpaintSourceId = output.id;
-    this.inpaintSourceUrl = this.outputImageUrl(output);
-    this.inpaintSourceDataUrl = "";
-    this.inpaintSourceName = prettyName(output.swarmPath) || prettyName(output.model) || "Swarm output";
-    this.inpaintSourceOutputContext = this.buildInpaintSourceContext(output);
+    this.inpaintSourceId = id;
+    this.inpaintSourceUrl = source.image;
+    this.inpaintSourceDataUrl = source.image;
+    this.inpaintSourceName = source.name;
+    this.inpaintSourceOutputContext = output ? this.buildInpaintSourceContext(output) : { width: source.width, height: source.height };
     this.inpaintSettingsOpen = false;
     this.inpaintHelpOpen = false;
     this.clearInpaintReview();
     this.resetInpaintGenerationConfigFromSource();
-    this.inpaintPrompt = output.prompt || output.sentPrompt || this.store.state.draft.prompt || "";
-    this.inpaintNegativePrompt = output.negativePrompt || this.store.state.draft.negativePrompt || "";
+    this.inpaintPrompt = output?.prompt || output?.sentPrompt || this.store.state.draft.prompt || "";
+    this.inpaintNegativePrompt = output?.negativePrompt || this.store.state.draft.negativePrompt || "";
     this.inpaintCreativity = clamp(this.store.state.draft.initImageCreativity || 0.5, 0, 1);
     this.inpaintEngine = "simple";
     this.inpaintBrushSize = 36;
@@ -7356,24 +7551,14 @@ export class StudioApp {
     this.inpaintProcessedMaskDirty = true;
     this.inpaintImportedMaskDataUrl = "";
     this.inpaintImportedMaskElement = null;
-    this.store.updateUi({ selectedOutputId: "" });
-    this.render();
-    try {
-      const dataUrl = this.inpaintSourceUrl.startsWith("data:") ? this.inpaintSourceUrl : await runtime.fetchDataUrl(this.inpaintSourceUrl, this.store.state.connection.authToken);
-      if (!/^data:image\//i.test(dataUrl)) throw new Error("The source route returned non-image data.");
-      this.inpaintSourceDataUrl = dataUrl;
-      if (this.inpaintOpen && this.inpaintSourceId === output.id) this.render();
-    } catch (error) {
-      this.addLog(`Could not prefetch the inpaint source image: ${error instanceof Error ? error.message : String(error)}`, "warn", "api");
-      if (this.inpaintOpen && this.inpaintSourceId === output.id) this.render();
-    }
+    if (this.view === "editor") this.render();
   }
 
   private ensureInpaintImage(): void {
     if (!this.inpaintOpen || !this.inpaintSourceUrl) return;
     // Canvas always consumes an in-memory/data image. On desktop this prevents the abandoned
     // raw WebView request from racing the Rust bridge; on mobile it also avoids CORS/relay
-    // differences between <img> and canvas security rules. openInpaintForOutput prefetches it.
+    // differences between <img> and canvas security rules. Editor supplies the decoded source.
     const imageSource = this.inpaintSourceDataUrl || (/^(data:|blob:)/i.test(this.inpaintSourceUrl) ? this.inpaintSourceUrl : "");
     if (!imageSource) return;
     if (this.inpaintImageElement?.dataset.studioSource === imageSource && this.inpaintImageElement.complete && this.inpaintImageElement.naturalWidth) {
@@ -7391,7 +7576,7 @@ export class StudioApp {
     image.decoding = "async";
     image.dataset.studioSource = imageSource;
     image.onload = () => {
-      if (!this.inpaintOpen || this.inpaintSourceId !== requestedSourceId) return;
+      if (!this.inpaintOpen || this.inpaintSourceId !== requestedSourceId || this.inpaintSourceDataUrl !== imageSource) return;
       this.inpaintImageElement = image;
       this.inpaintMaskCanvas = document.createElement("canvas");
       this.inpaintMaskCanvas.width = image.naturalWidth;
@@ -7947,7 +8132,7 @@ export class StudioApp {
   }
 
   private async generateInpaint(): Promise<void> {
-    if (this.generating || this.expressionStudio?.busy) return;
+    if (this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) return;
     if (!this.inpaintPrompt.trim()) {
       this.notify("Give the masked area a prompt first.", "error");
       return;
@@ -7968,7 +8153,7 @@ export class StudioApp {
       this.notify(`Could not export the painted mask. ${message}`, "error");
       return;
     }
-    const draft = this.sourceDraftForInpaint(this.readDraftFromForm());
+    const draft = this.sourceDraftForInpaint(this.view === "create" ? this.readDraftFromForm() : this.store.state.draft);
     if (!draft.model) {
       this.notify("Pick a checkpoint first.", "error");
       return;
@@ -8578,10 +8763,11 @@ export class StudioApp {
       if (model) this.libraryModelFilter = model.value;
       if (star) this.libraryStarFilter = ["starred", "unstarred"].includes(star.value) ? star.value as typeof this.libraryStarFilter : "all";
     };
-    const rerenderBrowsePreservingScroll = () => {
-      const scroll = this.root.querySelector<HTMLElement>(".library-browse-scroll");
-      if (scroll) this.libraryBrowseScrollTop = scroll.scrollTop;
+    const rerenderBrowse = (control?: HTMLElement) => {
+      const key = ["data-library-modal-folder", "data-library-date-folder", "data-library-date-preset"].find(name => control?.hasAttribute(name));
+      const value = key ? control?.getAttribute(key) : null;
       this.render();
+      if (key && value != null) this.root.querySelector<HTMLElement>(`[${key}="${CSS.escape(value)}"]`)?.focus({ preventScroll: true });
     };
     const selectOutput = (id: string, shiftRange: boolean) => {
       if (!id) return;
@@ -8617,21 +8803,22 @@ export class StudioApp {
       return failures;
     };
 
+    this.root.querySelector<HTMLElement>("[data-action='cancel-editor-picker']")?.addEventListener("click", () => {
+      this.libraryFiltersOpen = false;
+      this.navigateToView("editor");
+    });
     this.root.querySelectorAll<HTMLElement>("[data-action='sync-swarm-history']").forEach((button) => button.addEventListener("click", () => void this.syncSwarmHistory()));
     this.root.querySelector<HTMLElement>("[data-action='delete-nonfavorite-outputs']")?.addEventListener("click", () => void this.deleteNonFavoriteOutputs());
     this.root.querySelector<HTMLElement>("[data-action='load-more-library']")?.addEventListener("click", () => { this.libraryRenderLimit += 240; this.render(); });
-    this.root.querySelectorAll<HTMLElement>("[data-action='open-library-filters']").forEach((button) => button.addEventListener("click", () => { this.libraryFiltersOpen = true; this.libraryBrowseScrollTop = 0; this.render(); }));
+    this.root.querySelectorAll<HTMLElement>("[data-action='open-library-filters']").forEach((button) => button.addEventListener("click", () => { this.libraryFiltersOpen = true; this.render(); }));
 
     this.root.querySelectorAll<HTMLElement>("[data-action='close-library-filters']").forEach((element) => element.addEventListener("click", (event) => {
       if (element.classList.contains("download-backdrop") && event.target !== element) return;
       this.libraryFiltersOpen = false;
-      this.libraryBrowseScrollTop = 0;
       this.render();
     }));
     this.root.querySelector<HTMLElement>("[data-action='toggle-library-dock']")?.addEventListener("click", () => {
       if (!window.matchMedia("(min-width: 761px)").matches) return;
-      const scroll = this.root.querySelector<HTMLElement>(".library-browse-scroll");
-      if (scroll) this.libraryBrowseScrollTop = scroll.scrollTop;
       this.libraryFiltersDocked = !this.libraryFiltersDocked;
       try { localStorage.setItem("swarm-studio-library-browse-docked", String(this.libraryFiltersDocked)); } catch {}
       this.render();
@@ -8640,7 +8827,7 @@ export class StudioApp {
       captureBrowseInputs();
       [this.libraryDateFrom, this.libraryDateTo] = this.libraryDatePresetRange(button.dataset.libraryDatePreset ?? "all");
       resetMounted();
-      rerenderBrowsePreservingScroll();
+      rerenderBrowse(button);
     }));
     this.root.querySelectorAll<HTMLElement>("[data-library-date-folder]").forEach((button) => button.addEventListener("click", () => {
       captureBrowseInputs();
@@ -8648,14 +8835,14 @@ export class StudioApp {
       this.libraryDateFrom = date;
       this.libraryDateTo = date;
       resetMounted();
-      rerenderBrowsePreservingScroll();
+      rerenderBrowse(button);
     }));
     this.root.querySelectorAll<HTMLElement>("[data-library-modal-folder]").forEach((button) => button.addEventListener("click", () => {
       captureBrowseInputs();
       this.libraryFolder = button.dataset.libraryModalFolder ?? "all";
       this.store.updateUi({ libraryFolder: this.libraryFolder });
       resetMounted();
-      rerenderBrowsePreservingScroll();
+      rerenderBrowse(button);
     }));
     this.root.querySelectorAll<HTMLElement>("[data-action='new-folder']").forEach((button) => button.addEventListener("click", () => {
       captureBrowseInputs();
@@ -8665,8 +8852,19 @@ export class StudioApp {
       this.libraryFolder = folder.id;
       this.store.updateUi({ libraryFolder: folder.id });
       resetMounted();
-      rerenderBrowsePreservingScroll();
+      rerenderBrowse();
     }));
+    this.root.querySelector<HTMLElement>("[data-delete-library-folder]")?.addEventListener("click", (event) => {
+      const id = (event.currentTarget as HTMLElement).dataset.deleteLibraryFolder;
+      const folder = this.store.state.folders.find((item) => item.id === id);
+      if (!folder || folder.id === folderIds.unfiled || folder.id === folderIds.favorites) return;
+      if (!window.confirm(`Delete Studio folder “${folder.name}”? Any images and identities inside will move to Unfiled.`)) return;
+      captureBrowseInputs();
+      this.store.removeFolder(folder.id);
+      this.libraryFolder = this.store.state.ui.libraryFolder;
+      resetMounted();
+      rerenderBrowse(this.root.querySelector<HTMLElement>('[data-library-modal-folder="all"]') ?? undefined);
+    });
     this.root.querySelector<HTMLElement>("[data-action='apply-library-filters']")?.addEventListener("click", () => {
       this.librarySearch = this.root.querySelector<HTMLInputElement>("#library-search-modal")?.value ?? this.librarySearch;
       this.libraryDateFrom = this.root.querySelector<HTMLInputElement>("#library-date-from")?.value ?? this.libraryDateFrom;

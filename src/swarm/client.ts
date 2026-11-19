@@ -1,6 +1,7 @@
 import { runtime } from "../runtime";
 import { historyListingLimit } from "../library/cleanup";
 import { studioSwarmRelayUrl } from "../runtime/relay";
+import { readSavedProcessingWorkflow, type SavedProcessingWorkflow } from "../expressions/processing";
 import type {
   SwarmApiErrorShape,
   SwarmGenerationEvent,
@@ -279,6 +280,16 @@ export class SwarmClient {
 
   async generate(request: SwarmGenerationRequest): Promise<SwarmGenerationResponse> {
     return this.call<SwarmGenerationResponse>("GenerateText2Image", request as Record<string, unknown>);
+  }
+
+  async listComfyWorkflows(): Promise<string[]> {
+    const payload = await this.call<SwarmApiErrorShape & { workflows?: { name?: string }[] }>("ComfyListWorkflows", {});
+    return (payload.workflows ?? []).flatMap(item => typeof item?.name === "string" && item.name ? [item.name] : []);
+  }
+
+  async readComfyWorkflow(name: string): Promise<SavedProcessingWorkflow> {
+    const payload = await this.call<SwarmApiErrorShape & { result?: { custom_params?: unknown } }>("ComfyReadWorkflow", { name });
+    return readSavedProcessingWorkflow(payload.result?.custom_params);
   }
 
   async addImageToHistory(image: string, rawInput: Record<string, unknown>): Promise<SwarmGenerationResponse> {

@@ -101,6 +101,18 @@ try {
 
     await page.evaluate(()=>show('models'));
     const checkpoints=page.locator('.checkpoint-section'),loras=page.locator('.lora-library-section');
+    const depthControl=checkpoints.locator('.checkpoint-depth-control');
+    const depthInput=depthControl.getByRole('spinbutton',{name:'Checkpoint folder depth'});
+    assert.equal(await depthInput.getAttribute('aria-describedby'),'checkpoint-depth-help');
+    assert.match(await depthControl.locator('#checkpoint-depth-help').textContent(),/one level below/);
+    const checkpointDisclosure=checkpoints.locator('[data-action="toggle-checkpoints"]');
+    const chevron=checkpointDisclosure.locator('svg.studio-menu-chevron');
+    assert.equal(await chevron.locator('path').getAttribute('d'),await loras.locator('.studio-menu-trigger .studio-menu-chevron path').first().getAttribute('d'));
+    await checkpointDisclosure.click();
+    assert.equal(await checkpointDisclosure.getAttribute('aria-expanded'),'false');
+    assert.equal(await chevron.evaluate(svg=>getComputedStyle(svg).transform),'none');
+    await checkpointDisclosure.click();
+    assert.equal(await checkpointDisclosure.getAttribute('aria-expanded'),'true');
     await checkpoints.getByRole('spinbutton',{name:'Checkpoint folder depth'}).fill('0');
     await checkpoints.getByRole('spinbutton',{name:'Checkpoint folder depth'}).press('Tab');
     await page.waitForFunction(()=>document.querySelectorAll('.checkpoint-section .model-card:not(.orphan-model-card)').length===1);

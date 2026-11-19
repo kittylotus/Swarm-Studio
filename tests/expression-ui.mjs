@@ -19,7 +19,11 @@ window.studio = new ExpressionStudio({
 });
 await window.studio.mount(document.querySelector('#expression-studio-host'));
 const canvas=document.createElement('canvas');canvas.width=32;canvas.height=32;
-if (!window.studio.project.reference) window.studio.project={...defaultSheet(),model:'portrait.safetensors',reference:canvas.toDataURL()};
+if (!window.studio.project.reference) {
+    const sheet = defaultSheet();
+    sheet.refine.mode = sheet.backgroundRemoval.mode = 'off';
+    window.studio.project={...sheet,model:'portrait.safetensors',reference:canvas.toDataURL()};
+}
 window.studio.draw();window.ready=true;
 </script></body></html>`;
 const server = await createServer({ cacheDir:'test-results/expressions-vite-cache',server: { host: '127.0.0.1', port: 0,strictPort:false }, plugins: [{ name: 'expression-contract-fixture', configureServer(server) {

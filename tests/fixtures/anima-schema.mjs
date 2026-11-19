@@ -1,6 +1,7 @@
 export const node = (required, optional) => ({ input: { required: Object.fromEntries(Object.entries(required).map(([key, value]) => [key, Array.isArray(value) ? [value] : [value, { default: value === 'FLOAT' ? 1 : undefined }]])), optional: Object.fromEntries((optional || []).map(key => [key, ['FLOAT', { default: 1 }]])) } });
 export const schema = {
   UNETLoader: node({ unet_name: ['diffusion/anima-base.safetensors'], weight_dtype: ['default'] }),
+  CheckpointLoaderSimple: { input: { required: { ckpt_name: ['COMBO', { options: ['anima/anima-turbo-v1.1.safetensors', 'anima/portrait-merge.safetensors'] }] } } },
   CLIPLoader: node({ clip_name: ['qwen_3_06b_base.safetensors'], type: ['stable_diffusion'], device: ['default'] }),
   VAELoader: node({ vae_name: ['qwen_image_vae.safetensors'] }),
   SwarmLoadImageB64: node({ image_base64: 'STRING' }), SwarmSaveImageWS: node({ images: 'IMAGE' }),

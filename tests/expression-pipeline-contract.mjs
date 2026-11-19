@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { defaultSheet, expressionTiles, expressionRequest, normalizeSheet, isAdapterModel, livePortraitWorkflow, ipAdapterWorkflow } from '../src/expressions/pipeline.ts';
+import { defaultSheet, expressionTiles, expressionRequest, normalizeSheet, isAdapterModel, livePortraitWorkflow, ipAdapterWorkflow, imageForStage, recordStageImage } from '../src/expressions/pipeline.ts';
 import { zipStore } from '../src/expressions/zip.ts';
 import { expressionFailure } from '../src/expressions/errors.ts';
 import { applyExpressionLoras } from '../src/expressions/loras.ts';
+import { describeImageGraph, normalizeRecipe, pendingStages, prepareProcessing, processingRequest, readSavedProcessingWorkflow } from '../src/expressions/processing.ts';
 const params=[{id:'useipadapter',values:['None','PLUS (high strength)']}];
 const project={...defaultSheet(),model:'portrait.safetensors',reference:'data:image/png;base64,aGVsbG8='};
 const tile=expressionTiles(1)[0];
@@ -59,4 +60,78 @@ assert.equal(request.loras,undefined,'conditioning must not mutate the base requ
 assert.equal(applyExpressionLoras(request,[]),request);
 assert.equal(applyExpressionLoras(request,[lora('empty',1,true,'')]).prompt,request.prompt);
 assert.equal(applyExpressionLoras(request,[lora('disabled',1,true,'excluded',false)]),request);
+
+const off = normalizeRecipe();
+const refine = normalizeRecipe({ mode: 'builtin', model: 'detail.pth', factor: 2 });
+const background = normalizeRecipe({ mode: 'builtin' });
+const source = { image: project.reference, width: 320, height: 640 };
+const backend = { upscaleModels: ['detail.pth'], backgroundReady: true };
+assert.deepEqual(pendingStages('', undefined, refine, background), ['generate', 'refine', 'background']);
+assert.deepEqual(pendingStages(source.image, undefined, refine, background), ['refine', 'background']);
+assert.deepEqual(pendingStages(source.image, 'refine', refine, background), ['background']);
+assert.deepEqual(pendingStages(source.image, 'background', refine, background), []);
+assert.deepEqual(pendingStages('', 'background', off, off), ['generate']);
+const restored = normalizeSheet({ ...project, refine, backgroundRemoval: background, tiles: [{ ...tile, image: source.image, stage: 'refine' }] });
+assert.deepEqual(restored.refine, refine);
+assert.equal(restored.tiles[0].stage, 'refine');
+const stagesTile = { ...tile };
+const generatedImage = { image: source.image, path: 'Output/generated.png', seed: 123 };
+const refinedImage = { ...generatedImage, path: 'Output/refined.png' };
+const cutoutImage = { ...generatedImage, path: 'Output/cutout.png' };
+recordStageImage(stagesTile, 'generate', generatedImage);
+recordStageImage(stagesTile, 'refine', refinedImage);
+recordStageImage(stagesTile, 'background', cutoutImage);
+const persistedStages = normalizeSheet({ ...project, tiles: [stagesTile] }).tiles[0];
+assert.deepEqual(imageForStage(persistedStages, 'generate'), generatedImage);
+assert.deepEqual(imageForStage(persistedStages, 'refine'), refinedImage);
+assert.equal(imageForStage(persistedStages, 'background').path, cutoutImage.path);
+recordStageImage(persistedStages, 'generate', generatedImage);
+assert.equal(imageForStage(persistedStages, 'refine'), undefined);
+assert.equal(imageForStage(persistedStages, 'background'), undefined);
+const migrated = normalizeSheet({ ...project, version: 1, refine: off, backgroundRemoval: off });
+assert.equal(migrated.version, 2);
+assert.equal(migrated.refine.mode, 'builtin');
+assert.equal(migrated.backgroundRemoval.mode, 'builtin');
+assert.equal(normalizeSheet({ ...migrated, refine: off, autoDeleteDrafts: true }).refine.mode, 'off');
+assert.equal(normalizeSheet({ ...migrated, autoDeleteDrafts: true }).autoDeleteDrafts, true);
+const refineParams = prepareProcessing('refine', refine, backend)(source);
+const refineGraph = JSON.parse(refineParams.comfyworkflowraw);
+assert.equal(refineGraph['2'].inputs.model_name, 'detail.pth');
+assert.equal(JSON.parse(prepareProcessing('refine', { ...refine, model: '' }, backend)(source).comfyworkflowraw)['2'].inputs.model_name, 'detail.pth');
+assert.equal(refineGraph['4'].inputs.width, 640);
+assert.equal(refineGraph['4'].inputs.height, 1280);
+assert.throws(() => prepareProcessing('refine', refine, { ...backend, upscaleModels: [] }), /installed upscale model/);
+assert.throws(() => prepareProcessing('refine', refine, backend)({ ...source, width: 8192 }), /smaller/);
+const cutout = processingRequest(source, prepareProcessing('background', background, backend)(source), { model: project.model });
+const cutoutGraph = JSON.parse(cutout.comfyworkflowraw);
+assert.equal(cutout.imageformat, 'PNG');
+assert.equal(cutoutGraph['4'].class_type, 'InvertMask');
+assert.deepEqual(cutoutGraph['5'].inputs.alpha, ['4', 0]);
+assert.equal(cutoutGraph['6'].class_type, 'SwarmSaveImageWS');
+assert.throws(() => prepareProcessing('background', background, { ...backend, backgroundReady: false }), /BiRefNet/);
+const json = { prompt: {
+    image: { class_type: 'LoadImage', inputs: { image: 'placeholder.png' } },
+    output: { class_type: 'SaveImage', inputs: { images: ['image', 0], filename_prefix: 'placeholder' } },
+    side: { class_type: 'PreviewImage', inputs: { images: ['image', 0] } },
+} };
+const jsonRecipe = normalizeRecipe({ mode: 'json', graph: JSON.stringify(json) });
+assert.match(describeImageGraph(jsonRecipe.graph), /input #image.*output #output/);
+const wired = JSON.parse(prepareProcessing('background', jsonRecipe)(source).comfyworkflowraw);
+assert.deepEqual(wired.image, { class_type: 'SwarmLoadImageB64', inputs: { image_base64: 'aGVsbG8=' } });
+assert.equal(wired.output.class_type, 'SwarmSaveImageWS');
+assert.equal(wired.side, undefined);
+assert.throws(() => describeImageGraph('{"nodes":[]}'), /API format/);
+assert.throws(() => describeImageGraph(JSON.stringify({ ...json.prompt, duplicate: json.prompt.image })), /Use one/);
+const saved = readSavedProcessingWorkflow(JSON.stringify({
+    input: { id: 'comfyrawworkflowinputimage0', type: 'image', name: 'Portrait' },
+    second: { id: 'comfyrawworkflowinputimage1', type: 'image', name: 'Mask image' },
+    strength: { id: 'strength', type: 'decimal' },
+}));
+const savedRecipe = normalizeRecipe({ mode: 'saved', workflow: 'Portrait/cutout', imageInput: 'comfyrawworkflowinputimage0' });
+const savedRequest = prepareProcessing('background', savedRecipe, undefined, saved)(source);
+assert.equal(savedRequest.comfyuicustomworkflow, 'Portrait/cutout');
+assert.equal(savedRequest.comfyrawworkflowinputimage0, source.image);
+assert.equal(savedRequest.comfyrawworkflowinputimage1, undefined);
+assert.ok(savedRequest.comfyworkflowparammetadata);
+assert.throws(() => prepareProcessing('background', { ...savedRecipe, imageInput: '' }, undefined, saved), /exposed image input/);
 console.log('expression pipeline contracts: ok');

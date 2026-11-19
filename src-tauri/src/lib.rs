@@ -65,7 +65,7 @@ struct RepoStatus {
     refs: Vec<RepoRefOption>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StudioUpdateStatus {
     supported: bool,
@@ -557,15 +557,6 @@ fn host_control_install() -> Result<serde_json::Value, String> {
     run_host_control(&["install".into()])
 }
 
-fn remote_package_version(root: &Path, remote_ref: &str) -> String {
-    let spec = format!("{remote_ref}:package.json");
-    let Ok(text) = git_output(root, &["show", &spec]) else { return String::new(); };
-    serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .and_then(|value| value.get("version").and_then(|item| item.as_str()).map(str::to_owned))
-        .unwrap_or_default()
-}
-
 fn unsupported_studio_update(message: impl Into<String>) -> StudioUpdateStatus {
     StudioUpdateStatus {
         supported: false,
@@ -583,63 +574,6 @@ fn unsupported_studio_update(message: impl Into<String>) -> StudioUpdateStatus {
         message: message.into(),
         highlights: Vec::new(),
     }
-}
-
-fn studio_update_status(root: &Path, fetch: bool) -> Result<StudioUpdateStatus, String> {
-    let origin = git_output(root, &["remote", "get-url", "origin"])
-        .map_err(|_| "Studio's Git checkout has no usable 'origin' remote.".to_string())?;
-    if fetch { git_output(root, &["fetch", "--tags", "--prune", "origin"])?; }
-    let branch = default_remote_branch(root);
-    let remote_ref = format!("origin/{branch}");
-    git_output(root, &["rev-parse", "--verify", &remote_ref])?;
-
-    let current_commit = git_output(root, &["rev-parse", "--short=12", "HEAD"])?;
-    let latest_commit = git_output(root, &["rev-parse", "--short=12", &remote_ref])?;
-    let dirty = !git_output(root, &["status", "--porcelain", "--untracked-files=normal"])
-        .unwrap_or_default()
-        .is_empty();
-    let commits_behind = git_output(root, &["rev-list", "--count", &format!("HEAD..{remote_ref}")])
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(0);
-    let fast_forward = git_succeeds(root, &["merge-base", "--is-ancestor", "HEAD", &remote_ref]);
-    let available = commits_behind > 0 && current_commit != latest_commit;
-    let can_apply = available && fast_forward && !dirty;
-    let latest_version = remote_package_version(root, &remote_ref);
-    let current_version = env!("CARGO_PKG_VERSION").to_string();
-    let range = format!("HEAD..{remote_ref}");
-    let highlights = git_output(root, &["log", "-n", "4", "--pretty=format:%s", &range])
-        .unwrap_or_default()
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    let message = if !available {
-        "Swarm Studio is up to date.".to_string()
-    } else if dirty {
-        "An update is available, but local edits or untracked files block one-click updating. Commit, stash, or move them first.".to_string()
-    } else if !fast_forward {
-        "The local Studio checkout has diverged from origin, so the automatic updater will not rewrite it.".to_string()
-    } else {
-        format!("Swarm Studio {} is available.", if latest_version.is_empty() { latest_commit.as_str() } else { latest_version.as_str() })
-    };
-
-    Ok(StudioUpdateStatus {
-        supported: true,
-        available,
-        can_apply,
-        dirty,
-        repo_path: root.to_string_lossy().into_owned(),
-        current_version,
-        latest_version,
-        current_commit,
-        latest_commit,
-        commits_behind,
-        branch,
-        origin,
-        message,
-        highlights,
-    })
 }
 
 fn resolve_repo_root(kind: &str, path_hint: Option<&str>) -> Result<PathBuf, String> {
@@ -762,127 +696,47 @@ fn ensure_studio_repo_clean(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+// Both native and remote clients schedule the same host updater. The helper
+// verifies the launcher and detaches before it closes any Studio process.
+fn studio_source_command(root: &Path, action: &str) -> Result<serde_json::Value, String> {
+    let mut command = Command::new("node");
+    command.arg(root.join("scripts").join("studio-source-updater.mjs"))
+        .arg(action).arg(root).current_dir(root)
+        .env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command.output().map_err(|error| format!("Could not start the Studio source updater: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    serde_json::from_slice(&output.stdout).map_err(|error| format!("Invalid Studio updater response: {error}"))
+}
+
 #[tauri::command]
 async fn studio_update_check() -> StudioUpdateStatus {
     match tauri::async_runtime::spawn_blocking(|| {
-        let root = match resolve_studio_repo_root() {
-            Ok(root) => root,
-            Err(message) => return unsupported_studio_update(message),
-        };
-        studio_update_status(&root, true).unwrap_or_else(unsupported_studio_update)
+        let root = resolve_studio_repo_root()?;
+        let value = studio_source_command(&root, "--check")?;
+        serde_json::from_value(value).map_err(|error| format!("Invalid Studio update status: {error}"))
     }).await {
-        Ok(status) => status,
+        Ok(Ok(status)) => status,
+        Ok(Err(message)) => unsupported_studio_update(message),
         Err(error) => unsupported_studio_update(format!("Studio update worker failed: {error}")),
     }
 }
 
-fn studio_update_apply_blocking(app: tauri::AppHandle) -> Result<String, String> {
-    let root = resolve_studio_repo_root()?;
-    ensure_studio_repo_clean(&root)?;
-    let status = studio_update_status(&root, true)?;
-    if !status.available { return Err("Swarm Studio is already up to date.".into()); }
-    if !status.can_apply { return Err(status.message); }
-
-    let root_text = root.to_string_lossy().replace('\'', "''");
-    let branch_text = status.branch.replace('\'', "''");
-    let app_pid = std::process::id();
-    let helper_path = std::env::temp_dir().join(format!("swarm-studio-update-{app_pid}.ps1"));
-    let script = r#"$ErrorActionPreference = 'Stop'
-$env:GIT_TERMINAL_PROMPT = '0'
-$Root = '__ROOT__'
-$Branch = '__BRANCH__'
-$Remote = "origin/$Branch"
-$AppPid = __PID__
-$Log = Join-Path $Root '.swarm-studio-update.log'
-function Write-UpdateLog([string]$Message) {
-    Add-Content -LiteralPath $Log -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message)
-}
-try {
-    Write-UpdateLog "Updater started for PID $AppPid -> $Remote"
-    $ParentPid = $null
-    try { $ParentPid = (Get-CimInstance Win32_Process -Filter "ProcessId = $AppPid" -ErrorAction Stop).ParentProcessId } catch {}
-    Wait-Process -Id $AppPid -ErrorAction SilentlyContinue
-    if ($ParentPid) {
-        $Deadline = (Get-Date).AddSeconds(15)
-        while ((Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) -and (Get-Date) -lt $Deadline) { Start-Sleep -Milliseconds 250 }
-    }
-    Start-Sleep -Milliseconds 1200
-    Set-Location -LiteralPath $Root
-    $Before = (& git rev-parse HEAD).Trim()
-    & git fetch --tags --prune origin *>> $Log
-    if ($LASTEXITCODE -ne 0) { throw "git fetch failed with exit code $LASTEXITCODE" }
-    & git show-ref --verify --quiet "refs/heads/$Branch"
-    if ($LASTEXITCODE -eq 0) {
-        & git checkout $Branch *>> $Log
-    } else {
-        & git checkout -b $Branch --track $Remote *>> $Log
-    }
-    if ($LASTEXITCODE -ne 0) { throw "git checkout failed with exit code $LASTEXITCODE" }
-    & git merge --ff-only $Remote *>> $Log
-    if ($LASTEXITCODE -ne 0) { throw "git fast-forward failed with exit code $LASTEXITCODE" }
-    $RefreshDependencies = $false
-    try {
-        $BeforePackageText = (& git show "$Before`:package.json") -join "`n"
-        $BeforePackage = $BeforePackageText | ConvertFrom-Json
-        $AfterPackage = Get-Content -LiteralPath (Join-Path $Root 'package.json') -Raw | ConvertFrom-Json
-        $BeforeDeps = [ordered]@{ dependencies = $BeforePackage.dependencies; devDependencies = $BeforePackage.devDependencies } | ConvertTo-Json -Compress -Depth 20
-        $AfterDeps = [ordered]@{ dependencies = $AfterPackage.dependencies; devDependencies = $AfterPackage.devDependencies } | ConvertTo-Json -Compress -Depth 20
-        $LockChanged = @(& git diff --name-only $Before HEAD -- package-lock.json).Count -gt 0
-        $RefreshDependencies = ($BeforeDeps -ne $AfterDeps) -or $LockChanged
-    } catch {
-        Write-UpdateLog ('Could not compare dependency metadata; the normal runner dependency guard will remain in charge. ' + $_.Exception.Message)
-    }
-    $After = (& git rev-parse --short=12 HEAD).Trim()
-    Write-UpdateLog "Update complete at $After; restarting Studio."
-    $StartScript = Join-Path $Root 'start.ps1'
-    $RestartArgs = @('-NoLogo', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $StartScript + '"'), '-NoShortcut')
-    if ($RefreshDependencies) {
-        Write-UpdateLog 'JavaScript dependency metadata changed; the restarted runner will refresh dependencies.'
-        $RestartArgs += '-RefreshDependencies'
-    }
-    Start-Process -FilePath 'powershell.exe' -WorkingDirectory $Root -ArgumentList $RestartArgs
-} catch {
-    Write-UpdateLog ("UPDATE FAILED: " + $_.Exception.Message)
-} finally {
-    Start-Sleep -Milliseconds 250
-    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-}
-"#
-        .replace("__ROOT__", &root_text)
-        .replace("__BRANCH__", &branch_text)
-        .replace("__PID__", &app_pid.to_string());
-    fs::write(&helper_path, script)
-        .map_err(|error| format!("Could not prepare the Studio updater helper: {error}"))?;
-
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("powershell.exe")
-            .args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
-            .arg(&helper_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| format!("Could not launch the Studio updater helper: {error}"))?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        return Err("The source updater currently supports the Windows start.ps1 distribution only.".into());
-    }
-
-    let exit_app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
-        exit_app.exit(0);
-    });
-    Ok(format!("Updating to {} and restarting Studio…", if status.latest_version.is_empty() { status.latest_commit } else { status.latest_version }))
-}
-
 #[tauri::command]
-async fn studio_update_apply(app: tauri::AppHandle) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || studio_update_apply_blocking(app))
-        .await
-        .map_err(|error| format!("Studio update worker failed: {error}"))?
+async fn studio_update_apply() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let root = resolve_studio_repo_root()?;
+        ensure_studio_repo_clean(&root)?;
+        let job = studio_source_command(&root, "--apply")?;
+        Ok(job.get("message").and_then(|value| value.as_str())
+            .unwrap_or("Updating the Studio host and restarting…").to_string())
+    }).await.map_err(|error| format!("Studio update worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -1071,6 +925,23 @@ fn start_swarm(
     write_swarm_pid(pid);
     emit_log(&app, "info", format!("Launched SwarmUI as process {pid}."));
     Ok(format!("Launched SwarmUI as process {pid}."))
+}
+
+#[tauri::command]
+fn open_anima_guide() -> Result<(), String> {
+    const GUIDE: &str = "https://github.com/ArcAnima/ComfyUI-Anima-Ref-Adapter/blob/main/docs/guide.en.md";
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new("rundll32.exe");
+        command.arg("url.dll,FileProtocolHandler").creation_flags(0x08000000);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+    command.arg(GUIDE).spawn().map(|_| ()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1282,6 +1153,7 @@ pub fn run() {
             http_get_text,
             websocket_json,
             probe_url,
+            open_anima_guide,
             open_swarm_system,
             start_swarm,
             stop_swarm,

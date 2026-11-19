@@ -94,6 +94,10 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
   return invoke<T>(command, args);
 }
 
+export function openNativeAnimaGuide(): Promise<void> {
+  return tauriInvoke<void>("open_anima_guide");
+}
+
 function parseJsonText<T>(text: string, url: string): T {
   try {
     return JSON.parse(text) as T;
@@ -123,13 +127,65 @@ function isExternalMetadataHost(hostname: string): boolean {
 
 let browserHostControlSessionReady = false;
 
-async function browserHostControlFetch<T>(path: string, init?: RequestInit): Promise<T> {
+interface StudioSourceJob {
+  jobId: string;
+  phase: string;
+  message: string;
+  targetCommit: string;
+  serverPid: number;
+}
+
+async function waitForStudioSourceRestart(job: StudioSourceJob): Promise<void> {
+  const deadline = Date.now() + 6 * 60_000;
+  let lastMessage = job.message;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => window.setTimeout(resolve, 1500));
+    let status: { job: StudioSourceJob | null; currentCommit: string; serverPid: number };
+    try {
+      status = await browserHostControlFetch("studio-source/status", { signal: AbortSignal.timeout(8000) });
+    } catch {
+      // The HTTP server disappears during restart, and its session cookie rotates.
+      continue;
+    }
+    if (status.job?.jobId !== job.jobId) continue;
+    lastMessage = status.job.message;
+    if (status.job.phase === "failed") throw new Error(lastMessage);
+    if (status.job.phase === "complete" && status.currentCommit === job.targetCommit && status.serverPid !== job.serverPid) return;
+  }
+  throw new Error(`Studio has not reconnected yet. ${lastMessage} Check .swarm-studio-update.log on the host, then reload this page.`);
+}
+
+const studioActivityClientId = createId();
+let lastStudioActivity: boolean | undefined;
+let lastStudioActivityAt = 0;
+let reportingStudioActivity = false;
+
+// Also runs in the desktop webview so a phone cannot interrupt work there.
+export async function reportStudioActivity(active: boolean): Promise<void> {
+  if (!/^https?:$/.test(window.location.protocol) || reportingStudioActivity) return;
+  if (active === lastStudioActivity && Date.now() - lastStudioActivityAt < 10_000) return;
+  reportingStudioActivity = true;
+  try {
+    await browserHostControlFetch("studio-source/activity", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientId: studioActivityClientId, active }), signal: AbortSignal.timeout(5000),
+    });
+    lastStudioActivity = active;
+  } catch { /* Static hosting and an offline host have no activity bridge. */ }
+  finally { lastStudioActivityAt = Date.now(); reportingStudioActivity = false; }
+}
+
+async function browserHostControlFetch<T>(path: string, init?: RequestInit, retrySession = true): Promise<T> {
   if (!browserHostControlSessionReady) {
-    const session = await fetch("/__studio/host-control/session", { credentials: "same-origin", cache: "no-store" });
+    const session = await fetch("/__studio/host-control/session", { credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(8000) });
     if (!session.ok) throw new Error(`Host control session failed with ${session.status}.`);
     browserHostControlSessionReady = true;
   }
   const response = await fetch(`/__studio/host-control/${path}`, { ...init, credentials: "same-origin", cache: "no-store" });
+  if (response.status === 401 && retrySession) {
+    browserHostControlSessionReady = false;
+    return browserHostControlFetch<T>(path, init, false);
+  }
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok || payload.error) throw new Error(String(payload.error || `Host control returned ${response.status}.`));
   return payload as T;
@@ -336,25 +392,14 @@ const browserRuntime: RuntimeBridge = {
     throw new Error("Swarm launch policy controls are only available in the desktop app.");
   },
   async checkStudioUpdate() {
-    return {
-      supported: false,
-      available: false,
-      canApply: false,
-      dirty: false,
-      repoPath: "",
-      currentVersion: "PWA",
-      latestVersion: "",
-      currentCommit: "",
-      latestCommit: "",
-      commitsBehind: 0,
-      branch: "",
-      origin: "",
-      message: "Source updates are only available in desktop Studio Git checkouts.",
-      highlights: [],
-    };
+    const status = await browserHostControlFetch<StudioUpdateStatus>("studio-source/check", { method: "POST", signal: AbortSignal.timeout(90_000) });
+    if (typeof status.supported !== "boolean") throw new Error("The Studio source bridge is unavailable. Start the host with start.ps1 and reopen this remote.");
+    return status;
   },
   async applyStudioUpdate() {
-    throw new Error("Source updates are only available in desktop Studio Git checkouts.");
+    const job = await browserHostControlFetch<StudioSourceJob>("studio-source/apply", { method: "POST", signal: AbortSignal.timeout(90_000) });
+    await waitForStudioSourceRestart(job);
+    return "The host Studio source has updated. Reloading Studio…";
   },
   subscribeLogs() {
     // Browser mode has no child process to subscribe to.
@@ -445,9 +490,11 @@ const tauriRuntime: RuntimeBridge = {
     return tauriInvoke<RuntimeRepoStatus>("swarm_repo_set_launch_auto_pull", { pathHint: pathHint || null, enabled });
   },
   async checkStudioUpdate() {
+    if (/^https?:$/.test(window.location.protocol)) return browserRuntime.checkStudioUpdate();
     return tauriInvoke<StudioUpdateStatus>("studio_update_check");
   },
   async applyStudioUpdate() {
+    if (/^https?:$/.test(window.location.protocol)) return browserRuntime.applyStudioUpdate();
     return tauriInvoke<string>("studio_update_apply");
   },
   subscribeLogs(listener) {
