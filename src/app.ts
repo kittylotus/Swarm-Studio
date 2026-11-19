@@ -1,3 +1,6 @@
+import { advancedCatalog, activeAdvancedParams, applyAdvancedFeature, featureEnabled, featureInStudio, featureValues, publicExtraParam, type AdvancedFeature } from "./advanced/catalog";
+import { openAdvancedFeatures } from "./advanced/dialog";
+import { advancedIcon } from "./advanced/icons";
 import { linkedSvg, unlinkedSvg } from "./ui/resolution-icons";
 import { createId } from "./id";
 import { actionMenu, bindActionMenus, disclosureChevronSvg } from "./ui/action-menu";
@@ -2625,7 +2628,6 @@ export class StudioApp {
     const latest = this.store.state.outputs[0];
     const checkpoint = this.currentCheckpoint();
     const checkpointClass = checkpoint?.compat_class || checkpoint?.architecture || checkpoint?.class || "Compatibility metadata unavailable";
-    const advancedParamCount = this.advancedParams().filter((item) => !this.isReviewBeforeSaveParamDefinition(item)).length;
     const reviewPending = this.pendingGenerationApprovals.length > 0;
     return `
       <div class="studio-workspace mobile-pane-${this.store.state.ui.mobileCreatePane}">
@@ -2679,10 +2681,7 @@ export class StudioApp {
 
           ${this.reviewBeforeSaveControlMarkup()}
 
-          <details class="drawer-panel advanced-panel" ${this.store.state.ui.advancedOpen ? "open" : ""}>
-            <summary><span><b>Advanced Swarm controls</b><small>Live parameters from this server</small></span><em>${advancedParamCount}</em></summary>
-            <div class="drawer-content advanced-fields">${this.advancedGroupsMarkup()}</div>
-          </details>
+          ${this.advancedStudioMarkup()}
         </aside>
 
         <section class="panel canvas-workspace">
@@ -2788,20 +2787,54 @@ export class StudioApp {
     return `<div class="syntax-menu ${this.syntaxMenuOpen ? "is-open" : ""}"><header><span>Prompt syntax</span><button class="icon-button" data-action="close-syntax" aria-label="Close syntax menu">×</button></header>${[...basics, ...wildcardItems].map(([label, syntax]) => `<button data-syntax="${escapeHtml(syntax)}"><b>${escapeHtml(label)}</b><code>${escapeHtml(syntax)}</code></button>`).join("")}</div>`;
   }
 
-  private advancedParams(): SwarmParamDefinition[] {
-    const excluded = new Set(["prompt", "negativeprompt", "model", "width", "height", "steps", "cfgscale", "seed", "variationseed", "variationseedstrength", "sampler", "scheduler", "images", "loras", "loraweights", "initimage", "initimagecreativity"]);
-    return this.params
-      .filter((param) => {
-        const id = String(param.id ?? param.name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-        if (!id || excluded.has(id) || param.extra_hidden || param.visible === false) return false;
-        return param.advanced === true || /vae|unet|clip|refiner|upscale|sampling|backend|precision|dtype|freeu|teacache/.test(id);
-      })
-      .sort((a, b) => {
-        const idA = String(a.id ?? a.name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-        const idB = String(b.id ?? b.name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-        const refinerBoost = (id: string) => id === "refinermodel" ? -10000 : id.includes("refiner") ? -5000 : 0;
-        return (refinerBoost(idA) + Number(a.priority ?? 0)) - (refinerBoost(idB) + Number(b.priority ?? 0));
-      });
+  private advancedFeatures(): AdvancedFeature[] {
+    const params = this.params.map(param => this.normalizeParamKey(param.id ?? param.name) === "refinermodel" && !param.values?.length
+      ? { ...param, values: this.models.map(model => model.name) } : param);
+    return advancedCatalog(params, this.paramGroups);
+  }
+
+  private advancedStudioMarkup(): string {
+    const features = this.advancedFeatures().filter(feature => featureInStudio(feature, this.store.state.draft));
+    return `<section class="rail-section af-studio-section"><button type="button" class="af-entry" data-action="open-advanced" aria-haspopup="dialog"><span>${advancedIcon("sliders")}Advanced features</span><span aria-hidden="true">↗</span></button>
+      <div class="af-pills">${features.map(feature => {
+        const enabled = featureEnabled(feature, this.store.state.draft);
+        return `<button type="button" class="af-pill ${enabled ? "" : "is-off"}" data-advanced-feature="${escapeHtml(feature.id)}" aria-haspopup="dialog" aria-label="From Advanced: ${escapeHtml(feature.name)}${enabled ? "" : ", off"}. Edit settings">${advancedIcon(feature.icon)}<span class="af-pill-label">${escapeHtml(feature.name)}${enabled ? "" : " · Off"}</span><span aria-hidden="true">↗</span></button>`;
+      }).join("")}</div><p class="af-studio-caption">${features.length ? "From Advanced · select a pill to edit" : "Browse additional features from your Swarm server."}</p></section>`;
+  }
+
+  private openAdvancedFeature(id = ""): void {
+    this.persistDraftFromForm(true);
+    const params = this.params;
+    const connection = JSON.stringify([this.store.state.connection.baseUrl, this.store.state.connection.activeOrigin]);
+    openAdvancedFeatures({
+      features: this.advancedFeatures(), params,
+      getDraft: () => this.store.state.draft,
+      getPins: () => this.store.state.ui.advancedPinnedFeatures,
+      setPins: advancedPinnedFeatures => this.store.updateUi({ advancedPinnedFeatures }),
+      apply: (feature, stage, remove) => {
+        if (this.params !== params || connection !== JSON.stringify([this.store.state.connection.baseUrl, this.store.state.connection.activeOrigin])) {
+          return "The connected server or its controls changed. Close Advanced and reopen it before sending settings.";
+        }
+        this.store.updateDraft(applyAdvancedFeature(feature, stage, this.store.state.draft, remove));
+        this.render();
+        this.notify(remove ? `${feature.name} removed from Studio.` : `${feature.name} ${stage.enabled ? "enabled" : "saved as off"} in Studio.`, "success");
+      },
+      locateCommon: selector => {
+        const tune = ["#model", "#width", "#height", "#lora-add-select"].includes(selector);
+        this.store.updateUi({ mobileCreatePane: tune ? "tune" : "generation", ...(selector === "#init-file" || selector === "#init-creativity" ? { initOpen: true } : {}) });
+        this.render();
+        const target = this.root.querySelector<HTMLElement>(selector === "#init-file" ? ".init-panel > summary" : selector);
+        let parent = target?.parentElement;
+        while (parent) { if (parent instanceof HTMLDetailsElement) parent.open = true; parent = parent.parentElement; }
+        target?.scrollIntoView({ block: "center" });
+        target?.focus();
+      },
+    }, id);
+  }
+
+  private restoredAdvancedFeatureState(extraParams: Record<string, unknown>): Pick<GenerationDraft, "advancedEnabledGroups" | "advancedStudioFeatures" | "advancedDisabledFeatures"> {
+    const features = this.advancedFeatures().filter(feature => Object.keys(featureValues(feature, extraParams)).length > 0);
+    return { advancedStudioFeatures: features.map(feature => feature.id), advancedEnabledGroups: features.filter(feature => feature.toggleable).map(feature => feature.id), advancedDisabledFeatures: [] };
   }
 
   private paramGroupFor(param: SwarmParamDefinition): SwarmParamGroup | undefined {
@@ -2823,29 +2856,7 @@ export class StudioApp {
   }
 
   private activeExtraParams(draft: GenerationDraft): Record<string, unknown> {
-    const output: Record<string, unknown> = {};
-    const enabledGroups = new Set(draft.advancedEnabledGroups);
-    for (const [key, value] of Object.entries(draft.extraParams)) {
-      const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "");
-      const param = this.params.find((item) => [item.id, item.name].filter(Boolean).some((name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "") === normalized));
-      // Historical output metadata can contain retired/internal Swarm fields. Do not
-      // replay anything the currently connected server does not advertise.
-      if (!param) continue;
-      const group = this.paramGroupFor(param);
-      if (this.advancedGroupRequiresToggle(group) && !enabledGroups.has(this.advancedGroupKey(group, String(param?.group ?? "Other")))) continue;
-      output[key] = value;
-    }
-    for (const group of this.paramGroups.filter((item) => this.advancedGroupRequiresToggle(item))) {
-      const groupKey = this.advancedGroupKey(group);
-      if (!enabledGroups.has(groupKey)) continue;
-      for (const param of this.advancedParams().filter((item) => this.paramGroupFor(item) === group)) {
-        const key = String(param.id ?? param.name ?? "");
-        if (!key || Object.keys(output).some((existing) => existing.toLowerCase().replace(/[^a-z0-9]+/g, "") === key.toLowerCase().replace(/[^a-z0-9]+/g, ""))) continue;
-        const value = param.default;
-        if (value !== undefined && value !== null && value !== "") output[key] = value;
-      }
-    }
-    return output;
+    return activeAdvancedParams(draft, this.params, this.paramGroups);
   }
 
   private normalizeParamKey(value: unknown): string {
@@ -2874,56 +2885,6 @@ export class StudioApp {
     const title = escapeHtml(param.description || "Generate ephemerally, then decide whether to discard the render or write it into Swarm history.");
     const clue = `<span class="clue-tip review-before-save-clue" tabindex="0" role="note" data-clue="${title}" aria-label="${title}">?</span>`;
     return `<section class="rail-section review-before-save-section"><div class="section-minihead"><b>Output handling</b><span>Studio workflow</span>${clue}</div><label class="check-row compact-check review-before-save-row"><input id="review-before-save" type="checkbox" ${this.reviewBeforeSaveEnabled() ? "checked" : ""}/><span><b>Review before saving</b><small>Keep renders temporary until you manually approve them.</small></span></label></section>`;
-  }
-
-  private advancedGroupsMarkup(): string {
-    const params = this.advancedParams().filter((item) => !this.isReviewBeforeSaveParamDefinition(item));
-    if (!params.length) return `<p class="helper-copy">No advanced parameters were exposed by this server.</p>`;
-    const grouped = new Map<string, { group?: SwarmParamGroup; params: SwarmParamDefinition[] }>();
-    for (const param of params) {
-      const group = this.paramGroupFor(param);
-      const key = String(group?.id ?? group?.name ?? param.group ?? "Other");
-      const bucket = grouped.get(key) ?? { group, params: [] };
-      bucket.params.push(param);
-      grouped.set(key, bucket);
-    }
-    const entries = [...grouped.entries()].sort(([, a], [, b]) => Number(a.group?.priority ?? 9999) - Number(b.group?.priority ?? 9999));
-    return entries.map(([key, bucket]) => {
-      const groupTitle = bucket.group?.name || key || "Other";
-      const groupKey = this.advancedGroupKey(bucket.group, key);
-      const compact = groupTitle.toLowerCase().replace(/[^a-z0-9]+/g, "");
-      const refiner = /refiner|refine/.test(compact) || bucket.params.some((param) => /refiner/.test(String(param.id ?? param.name ?? "").toLowerCase()));
-      const toggleable = this.advancedGroupRequiresToggle(bucket.group);
-      const enabled = !toggleable || this.store.state.draft.advancedEnabledGroups.includes(groupKey);
-      const description = bucket.group?.description || (refiner ? "Optional refiner / upscale stage. Enable this group, then choose the model and controls you want." : toggleable ? "Optional feature group. Enable it before its parameters are sent to Swarm." : "Only controls changed in Studio are sent; untouched values stay at Swarm defaults.");
-      const toggle = toggleable ? `<label class="advanced-group-switch" data-stop-toggle title="Enable ${escapeHtml(groupTitle)}"><input type="checkbox" data-advanced-group-toggle="${escapeHtml(groupKey)}" ${enabled ? "checked" : ""}/><span></span></label>` : "";
-      const clue = `<span class="clue-tip" tabindex="0" role="note" data-stop-toggle data-clue="${escapeHtml(description)}" aria-label="${escapeHtml(description)}">?</span>`;
-      return `<details class="advanced-param-group ${enabled ? "is-enabled" : "is-disabled"}" ${refiner ? "open" : ""} data-advanced-group="${escapeHtml(groupKey)}">
-        <summary>${clue}<span class="advanced-group-title"><b>${escapeHtml(groupTitle)}</b></span>${toggle}<em>${bucket.params.length}</em></summary>
-        <div class="advanced-group-fields">${bucket.params.map((param) => this.advancedParamMarkup(param, !enabled)).join("")}</div>
-      </details>`;
-    }).join("");
-  }
-
-  private advancedParamMarkup(param: SwarmParamDefinition, disabled = false): string {
-    const key = String(param.id ?? param.name ?? "");
-    const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "");
-    const stored = this.store.state.draft.extraParams[key] ?? this.store.state.draft.extraParams[normalized];
-    const value = stored ?? param.default ?? "";
-    let values = Array.isArray(param.values) ? param.values.map((item) => typeof item === "string" ? item : String(item.value ?? item.name ?? item.title ?? "")).filter(Boolean) : [];
-    if (normalized === "refinermodel" && !values.length) values = this.models.map((model) => model.name).filter(Boolean);
-    const reviewBeforeSave = normalized === "donotsave";
-    const label = escapeHtml(reviewBeforeSave ? "Review before saving" : (param.name || param.id || key));
-    const title = escapeHtml(reviewBeforeSave
-      ? "Generate ephemerally. Studio holds the result for approval and only writes it to Swarm history when you explicitly save it."
-      : (param.description || ""));
-    const active = stored !== undefined;
-    const activeMark = active ? `<i class="param-live-dot" title="Studio will send this value"></i>` : "";
-    const disabledAttr = disabled ? "disabled" : "";
-    if (values.length) return `<label class="field advanced-param ${active ? "is-overridden" : ""}" title="${title}"><span>${activeMark}${label}</span><select data-extra-param="${escapeHtml(key)}" ${disabledAttr}><option value="">Swarm default</option>${[...new Set([String(value), ...values].filter(Boolean))].map((item) => `<option value="${escapeHtml(item)}" ${String(value) === item && active ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>`;
-    if (/bool|boolean/i.test(String(param.type))) return `<label class="check-row compact-check advanced-param ${active ? "is-overridden" : ""}" title="${title}"><input type="checkbox" data-extra-param="${escapeHtml(key)}" ${value === true || value === "true" ? "checked" : ""} ${disabledAttr}/><span>${activeMark}<b>${label}</b></span></label>`;
-    if (/int|decimal|double|float|number/i.test(String(param.type))) return `<label class="field advanced-param ${active ? "is-overridden" : ""}" title="${title}"><span>${activeMark}${label}</span><input type="number" data-extra-param="${escapeHtml(key)}" value="${escapeHtml(value)}" ${param.min != null ? `min="${param.min}"` : ""} ${param.max != null ? `max="${param.max}"` : ""} step="${param.step ?? 0.01}" ${disabledAttr}/></label>`;
-    return `<label class="field advanced-param ${active ? "is-overridden" : ""}" title="${title}"><span>${activeMark}${label}</span><input data-extra-param="${escapeHtml(key)}" value="${active ? escapeHtml(value) : ""}" placeholder="${escapeHtml(String(param.default ?? "Swarm default"))}" ${disabledAttr}/></label>`;
   }
 
   private generationApprovalStripMarkup(): string {
@@ -5660,8 +5621,6 @@ export class StudioApp {
     const initDetails = this.root.querySelector<HTMLDetailsElement>(".init-panel");
     initDetails?.addEventListener("toggle", () => this.store.updateUi({ initOpen: initDetails.open }));
     initDetails?.querySelector<HTMLElement>("[data-stop-toggle]")?.addEventListener("click", (event) => event.stopPropagation());
-    const details = this.root.querySelector<HTMLDetailsElement>(".advanced-panel");
-    details?.addEventListener("toggle", () => this.store.updateUi({ advancedOpen: details.open }));
     this.root.querySelectorAll<HTMLElement>("[data-stop-toggle]").forEach((element) => element.addEventListener("click", (event) => event.stopPropagation()));
     this.root.querySelectorAll<HTMLElement>(".clue-tip[data-clue]").forEach((clue) => {
       clue.addEventListener("mouseenter", () => this.showClueTooltip(clue));
@@ -5675,20 +5634,8 @@ export class StudioApp {
         else this.showClueTooltip(clue);
       });
     });
-    this.root.querySelectorAll<HTMLInputElement>("[data-advanced-group-toggle]").forEach((input) => input.addEventListener("change", (event) => {
-      event.stopPropagation();
-      const key = input.dataset.advancedGroupToggle;
-      if (!key) return;
-      const current = new Set(this.store.state.draft.advancedEnabledGroups);
-      if (input.checked) current.add(key); else current.delete(key);
-      this.store.updateDraft({ advancedEnabledGroups: [...current] });
-      this.render();
-    }));
-    this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-extra-param]").forEach((element) => {
-      const persist = () => this.persistExtraParam(element);
-      element.addEventListener("input", persist);
-      element.addEventListener("change", persist);
-    });
+    this.root.querySelector<HTMLElement>("[data-action='open-advanced']")?.addEventListener("click", () => this.openAdvancedFeature());
+    this.root.querySelectorAll<HTMLElement>("[data-advanced-feature]").forEach(button => button.addEventListener("click", () => this.openAdvancedFeature(button.dataset.advancedFeature)));
 
     this.bindLoraStackControls();
     this.bindStackReorderModalEvents();
@@ -6589,13 +6536,18 @@ export class StudioApp {
     }
     patch.extraParams = extraParams;
     const enabledGroups = new Set(draft.advancedEnabledGroups);
-    for (const rawKey of Object.keys(extraParams)) {
+    const disabledFeatures = new Set(draft.advancedDisabledFeatures);
+    for (const rawKey of Object.keys(preset.param_map ?? {})) {
       const normalized = rawKey.toLowerCase().replace(/[^a-z0-9]+/g, "");
       const param = this.params.find((item) => [item.id, item.name].filter(Boolean).some((name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "") === normalized));
-      const group = param ? this.paramGroupFor(param) : undefined;
-      if (this.advancedGroupRequiresToggle(group)) enabledGroups.add(this.advancedGroupKey(group, String(param?.group ?? "Other")));
+      if (!param || !publicExtraParam(param)) continue;
+      const group = this.paramGroupFor(param);
+      const groupId = this.advancedGroupKey(group, String(param?.group ?? "Other"));
+      disabledFeatures.delete(groupId);
+      if (this.advancedGroupRequiresToggle(group)) enabledGroups.add(groupId);
     }
     patch.advancedEnabledGroups = [...enabledGroups];
+    patch.advancedDisabledFeatures = [...disabledFeatures];
     this.store.updateDraft(patch);
     this.notify(`${preset.title} applied to the workspace and removed from the preset stack.`, "success");
     this.render();
@@ -6707,19 +6659,6 @@ export class StudioApp {
     delete current[key];
     delete current[normalized];
     if (element.checked) current[key] = true;
-    this.store.updateDraft({ extraParams: current });
-  }
-
-  private persistExtraParam(element: HTMLInputElement | HTMLSelectElement): void {
-    const key = element.dataset.extraParam;
-    if (!key) return;
-    const current = { ...this.store.state.draft.extraParams };
-    let value: unknown;
-    if (element instanceof HTMLInputElement && element.type === "checkbox") value = element.checked;
-    else if (element instanceof HTMLInputElement && element.type === "number") value = element.value === "" ? "" : element.valueAsNumber;
-    else value = element.value;
-    if (value === "" || value == null) delete current[key];
-    else current[key] = value;
     this.store.updateDraft({ extraParams: current });
   }
 
@@ -6971,6 +6910,7 @@ export class StudioApp {
       loraStackProfileId: "",
       loraStackName: "",
       extraParams,
+      ...this.restoredAdvancedFeatureState(extraParams),
     });
     this.store.updateOutput(output.id, {
       prompt: resolvedPrompt,
@@ -7411,6 +7351,7 @@ export class StudioApp {
       loras: output.loras?.length ? cloneStack(output.loras) : cloneStack(current.loras),
       activePresets: output.presets?.length ? [...output.presets] : [...current.activePresets],
       extraParams,
+      ...this.restoredAdvancedFeatureState(extraParams),
     };
   }
 

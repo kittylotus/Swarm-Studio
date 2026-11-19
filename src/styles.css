@@ -170,8 +170,6 @@ pre, code { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 .drawer-content { padding: 8px 10px 10px; }
 .init-panel .tiny-toggle { flex: 0 0 auto; }
 .init-panel .init-card { margin-top: 0; }
-.advanced-panel { margin-top: 8px; }
-.advanced-fields { display: grid; gap: 2px; padding-bottom: 10px; }
 .check-row { display: flex; align-items: flex-start; gap: 9px; margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-soft); }
 .check-row span { display: grid; gap: 3px; }
 .check-row b { font-size: 10px; }
@@ -821,22 +819,6 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 .preset-chip .preset-apply:hover { border-color: var(--line-strong); background: var(--surface-hover); }
 .preset-chip.is-drag-chosen { border-color: var(--line-strong); background: color-mix(in srgb,var(--purple) 9%,var(--surface)); }
 
-.advanced-fields { gap: 7px; }
-.advanced-param-group { overflow: hidden; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--surface-soft); }
-.advanced-param-group > summary { min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 8px 9px; list-style: none; cursor: pointer; }
-.advanced-param-group > summary::-webkit-details-marker { display: none; }
-.advanced-param-group > summary::before { content: "›"; color: var(--faint); font-size: 14px; transition: transform .14s ease; }
-.advanced-param-group[open] > summary::before { transform: rotate(90deg); }
-.advanced-param-group > summary > span { min-width: 0; flex: 1; display: grid; gap: 2px; }
-.advanced-param-group > summary b { color: var(--text); font-size: 9px; }
-.advanced-param-group > summary small { color: var(--faint); font-size: 7px; line-height: 1.35; white-space: normal; }
-.advanced-param-group > summary em { color: var(--muted); font-size: 8px; font-style: normal; }
-.advanced-param-group[open] > summary { border-bottom: 1px solid var(--line); }
-.advanced-group-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; padding: 8px; }
-.advanced-param { margin-top: 0; }
-.advanced-param > span { display: flex; align-items: center; gap: 5px; }
-.param-live-dot { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: var(--purple); box-shadow: 0 0 8px color-mix(in srgb,var(--purple) 45%,transparent); }
-.advanced-param.is-overridden input,.advanced-param.is-overridden select { border-color: color-mix(in srgb,var(--purple) 30%,var(--line)); }
 
 .preset-editor-backdrop { position: fixed; inset: 0; z-index: 95; display: grid; place-items: center; padding: 18px; background: rgba(0,0,0,.7); backdrop-filter: blur(10px); }
 .preset-editor-modal { width: min(820px,100%); max-height: min(88dvh,900px); overflow: hidden; display: grid; grid-template-rows: auto minmax(0,1fr); border: 1px solid var(--line-strong); border-radius: var(--theme-radius); background: color-mix(in srgb,var(--bg) 94%,black); box-shadow: 0 30px 90px rgba(0,0,0,.55); }
@@ -860,7 +842,6 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
   .preset-chip { align-items: flex-start; }
   .preset-chip-actions { flex-wrap: wrap; justify-content: flex-end; }
   .preset-chip .preset-apply { min-height: 24px; }
-  .advanced-group-fields { grid-template-columns: 1fr; }
   .preset-editor-backdrop { align-items: end; padding: 7px 7px calc(72px + env(safe-area-inset-bottom)); }
   .preset-editor-modal { max-height: calc(100dvh - 88px - env(safe-area-inset-bottom)); }
   .preset-editor-name-row,.preset-editor-grid { grid-template-columns: 1fr; }
@@ -871,17 +852,6 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 /* v0.11 layout, contextual mobile nav, background finish, optional advanced groups */
 .utility-nav--mobile { display: none; }
 .studio-workspace { grid-template-columns: minmax(290px, 338px) minmax(430px, 1fr) minmax(350px, 410px); }
-.control-rail .advanced-group-fields { grid-template-columns: 1fr; gap: 9px; }
-.advanced-param-group { overflow: visible; }
-.advanced-param-group > summary { position: relative; }
-.advanced-param-group.is-disabled .advanced-group-fields { opacity: .42; }
-.advanced-param-group.is-disabled .advanced-group-fields :is(input,select,textarea) { cursor: not-allowed; }
-.advanced-group-switch { width: 31px; height: 18px; position: relative; flex: 0 0 auto; display: inline-block; }
-.advanced-group-switch input { position: absolute; opacity: 0; pointer-events: none; }
-.advanced-group-switch span { position: absolute; inset: 0; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface-soft); transition: .15s ease; }
-.advanced-group-switch span::after { content: ""; position: absolute; width: 12px; height: 12px; left: 2px; top: 2px; border-radius: 50%; background: var(--muted); transition: .15s ease; }
-.advanced-group-switch input:checked + span { border-color: color-mix(in srgb,var(--purple) 45%,var(--line)); background: color-mix(in srgb,var(--purple) 15%,transparent); }
-.advanced-group-switch input:checked + span::after { transform: translateX(13px); background: var(--text); }
 .preset-chip { position: relative; min-height: 36px; padding: 7px 8px 7px 10px; }
 .preset-chip-title { font-size: 8px; white-space: nowrap; text-overflow: ellipsis; }
 .preset-chip-actions { display: flex; gap: 4px; }
@@ -914,16 +884,11 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
   .output-stage { min-height: min(64dvh, 720px); }
   .output-stage-inner, .output-stage-inner.has-final { width: 100%; height: min(62dvh, 700px); min-height: 42dvh; display: grid; place-items: center; overflow: hidden; }
   .output-stage-inner > img.is-preview, .output-stage-inner > img.is-final { position: absolute; inset: 0; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; object-position: center; }
-  .control-rail .advanced-group-fields { grid-template-columns: 1fr; }
   .preset-chip { min-height: 40px; }
 }
 
 
 /* v0.12 UI correction: compact clues, preset actions, reliable mobile navigation + swipe motion */
-.advanced-param-group > summary { overflow: visible; }
-.advanced-param-group > summary > .advanced-group-title { min-width: 0; flex: 1; display: block; }
-.advanced-param-group > summary > .advanced-group-title b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.advanced-param-group > summary small { display: none; }
 .clue-tip {
   position: relative;
   z-index: 4;
@@ -1012,7 +977,6 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
   #view-host.mobile-exit-right { animation: studio-mobile-exit-right .11s ease-in both; pointer-events: none; }
   #view-host.mobile-enter-from-right { animation: studio-mobile-enter-right .20s cubic-bezier(.2,.8,.2,1) both; }
   #view-host.mobile-enter-from-left { animation: studio-mobile-enter-left .20s cubic-bezier(.2,.8,.2,1) both; }
-  .advanced-param-group > summary { min-height: 34px; padding-block: 6px; gap: 6px; }
   .preset-chip { min-height: 34px; align-items: center; }
 }
 
@@ -1027,12 +991,7 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 
 
 /* v0.14: normalized advanced clues + stable mobile pane entry */
-.advanced-param-group > summary > .clue-tip { order:0; margin:0 1px 0 -1px; width:18px; min-width:18px; height:18px; flex:0 0 18px; display:inline-grid; place-items:center; gap:0; }
-.advanced-param-group > summary > .advanced-group-title { order: 1; }
-.advanced-param-group > summary > .advanced-group-switch { order: 2; }
-.advanced-param-group > summary > em { order: 3; }
 @media (max-width:760px) {
-  .advanced-param-group > summary > .clue-tip { margin-left: 0; }
   .studio-workspace.mobile-pane-output { scroll-margin-top: 58px; }
 }
 
@@ -3624,8 +3583,7 @@ button, input[type="checkbox"], input[type="range"] { accent-color: var(--purple
 .seed-field {
   align-content:start;
 }
-.clue-tip,
-.advanced-param-group > summary > .clue-tip {
+.clue-tip {
   aspect-ratio:1 / 1;
   border-radius:999px !important;
   padding:0 !important;

@@ -116,6 +116,9 @@ export interface GenerationDraft {
   initImageCreativity: number;
   extraParams: Record<string, unknown>;
   advancedEnabledGroups: string[];
+  /** Feature surfaces sent to Studio; kept independently of whether they are enabled. */
+  advancedStudioFeatures: string[];
+  advancedDisabledFeatures: string[];
 }
 
 export interface FolderRecord {
@@ -176,7 +179,7 @@ export interface StudioUiState {
   libraryFolder: string;
   selectedOutputId: string;
   initOpen: boolean;
-  advancedOpen: boolean;
+  advancedPinnedFeatures: string[];
   mobileCreatePane: "generation" | "output" | "tune";
   identityEditorOpen: boolean;
   settingsPane: "connection" | "backend" | "appearance" | "keybinds" | "llm";

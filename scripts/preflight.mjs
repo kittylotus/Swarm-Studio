@@ -50,7 +50,7 @@ assert(app.includes("const source = output.swarmSourcePath || output.swarmPath |
 assert(vite.includes("resolveStudioSwarmRelayRequest") && vite.includes("options.target = resolved.target"), "Vite Swarm relay must dynamically route the configured local Swarm port");
 assert(relay.includes("parsedTarget.port = String(requestedPort)") && !relay.includes("hostname ="), "Browser relay selection must remain port-only and must not expose arbitrary target hosts");
 assert(styles.includes(".clue-tooltip") && !styles.includes(".clue-tip::after"), "Clue help must render in the fixed viewport tooltip instead of a clipping pseudo-element");
-assert(styles.includes(".advanced-param-group > summary > .clue-tip { order:0") && styles.includes("flex:0 0 18px"), "Advanced clue buttons must override the broad summary-span flex rule and remain circular");
+assert(!styles.includes(".advanced-param-group") && read("src/advanced/dialog.ts").includes("serverDescription(param.description)"), "Advanced must use the feature catalog with safe inline help instead of the retired accordion");
 assert(app.includes('id="clue-tooltip"') && app.includes("showClueTooltip(clue)"), "Viewport-safe clue tooltip plumbing is missing");
 assert(app.includes("generation-review-strip"), "Compact generation review strip is missing");
 assert(!app.includes("generation-approval-card"), "Retired generation approval card markup still exists");
@@ -67,7 +67,7 @@ assert(read("src/lora/request.ts").includes("matches.length === 1") && read("src
 assert(read("src/lora/request.ts").includes("filename extension") && read("src/lora/request.ts").includes("live model name is the wire authority"), "LoRA request helper must preserve the live Swarm filename/path contract");
 assert(app.includes("generationLoraSelection(draft)"), "Shared canonical LoRA generation selection helper is missing");
 assert(app.includes("loras: loraSelection.values") && app.includes("loraweights: loraSelection.weights"), "Generation/inpaint must serialize canonical LoRA option values and aligned weights");
-assert(app.includes("if (!param) continue;"), "Retired metadata parameters must not be replayed to Swarm");
+assert(app.includes("return activeAdvancedParams(draft, this.params, this.paramGroups)") && read("src/advanced/catalog.ts").includes("if (!definition) continue;"), "Retired metadata parameters must not be replayed to Swarm");
 assert(app.includes('new Set(["wildcardseed", "swarmversion"])'), "swarm_version must remain transient during output reuse");
 assert(read("src/swarm/request.ts").includes('TRANSIENT_REQUEST_KEYS = new Set(["swarmversion"])'), "Final generation wire boundary must strip swarm_version");
 assert(read("src/swarm/request.ts").includes("listWireValue") && read("src/swarm/request.ts").includes("CORE_LIST_REQUEST_KEYS"), "Generation wire must preserve Swarm 0.9.7 LIST compatibility");

@@ -66,6 +66,8 @@ const defaultDraft: GenerationDraft = {
   initImageCreativity: 0.6,
   extraParams: {},
   advancedEnabledGroups: [],
+  advancedStudioFeatures: [],
+  advancedDisabledFeatures: [],
 };
 
 const defaultFolders: FolderRecord[] = [
@@ -78,7 +80,7 @@ const defaultUi: StudioUiState = {
   libraryFolder: "all",
   selectedOutputId: "",
   initOpen: false,
-  advancedOpen: false,
+  advancedPinnedFeatures: [],
   mobileCreatePane: "output",
   identityEditorOpen: false,
   settingsPane: "connection",
@@ -139,6 +141,8 @@ function safeParse(value: string | null): PersistedStudioState {
         initImageCreativity: Number.isFinite(Number(draft.initImageCreativity)) ? Number(draft.initImageCreativity) : 0.6,
         extraParams: draft.extraParams && typeof draft.extraParams === "object" ? draft.extraParams : {},
         advancedEnabledGroups: Array.isArray(draft.advancedEnabledGroups) ? draft.advancedEnabledGroups.map(String).filter(Boolean) : [],
+        advancedStudioFeatures: Array.isArray(draft.advancedStudioFeatures) ? [...new Set(draft.advancedStudioFeatures.filter((value): value is string => typeof value === "string" && !!value))] : [],
+        advancedDisabledFeatures: Array.isArray(draft.advancedDisabledFeatures) ? [...new Set(draft.advancedDisabledFeatures.filter((value): value is string => typeof value === "string" && !!value))] : [],
       },
       folders: Array.isArray(parsed.folders) && parsed.folders.length ? parsed.folders : structuredClone(defaultFolders),
       outputs: Array.isArray(parsed.outputs) ? parsed.outputs.map((output) => ({
@@ -173,6 +177,7 @@ function safeParse(value: string | null): PersistedStudioState {
           ? parsed.ui?.mobileCreatePane as StudioUiState["mobileCreatePane"]
           : "output",
         identityEditorOpen: parsed.ui?.identityEditorOpen === true,
+        advancedPinnedFeatures: Array.isArray(parsed.ui?.advancedPinnedFeatures) ? [...new Set(parsed.ui.advancedPinnedFeatures.filter((value): value is string => typeof value === "string" && !!value))] : [],
         settingsPane: String(parsed.ui?.settingsPane) === "remote"
           ? "connection"
           : ["connection", "backend", "appearance", "keybinds", "llm"].includes(String(parsed.ui?.settingsPane))
