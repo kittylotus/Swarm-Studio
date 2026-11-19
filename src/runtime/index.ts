@@ -65,7 +65,7 @@ export interface StudioUpdateStatus {
 export interface RuntimeBridge {
   readonly kind: "browser" | "tauri";
   postJson<T>(url: string, body: Record<string, unknown>, authToken?: string): Promise<T>;
-  streamJson(url: string, body: Record<string, unknown>, expectedImages: number, onEvent: (payload: unknown) => void, authToken?: string): Promise<void>;
+  streamJson(url: string, body: Record<string, unknown>, expectedImages: number, onEvent: (payload: unknown) => void, authToken?: string, signal?: AbortSignal): Promise<void>;
   getText(url: string, authToken?: string): Promise<string>;
   probe(url: string, authToken?: string): Promise<boolean>;
   fetchDataUrl(url: string, authToken?: string): Promise<string>;
@@ -226,7 +226,9 @@ async function browserStreamJson(
   expectedImages: number,
   onEvent: (payload: unknown) => void,
   authToken?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
+  signal?.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
     let opened = false;
     let foregroundSettled = false;
@@ -238,6 +240,7 @@ async function browserStreamJson(
     const resolveForeground = () => {
       if (foregroundSettled) return;
       foregroundSettled = true;
+      signal?.removeEventListener("abort", abort);
       resolve();
     };
     const gracefulClose = () => {
@@ -247,12 +250,19 @@ async function browserStreamJson(
     const fail = (error: Error) => {
       if (foregroundSettled) return;
       foregroundSettled = true;
+      signal?.removeEventListener("abort", abort);
       window.clearTimeout(closeTimer);
       try { socket.close(); } catch { /* noop */ }
       reject(error);
     };
+    const abort = () => fail(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
 
-    socket.addEventListener("open", () => { opened = true; socket.send(JSON.stringify(body)); });
+    socket.addEventListener("open", () => {
+      if (signal?.aborted) return;
+      opened = true;
+      socket.send(JSON.stringify(body));
+    });
     socket.addEventListener("message", (event) => {
       try {
         const payload = JSON.parse(String(event.data)) as Record<string, unknown>;
@@ -282,6 +292,7 @@ async function browserStreamJson(
       window.clearTimeout(closeTimer);
       if (foregroundSettled) return;
       foregroundSettled = true;
+      signal?.removeEventListener("abort", abort);
       if (event.code === 1000 || event.code === 1005 || imageCount >= Math.max(1, expectedImages)) resolve();
       else reject(new Error(`Swarm generation WebSocket closed with code ${event.code}.`));
     });
@@ -416,13 +427,17 @@ const tauriRuntime: RuntimeBridge = {
     });
     return parseJsonText<T>(text, url);
   },
-  async streamJson(url, body, expectedImages, onEvent, authToken) {
+  async streamJson(url, body, expectedImages, onEvent, authToken, signal) {
+    signal?.throwIfAborted();
     const requestId = createId();
     const { listen } = await import("@tauri-apps/api/event");
     const unlisten = await listen<{ request_id: string; payload: unknown }>("swarm-generation-event", (event) => {
       if (event.payload.request_id === requestId) onEvent(event.payload.payload);
     });
+    const abort = () => { void tauriInvoke<void>("cancel_swarm_stream", { requestId }).catch(() => {}); };
     try {
+      signal?.throwIfAborted();
+      signal?.addEventListener("abort", abort, { once: true });
       await tauriInvoke<void>("websocket_json", {
         url: websocketUrl(url),
         body: JSON.stringify(body),
@@ -430,7 +445,9 @@ const tauriRuntime: RuntimeBridge = {
         expectedImages: Math.max(0, expectedImages),
         authToken: authToken || null,
       });
+      signal?.throwIfAborted();
     } finally {
+      signal?.removeEventListener("abort", abort);
       unlisten();
     }
   },

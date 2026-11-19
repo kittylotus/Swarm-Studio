@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { pathToFileURL } from 'node:url';
 import { mkdir } from 'node:fs/promises';
+import { openExpressionSettings, closeExpressionSettings } from './fixtures/expression-settings.mjs';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright');
 
 const fixture = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/></head><body><div id="app"></div><script type="module">
@@ -119,6 +120,7 @@ try {
     const chooseIdentity=page.getByRole('button',{name:'Choose saved identity',exact:true});
     const identityPicker=page.getByRole('dialog',{name:'Choose saved identity'});
     const subject=page.getByLabel('Character & framing');
+    await openExpressionSettings(page, 'Identity');
     await chooseIdentity.click();
     await identityPicker.screenshot({path:`test-results/studio-fixes/expression-identity-${viewport.width}.png`});
     await identityPicker.getByRole('button',{name:/^Subject 0 LoRAs · Identity LoRA × 0.65$/}).click();
@@ -140,7 +142,9 @@ try {
     assert.equal(await page.getByRole('img',{name:'Character reference'}).count(),0);
     assert.equal(await chooseIdentity.evaluate(button=>document.activeElement===button),true);
     assert.deepEqual(await page.evaluate(()=>app.store.state.draft.loras),[]);
+    await openExpressionSettings(page, 'Generate');
     await page.locator('[data-setting="engine"]').selectOption('text');
+    await closeExpressionSettings(page);
     await page.evaluate(()=>{
       const studio=app.expressionStudio;
       studio.project.refine.mode=studio.project.backgroundRemoval.mode='off';
@@ -155,9 +159,12 @@ try {
     assert.deepEqual(await page.evaluate(()=>expressionCall.loras.map(({name,weight})=>[name,weight])),
       [['anime/one-lora.safetensors',1],['root-lora.safetensors',.45]]);
     await page.evaluate(()=>{app.expressionStudio=null;app.render();});
+    await page.waitForSelector('[data-setting="engine"]',{state:'attached'});
+    await openExpressionSettings(page, 'Identity');
     await chooseIdentity.waitFor();
     assert.equal(await subject.inputValue(),'preset subject');
     assert.ok(await page.getByRole('checkbox',{name:'Use LoRAs from saved identity'}).isChecked());
+    await closeExpressionSettings(page);
 
     await page.evaluate(()=>show('models'));
     const checkpoints=page.locator('.checkpoint-section'),loras=page.locator('.lora-library-section');

@@ -301,12 +301,21 @@ export class SwarmClient {
   async generateStream(
     request: SwarmGenerationRequest,
     onEvent: (event: SwarmGenerationEvent) => void,
+    signal?: AbortSignal,
+    onInterruptError?: (error: unknown) => void,
   ): Promise<SwarmGenerationImage[]> {
     const run = async (retry: boolean): Promise<SwarmGenerationImage[]> => {
       const sessionId = await this.ensureSession();
+      signal?.throwIfAborted();
       const images: SwarmGenerationImage[] = [];
       let sessionInvalid = false;
       let streamError: Error | null = null;
+      const transport = signal ? new AbortController() : undefined;
+      let interruption: Promise<void> | undefined;
+      const interrupt = () => {
+        interruption = this.interrupt().then(() => transport?.abort(), onInterruptError);
+      };
+      signal?.addEventListener("abort", interrupt, { once: true });
       try {
         await runtime.streamJson(`${this.baseUrl}/API/GenerateText2ImageWS`, {
           ...request,
@@ -321,11 +330,15 @@ export class SwarmClient {
             images.push(image);
           }
           onEvent(event);
-        }, this.authToken);
+        }, this.authToken, transport?.signal);
       } catch (error) {
         if (!images.length) throw error;
+      } finally {
+        signal?.removeEventListener("abort", interrupt);
+        await interruption;
       }
 
+      signal?.throwIfAborted();
       if (sessionInvalid && retry) {
         this.sessionId = "";
         await this.connect();

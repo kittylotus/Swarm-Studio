@@ -1,7 +1,9 @@
 mod llm;
 use base64::Engine;
+use futures_util::future::{AbortHandle, Abortable};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -17,6 +19,9 @@ struct ManagedProcess {
 }
 
 struct OwnedSwarmProcess(Mutex<Option<ManagedProcess>>);
+
+#[derive(Default)]
+struct SwarmStreams(Mutex<HashMap<String, AbortHandle>>);
 
 fn publish_desktop_pid() {
     let Ok(path) = std::env::var("SWARM_STUDIO_DESKTOP_PID_FILE") else { return; };
@@ -188,6 +193,31 @@ where
 
 #[tauri::command]
 async fn websocket_json(
+    app: tauri::AppHandle,
+    url: String,
+    body: String,
+    request_id: String,
+    expected_images: usize,
+    auth_token: Option<String>,
+    streams: tauri::State<'_, SwarmStreams>,
+) -> Result<(), String> {
+    let (handle, registration) = AbortHandle::new_pair();
+    streams.0.lock().map_err(|error| error.to_string())?.insert(request_id.clone(), handle);
+    let stream = run_swarm_socket(app, url, body, request_id.clone(), expected_images, auth_token);
+    let result = Abortable::new(stream, registration).await;
+    streams.0.lock().map_err(|error| error.to_string())?.remove(&request_id);
+    result.unwrap_or(Ok(()))
+}
+
+#[tauri::command]
+fn cancel_swarm_stream(request_id: String, streams: tauri::State<'_, SwarmStreams>) -> Result<(), String> {
+    if let Some(handle) = streams.0.lock().map_err(|error| error.to_string())?.get(&request_id) {
+        handle.abort();
+    }
+    Ok(())
+}
+
+async fn run_swarm_socket(
     app: tauri::AppHandle,
     url: String,
     body: String,
@@ -1143,6 +1173,7 @@ pub fn run() {
             Ok(())
         })
         .manage(OwnedSwarmProcess(Mutex::new(None)))
+        .manage(SwarmStreams::default())
         .manage(llm::LlmStreams::default())
         .invoke_handler(tauri::generate_handler![
             llm::list_llm_models,
@@ -1152,6 +1183,7 @@ pub fn run() {
             http_get_data_url,
             http_get_text,
             websocket_json,
+            cancel_swarm_stream,
             probe_url,
             open_anima_guide,
             open_swarm_system,

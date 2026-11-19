@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'vite';
+import { openExpressionSettings, closeExpressionSettings } from './fixtures/expression-settings.mjs';
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright');
 const workflow = {
@@ -18,6 +19,7 @@ window.calls = [];
 window.files = {};
 window.requestedOriginals = [];
 window.failBackground = true;
+window.interrupts = [];
 const picture = (width, height, cutout) => {
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
@@ -28,6 +30,7 @@ const picture = (width, height, cutout) => {
 };
 runtime.postJson = async (url, body) => {
     if (url.endsWith('GetNewSession')) return { session_id: 'mock-session' };
+    if (url.endsWith('InterruptAll')) { interrupts.push(body); return {}; }
     if (url.endsWith('ComfyListWorkflows')) return { workflows: [{ name: 'Saved/cutout' }] };
     if (url.endsWith('ComfyReadWorkflow')) return { result: { custom_params: JSON.stringify({
         source: { id: 'comfyrawworkflowinputimage0', type: 'image', name: 'Foreground source' },
@@ -50,7 +53,7 @@ runtime.fetchDataUrl = async url => {
     if (!file) throw new Error('Unknown fixture image ' + url);
     return file;
 };
-runtime.streamJson = async (url, request, count, emit) => {
+runtime.streamJson = async (url, request, count, emit, token, signal) => {
     if (!url.endsWith('GenerateText2ImageWS')) throw new Error('Unexpected generation route');
     const graph = JSON.parse(request.comfyworkflowraw || '{}');
     const classes = Object.values(graph).map(node => node.class_type);
@@ -59,8 +62,15 @@ runtime.streamJson = async (url, request, count, emit) => {
         : request.comfyuicustomworkflow ? 'saved'
         : request.maskimage ? 'inpaint' : classes.length ? 'json' : 'generate';
     const name = stage + '-' + (Object.keys(files).length + 1) + '.png';
-    emit({ gen_progress: { current_percent: .2, overall_percent: .55 } });
+    emit({ gen_progress: { current_percent: .2, overall_percent: .55, preview: picture(32, 32, false) } });
     calls.push({ stage, request, graph });
+    if (window.holdPreview) {
+        window.holdPreview = false;
+        await new Promise(resolve => {
+            window.finishHeldPreview = resolve;
+            signal?.addEventListener('abort', resolve, { once: true });
+        });
+    }
     await new Promise(resolve => setTimeout(resolve, 130));
     if (stage === 'background' && failBackground) { emit({ error: 'fixture background failed' }); return; }
     const width = stage === 'refine' || stage === 'background' ? 192 : 96;
@@ -149,16 +159,73 @@ try {
         const backgroundTab = page.getByRole('tab', { name: 'Remove background', exact: true });
         assert.equal(await generateTab.getAttribute('aria-selected'), 'true');
         assert.equal(await page.locator('[data-processing-stage]').count(), 0);
+        if (viewport.width === 1024) {
+            assert.equal(await page.locator('[data-expression-settings-open]').isVisible(), false);
+            await page.setViewportSize({ width: 720, height: 680 });
+            await openExpressionSettings(page, 'Layout');
+            const drawer = page.locator('.expression-settings-drawer');
+            assert.equal(await drawer.isVisible(), true);
+            await page.setViewportSize(viewport);
+            await drawer.waitFor({ state: 'hidden' });
+            assert.equal(await page.locator('.expression-controls').isVisible(), true);
+        }
+        if (viewport.width <= 760) {
+            const controls = page.locator('.expression-controls');
+            const settings = page.locator('[data-expression-settings-open]');
+            assert.ok(await settings.evaluate(button => {
+                const label = document.createRange();
+                label.selectNodeContents(button);
+                const box = button.getBoundingClientRect(), text = label.getBoundingClientRect();
+                return Math.abs((box.top + box.bottom) / 2 - (text.top + text.bottom) / 2) < 2;
+            }), 'settings button label is vertically centered');
+            assert.equal(await controls.isVisible(), false);
+            assert.equal(await page.locator('.expression-board').evaluate(node =>
+                Math.abs(node.getBoundingClientRect().top - node.parentElement.getBoundingClientRect().top) < 1), true);
+            await openExpressionSettings(page, 'Identity');
+            const drawer = page.locator('.expression-settings-drawer');
+            assert.equal(await drawer.getByRole('tab', { name: 'Identity' }).getAttribute('aria-selected'), 'true');
+            await page.keyboard.press('End');
+            assert.equal(await drawer.getByRole('tab', { name: 'Layout' }).getAttribute('aria-selected'), 'true');
+            assert.equal(await drawer.locator('[data-settings-group="identity"]').isVisible(), false);
+            assert.equal(await drawer.locator('[data-settings-group="layout"]').isVisible(), true);
+            await page.screenshot({ path: `test-results/image-tools/expression-settings-${viewport.width}.png` });
+            const cdp = await context.newCDPSession(page);
+            await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1.8 });
+            await page.waitForFunction(() => {
+                const viewport = window.visualViewport;
+                const rect = document.querySelector('.expression-settings-drawer').getBoundingClientRect();
+                return viewport.scale > 1.5 && Math.abs(rect.top - viewport.offsetTop) < 2
+                    && Math.abs(rect.right - viewport.offsetLeft - viewport.width) < 2
+                    && Math.abs(rect.height - viewport.height) < 2
+                    && Math.abs(rect.width - viewport.width) < 2;
+            });
+            await page.screenshot({ path: `test-results/image-tools/expression-settings-zoom-${viewport.width}.png` });
+            await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 });
+            await cdp.detach();
+            await page.keyboard.press('Escape');
+            await drawer.waitFor({ state: 'hidden' });
+            await page.waitForFunction(() => document.activeElement?.hasAttribute('data-expression-settings-open'));
+        }
+        await openExpressionSettings(page, 'Generate');
         await page.getByLabel('Render method').selectOption('text');
         const sampling = page.locator('summary').filter({ hasText: 'Sampling & resolution' });
         await sampling.focus();
         await page.keyboard.press('Enter');
         assert.equal(await sampling.evaluate(node => getComputedStyle(node).listStyleType), 'none');
+        await closeExpressionSettings(page);
         await page.getByRole('button', { name: 'Options', exact: true }).click();
         await page.getByRole('checkbox', { name: 'Keep final results only' }).check();
         await page.keyboard.press('Escape');
+        await page.evaluate(() => { window.holdPreview = true; });
         await page.getByRole('button', { name: 'Render missing', exact: true }).click();
+        const livePreview = page.locator('[data-expression-live-preview]');
+        await livePreview.waitFor();
+        await page.waitForFunction(() => document.querySelector('[data-expression-live-preview]')?.naturalWidth === 32);
+        assert.equal(await page.getByRole('button', { name: 'Stop Neutral', exact: true }).count(), 1);
+        await page.locator('.expression-card.is-rendering').screenshot({ path: `test-results/image-tools/expression-preview-${viewport.width}.png` });
+        await page.evaluate(() => finishHeldPreview());
         await page.waitForFunction(() => !app.expressionStudio.busy && calls.length === 1);
+        assert.equal(await livePreview.count(), 0);
         assert.equal(await page.locator('.expression-card-image img').count(), 1);
         await generateTab.focus();
         await page.keyboard.press('ArrowRight');
@@ -166,8 +233,10 @@ try {
         assert.equal(await refineTab.evaluate(tab => tab === document.activeElement), true);
         assert.equal(await page.getByLabel('Expression direction').count(), 0);
         const refine = page.locator('[data-processing-stage="refine"]');
+        await openExpressionSettings(page);
         await refine.getByRole('button', { name: 'Refresh backend options' }).click();
         await refine.getByLabel('Upscale model', { exact: true }).selectOption('detail.pth');
+        await closeExpressionSettings(page);
         assert.match(await page.locator('.expression-processing-meta').textContent(), /Source ready/);
         await page.getByRole('button', { name: 'Refine selected' }).click();
         await page.waitForFunction(() => !app.expressionStudio.busy && calls.length === 2);
@@ -213,7 +282,7 @@ try {
         await editor.getByRole('button', { name: 'Browse Library' }).click();
         await page.getByRole('heading', { name: 'Choose an image for Editor' }).waitFor();
         const { id, folder } = await page.evaluate(() => ({ id: targetImage, folder: targetFolder }));
-        const pick = page.locator(`[data-edit-output="${id}"]`);
+        const pick = page.locator(`[data-pick-library-output="${id}"]`);
         assert.match(await pick.locator('img').getAttribute('src'), /preview=true.*noanim=true/);
         await page.waitForFunction(() => document.querySelector('.image-grid img')?.naturalWidth === 48);
         await page.screenshot({ path: `test-results/image-tools/picker-${viewport.width}.png` });
@@ -298,6 +367,38 @@ try {
         await page.locator(`[data-inspect-output="${id}"]`).click();
         await page.getByRole('dialog', { name: 'Output inspector' }).getByRole('button', { name: 'Open in Editor' }).click();
         await editor.getByRole('img', { name: 'archive-3.png' }).waitFor();
+        await page.evaluate(() => app.navigateToView('identities'));
+        await page.getByRole('button', { name: 'New identity', exact: false }).click();
+        const identityForm = page.locator('#identity-form');
+        const identityBrowse = identityForm.getByRole('button', { name: 'Browse Library', exact: true });
+        await identityForm.getByLabel('Name', { exact: true }).fill('Library identity');
+        assert.ok(await identityForm.getByRole('button', { name: 'Upload picture' }).isVisible());
+        await identityBrowse.click();
+        await page.getByRole('heading', { name: 'Choose an identity picture' }).waitFor();
+        await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.equal(await identityForm.getByLabel('Name', { exact: true }).inputValue(), 'Library identity');
+        await identityBrowse.click();
+        await pick.click();
+        await identityForm.locator('.identity-editor-avatar > img').waitFor();
+        assert.equal(await identityForm.getByLabel('Name', { exact: true }).inputValue(), 'Library identity');
+        assert.doesNotMatch(await page.evaluate(() => requestedOriginals.at(-1)), /preview=true/);
+        await identityForm.getByRole('button', { name: /Save identity/ }).click();
+        await page.waitForFunction(() => app.store.state.identities[0]?.avatarKey);
+        await page.evaluate(() => app.navigateToView('expressions'));
+        await generateTab.click();
+        await openExpressionSettings(page, 'Identity');
+        assert.ok(await page.getByRole('button', { name: 'Upload portrait', exact: true }).isVisible());
+        await page.locator('[data-reference]').setInputFiles({ name: 'reference-upload.png', mimeType: 'image/png', buffer: thumbnails[3] });
+        await page.waitForFunction(() => app.expressionStudio.project.referenceName === 'reference-upload.png');
+        await page.getByRole('button', { name: 'Browse Library', exact: true }).click();
+        await page.getByRole('heading', { name: 'Choose an expression reference' }).waitFor();
+        await pick.click();
+        await page.waitForFunction(() => app.expressionStudio.project.referenceName === 'archive-3.png');
+        await page.getByRole('img', { name: 'Character reference' }).waitFor();
+        assert.equal(await page.evaluate(() => app.expressionStudio.project.referenceName), 'archive-3.png');
+        assert.doesNotMatch(await page.evaluate(() => requestedOriginals.at(-1)), /preview=true/);
+        await closeExpressionSettings(page);
+        await page.evaluate(() => app.navigateToView('editor'));
         await editor.getByRole('button', { name: 'Generate', exact: true }).click();
         await editor.getByLabel('Prompt', { exact: true }).fill('A purple portrait');
         await editor.locator('[data-editor-run]').click();
@@ -378,6 +479,20 @@ try {
         assert.notEqual(generatedImage, refinedImage);
         await backgroundTab.click();
         assert.equal(await page.locator('[data-cutout]').count(), 1);
+        await generateTab.click();
+        const outputCount = await page.evaluate(() => app.store.state.outputs.length);
+        const previousSeed = await page.evaluate(() => app.expressionStudio.project.tiles[0].seedOffset);
+        await page.evaluate(() => { window.holdPreview = true; });
+        await page.locator('[data-tile-command="render"]').click();
+        await livePreview.waitFor();
+        await page.getByRole('button', { name: 'Stop Neutral', exact: true }).click();
+        await page.waitForFunction(() => interrupts.length === 1 && !app.expressionStudio.busy);
+        assert.deepEqual(await page.evaluate(() => interrupts[0]), { other_sessions: false, session_id: 'mock-session' });
+        assert.equal(await livePreview.count(), 0);
+        assert.equal(await page.locator('.expression-card-image img').getAttribute('src'), generatedImage);
+        assert.equal(await page.evaluate(() => app.store.state.outputs.length), outputCount);
+        assert.equal(await page.evaluate(() => app.expressionStudio.project.tiles[0].seedOffset), previousSeed);
+        assert.match(await page.locator('.expression-run-status').textContent(), /Stopped · 0 complete/);
         assert.deepEqual(errors, []);
         await page.reload();
         await page.waitForFunction(() => app.expressionStudio?.project.tiles[0]?.stage === 'background');
@@ -386,7 +501,7 @@ try {
         assert.equal(await page.locator('.expression-card-image img').getAttribute('src'), refinedImage);
         await context.close();
     }
-    console.log('Image tools desktop/mobile UI: legacy pipeline migration, final-only renders, Library previews and picker, dock scroll, inspector shortcut, workflow import and inline Inpaint passed.');
+    console.log('Image tools desktop/mobile UI: shared Library picker and uploads, live expression preview and interrupt, mobile settings, final-only renders, workflow import and inline Inpaint passed.');
 } finally {
     await browser?.close();
     await server.close();

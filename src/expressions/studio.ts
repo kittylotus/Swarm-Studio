@@ -19,8 +19,9 @@ export interface ExpressionHost {
     busy(): boolean;
     connected(): boolean;
     identitySources?(): { identities: SavedIdentity[]; presets: SavedIdentity[] };
+    browseReference?(apply: (source: Promise<string>, name: string) => Promise<void>): void;
     captureLoras(model: string, savedStack?: LoraStackItem[]): ExpressionLora[];
-    generate(request: SwarmGenerationRequest, loras: ExpressionLora[], progress: (n: number) => void, stage?: ProcessingStage): Promise<{
+    generate(request: SwarmGenerationRequest, loras: ExpressionLora[], progress: (n: number) => void, stage?: ProcessingStage, preview?: (image: string) => void, signal?: AbortSignal): Promise<{
         image: string;
         path: string;
         seed: number;
@@ -33,6 +34,8 @@ export interface ExpressionHost {
 }
 const stageLabels = { generate: 'Generate', ...processingLabels };
 const stageActions = { generate: 'Render missing', refine: 'Refine selected', background: 'Remove backgrounds' };
+const settingsTabs = { identity: 'Identity', generate: 'Generate', layout: 'Layout' } as const;
+type SettingsTab = keyof typeof settingsTabs;
 const animaAssets = [
     ['Text encoder', 'animaClip', 'CLIPLoader', 'clip_name'],
     ['VAE', 'animaVae', 'VAELoader', 'vae_name'],
@@ -70,7 +73,13 @@ export class ExpressionStudio {
     private currentId = '';
     private progress = 0;
     private currentStage: PipelineStage | null = null;
+    private runController: AbortController | null = null;
+    private livePreview = '';
+    private referenceRequest = 0;
     private screen: PipelineStage = 'generate';
+    private settingsTab: SettingsTab = 'identity';
+    private settingsOpen = false;
+    private settingsMediaListener: AbortController | null = null;
     private generateDisclosures = new Set<string>();
     private status = 'Ready to build your expression sheet.';
     private schema: Record<string, NodeSchema> = {};
@@ -110,6 +119,7 @@ export class ExpressionStudio {
     private draw(): void {
         if (!this.host?.isConnected)
             return;
+        this.settingsMediaListener?.abort();
         const p = this.project, disabled = this.running ? 'disabled' : '';
         const models = this.modelsForEngine(p.engine);
         if (!p.model || !models.some(m => m.name === p.model)) {
@@ -133,13 +143,14 @@ export class ExpressionStudio {
    <header class="expression-hero"><div><div class="expression-heading"><h1>Expression studio</h1><button type="button" class="expression-help-button" data-command="help" title="Expression sheet usage guide" aria-label="Expression sheet usage guide" aria-haspopup="dialog">${circleHelpIcon}</button></div><p>Keep the identity, direct the emotion, and build a sheet one portrait at a time.</p></div><div class="expression-hero-actions">${actionMenu('expression-project-menu', 'Project', 'Project files', `<div class="studio-menu-section"><button type="button" data-command="project-open" ${disabled}>Open project<small>Continue a saved expression project.</small></button><button type="button" data-command="project-export">Save project<small>Download the project JSON, including portraits.</small></button></div>`)}${actionMenu('expression-export-menu', 'Export', 'Export portraits', '<div class="studio-menu-section"><button type="button" data-command="sheet-export">Export sheet PNG<small>Arrange the selected portraits into one sheet.</small></button><button type="button" data-command="pack-export">Export portrait pack<small>Separate images with the project manifest.</small></button></div>')}<input data-project-import type="file" accept="application/json,.json" hidden ${disabled}/></div></header>
    ${this.pipelineTabs()}
    <div class="expression-layout" id="expression-stage-panel" role="tabpanel" aria-labelledby="expression-tab-${stage}">
-   <aside class="expression-controls">
-    ${generatingScreen ? `<section class="expression-section"><div class="expression-section-head"><b>Identity</b>${this.bridge.identitySources ? `<button type="button" class="secondary-button" data-command="pick-identity" aria-haspopup="dialog" ${disabled}>Choose saved identity</button>` : ''}</div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
+   <aside class="expression-controls" aria-label="Expression settings">
+    ${generatingScreen ? `<div class="expression-settings-tabs" role="tablist" aria-label="Expression settings tabs">${Object.entries(settingsTabs).map(([key, label]) => `<button type="button" class="secondary-button" role="tab" id="expression-settings-tab-${key}" aria-controls="expression-settings-${key}" data-settings-tab="${key}">${label}</button>`).join('')}</div>
+    <section class="expression-section" id="expression-settings-identity" data-settings-group="identity"><div class="expression-section-head"><b>Identity</b>${this.bridge.identitySources ? `<button type="button" class="secondary-button" data-command="pick-identity" aria-haspopup="dialog" ${disabled}>Choose saved identity</button>` : ''}</div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
     <div class="expression-reference">${p.reference ? `<img src="${esc(p.reference)}" alt="Character reference"/><span>${esc(p.referenceName)}</span>` : `<div class="expression-reference-empty"><b>＋</b><span>Add a face reference</span><small>Front-facing, neutral expression, clear eyes</small></div>`}</div>
-    <div class="expression-button-row"><label class="secondary-button file-button">Upload portrait<input data-reference type="file" accept="image/png,image/jpeg,image/webp" hidden ${disabled}/></label><button data-command="clear-reference" class="ghost-button" ${disabled}>Clear</button></div><p class="helper-copy">Reference is resized to at most 1024 px and stored with this project. IPAdapter uses it to guide identity; LivePortrait edits the face directly.</p>
+    <div class="expression-button-row"><button type="button" data-command="upload-reference" class="secondary-button" ${disabled}>Upload portrait</button>${this.bridge.browseReference ? `<button type="button" data-command="browse-reference" class="secondary-button" ${disabled}>Browse Library</button>` : ''}<button type="button" data-command="clear-reference" class="ghost-button" ${disabled}>Clear</button><input data-reference type="file" accept="image/png,image/jpeg,image/webp" hidden ${disabled}/></div><p class="helper-copy">Reference is resized to at most 1024 px and stored with this project. IPAdapter uses it to guide identity; LivePortrait edits the face directly.</p>
     <label class="field"><span>Character & framing</span><textarea rows="4" data-setting="subject" ${disabled}>${esc(p.subject)}</textarea></label><label class="field"><span>Avoid</span><textarea rows="3" data-setting="negative" ${disabled}>${esc(p.negative)}</textarea></label>
     <label class="check-row"><input data-setting="useLoras" type="checkbox" ${p.useLoras ? 'checked' : ''} ${disabled}/>${p.savedIdentityLoras ? 'Use LoRAs from saved identity' : 'Use enabled LoRAs from the composer'}</label></section>
-    <section class="expression-section"><div class="expression-section-head"><b>Generate</b></div>
+    <section class="expression-section" id="expression-settings-generate" data-settings-group="generate"><div class="expression-section-head"><b>Generate</b></div>
     <label class="field"><span id="expression-engine-label">Render method</span><select data-setting="engine" aria-labelledby="expression-engine-label" ${disabled}>${[['ipadapter', 'IPAdapter · reference-guided'], ['anima', 'Anima Ref Adapter · reference-guided'], ['liveportrait', 'LivePortrait · facial edit'], ['hybrid', 'IPAdapter → LivePortrait · two passes'], ['img2img', 'Image-to-image · redraw'], ['text', 'Prompt only · baseline']].map(([v, label]) => `<option value="${v}" ${p.engine === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
     <label class="field" data-pipeline-part="style" ${p.engine === 'anima' ? 'hidden' : ''}><span id="expression-style-label">Style preset</span><select data-setting="style" aria-labelledby="expression-style-label" ${disabled}>${[['semireal', 'Semirealism'], ['realistic', 'Realistic portrait'], ['illustrated', 'Illustrated / anime']].map(([v, label]) => `<option value="${v}" ${p.style === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
     <div data-pipeline-part="checkpoint" ${p.engine === 'liveportrait' ? 'hidden' : ''}><label class="field"><span>${['ipadapter', 'hybrid'].includes(p.engine) ? 'SDXL / SD1.5 checkpoint' : p.engine === 'anima' ? 'Anima model' : 'Checkpoint'}</span><select data-setting="model" ${disabled}>${models.map(m => `<option value="${esc(m.name)}" ${m.name === p.model ? 'selected' : ''}>${esc(m.title || m.name)}</option>`).join('') || '<option value="">No compatible checkpoint loaded</option>'}</select></label></div><p data-pipeline-part="portrait" class="helper-copy" ${p.engine !== 'liveportrait' ? 'hidden' : ''}>Works best on detectable portrait faces. Uses the ExpressionEditor sliders in each card; character prompts and LoRAs are not used.</p>
@@ -167,7 +178,7 @@ export class ExpressionStudio {
     <div data-pipeline-part="img2img" ${p.engine === 'img2img' ? '' : 'hidden'}>${field('Redraw / creativity', 'denoise', 0, 1, .05)}</div>
     <details class="expression-details expression-disclosure" data-generate-disclosure="sampling" ${this.generateDisclosures.has('sampling') ? 'open' : ''}><summary>Sampling & resolution</summary><div class="expression-fields">${field('Width', 'width', 256, 1536, 64)}${field('Height', 'height', 256, 1536, 64)}${field('Steps', 'steps', 1, 100)}${field('CFG', 'cfg', 1, 20, .5)}${field('Shared seed', 'seed', 0, 2147483646)}</div><label class="field"><span>Sampler</span><select data-setting="sampler" ${disabled}>${options(samplers, p.sampler)}</select></label><label class="field"><span>Scheduler</span><select data-setting="scheduler" ${disabled}>${options(schedulers, p.scheduler)}</select></label><p class="helper-copy">768² / 24 steps is a conservative starting point for an 8 GB GPU. Every card shares the seed; rerolls increment only that card.</p></details>
     <details class="expression-details expression-disclosure" data-generate-disclosure="backend" ${this.generateDisclosures.has('backend') ? 'open' : ''}><summary>Backend setup & research</summary><button data-command="probe" class="secondary-button" ${this.setupBusy ? 'disabled' : ''}>${this.setupBusy ? 'Checking…' : 'Check loaded nodes'}</button><p class="expression-setup">${esc(this.setup)}</p><p class="helper-copy">IPAdapter needs its model weights and CLIP Vision. LivePortrait additionally needs ExpressionEditor and its models; install through ComfyUI Manager, restart the backend, then recheck.</p><button data-command="workflow-export" class="ghost-button">Export API workflow</button><a href="https://github.com/cubiq/ComfyUI_IPAdapter_plus" target="_blank" rel="noopener noreferrer">IPAdapter setup ↗</a><a href="https://github.com/PowerHouseMan/ComfyUI-AdvancedLivePortrait" target="_blank" rel="noopener noreferrer">LivePortrait setup ↗</a><a href="https://github.com/ToTheBeginning/PuLID/blob/main/docs/pulid_for_flux.md" target="_blank" rel="noopener noreferrer">Why PuLID-FLUX needs more memory ↗</a></details></section>
-    <section class="expression-section"><div class="expression-section-head"><b>Sheet layout</b></div><div class="expression-fields">${field('Columns', 'columns', 1, 8)}${field('Gutter', 'gutter', 0, 100)}<label class="field"><span>Paper</span><input data-setting="background" type="color" value="${p.background}" ${disabled}/></label></div><label class="check-row"><input data-setting="labels" type="checkbox" ${p.labels ? 'checked' : ''} ${disabled}/>Include expression labels</label><p class="helper-copy">Exports include enabled cards in their current order. Portrait packs include separate images and the project manifest.</p></section>
+    <section class="expression-section" id="expression-settings-layout" data-settings-group="layout"><div class="expression-section-head"><b>Sheet layout</b></div><div class="expression-fields">${field('Columns', 'columns', 1, 8)}${field('Gutter', 'gutter', 0, 100)}<label class="field"><span>Paper</span><input data-setting="background" type="color" value="${p.background}" ${disabled}/></label></div><label class="check-row"><input data-setting="labels" type="checkbox" ${p.labels ? 'checked' : ''} ${disabled}/>Include expression labels</label><p class="helper-copy">Exports include enabled cards in their current order. Portrait packs include separate images and the project manifest.</p></section>
     ` : `<section class="expression-section" data-processing-stage="${stage}">
         <div class="expression-section-head"><b>${stageLabels[stage]} settings</b></div>
         <div class="processing-fields" data-processing-fields></div>
@@ -180,6 +191,7 @@ export class ExpressionStudio {
         <p data-stage-count></p>
       </div>
       <div class="expression-toolbar-actions">
+        <button type="button" class="secondary-button expression-settings-open" aria-haspopup="dialog" aria-controls="expression-settings-drawer" data-expression-settings-open>Settings</button>
         ${generatingScreen ? this.addExpressionsMenu(disabled) : ''}
         <div class="expression-render-actions">
           <button type="button" data-command="run-stage" class="primary-button" ${disabled}>${stageActions[stage]}</button>
@@ -192,7 +204,9 @@ export class ExpressionStudio {
     <div class="expression-run-status" role="status"><span class="${this.running ? 'is-running' : ''}"></span><b>${esc(this.status)}</b></div>
     ${p.tiles.length ? `<div class="expression-grid" style="--expression-columns:${Math.min(p.columns, 4)}">${p.tiles.map((tile, index) => this.card(tile, index, disabled)).join('')}</div>`
         : '<p class="expression-stage-empty">Add expressions on the Generate screen to build your sheet.</p>'}
-   </section></div></div>`;
+   </section></div>
+   <dialog id="expression-settings-drawer" class="expression-settings-drawer" aria-labelledby="expression-settings-title"><header><h2 id="expression-settings-title">${generatingScreen ? 'Expression settings' : `${stageLabels[stage]} settings`}</h2><button type="button" class="icon-button" aria-label="Close expression settings" data-expression-settings-close>×</button></header></dialog>
+   </div>`;
         this.bind();
         this.syncSetupFeedback();
         this.syncStageStatus();
@@ -207,6 +221,93 @@ export class ExpressionStudio {
                 this.syncStageStatus();
             }, this.processingChoices[stage], true, this.running);
         }
+        this.bindMobileSettings();
+    }
+    private bindMobileSettings(): void {
+        const root = this.host!;
+        const controls = root.querySelector<HTMLElement>('.expression-controls')!;
+        const layout = controls.parentElement!;
+        const drawer = root.querySelector<HTMLDialogElement>('.expression-settings-drawer')!;
+        const trigger = root.querySelector<HTMLButtonElement>('[data-expression-settings-open]')!;
+        const close = drawer.querySelector<HTMLButtonElement>('[data-expression-settings-close]')!;
+        const tabs = [...controls.querySelectorAll<HTMLButtonElement>('[data-settings-tab]')];
+        const sections = controls.querySelectorAll<HTMLElement>('[data-settings-group]');
+        const phone = window.matchMedia('(max-width: 760px)');
+        const viewport = window.visualViewport;
+        const syncViewport = () => {
+            const width = viewport?.width ?? document.documentElement.clientWidth;
+            const right = Math.max(0, document.documentElement.clientWidth - width - (viewport?.offsetLeft ?? 0));
+            drawer.style.setProperty('--settings-viewport-width', `${width}px`);
+            drawer.style.setProperty('--settings-viewport-right', `${right}px`);
+            drawer.style.setProperty('--settings-viewport-top', `${viewport?.offsetTop ?? 0}px`);
+            if (viewport) drawer.style.setProperty('--settings-viewport-height', `${viewport.height}px`);
+            drawer.toggleAttribute('data-narrow-viewport', width < 340);
+        };
+        const selectTab = (key: SettingsTab) => {
+            this.settingsTab = key;
+            for (const tab of tabs) {
+                const selected = tab.dataset.settingsTab === key;
+                tab.setAttribute('aria-selected', String(selected));
+                tab.tabIndex = selected ? 0 : -1;
+            }
+            for (const section of sections) {
+                section.toggleAttribute('data-selected', section.dataset.settingsGroup === key);
+            }
+            controls.scrollTop = 0;
+        };
+        const dismiss = () => {
+            this.settingsOpen = false;
+            drawer.close();
+        };
+        const open = () => {
+            if (!phone.matches || drawer.open) return;
+            this.settingsOpen = true;
+            for (const section of sections) {
+                section.setAttribute('role', 'tabpanel');
+                section.setAttribute('aria-labelledby', `expression-settings-tab-${section.dataset.settingsGroup}`);
+            }
+            selectTab(this.settingsTab);
+            drawer.append(controls);
+            syncViewport();
+            drawer.showModal();
+            (tabs.find(tab => tab.tabIndex === 0) ?? close).focus({ preventScroll: true });
+            this.settingsMediaListener = new AbortController();
+            const { signal } = this.settingsMediaListener;
+            viewport?.addEventListener('resize', syncViewport, { signal });
+            viewport?.addEventListener('scroll', syncViewport, { signal });
+            phone.addEventListener('change', () => { if (!phone.matches && drawer.open) dismiss(); },
+                { signal });
+        };
+        trigger.addEventListener('click', open);
+        close.addEventListener('click', dismiss);
+        drawer.addEventListener('click', event => { if (event.target === drawer) dismiss(); });
+        drawer.addEventListener('cancel', () => { this.settingsOpen = false; });
+        drawer.addEventListener('keydown', event => event.stopPropagation());
+        drawer.addEventListener('close', () => {
+            if (!drawer.isConnected) return;
+            this.settingsOpen = false;
+            this.settingsMediaListener?.abort();
+            for (const section of sections) {
+                section.removeAttribute('role');
+                section.removeAttribute('aria-labelledby');
+            }
+            layout.prepend(controls);
+            if (phone.matches) trigger.focus({ preventScroll: true });
+        });
+        tabs.forEach((tab, index) => {
+            tab.addEventListener('click', () => selectTab(tab.dataset.settingsTab as SettingsTab));
+            tab.addEventListener('keydown', event => {
+                const next = event.key === 'ArrowRight' ? tabs[(index + 1) % tabs.length]
+                    : event.key === 'ArrowLeft' ? tabs[(index + tabs.length - 1) % tabs.length]
+                    : event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs.at(-1) : undefined;
+                if (!next) return;
+                event.preventDefault();
+                selectTab(next.dataset.settingsTab as SettingsTab);
+                next.focus({ preventScroll: true });
+            });
+        });
+        if (this.settingsOpen && phone.matches) open();
+        else this.settingsOpen = false;
     }
     private availableStages(): PipelineStage[] {
         return this.bridge.processing ? ['generate', 'refine', 'background'] : ['generate'];
@@ -283,6 +384,9 @@ export class ExpressionStudio {
             : stage === 'background' ? imageForStage(tile, 'refine') ?? imageForStage(tile, 'generate') : undefined;
         const preview = result ?? source;
         const working = this.currentId === tile.id && this.currentStage === stage;
+        const active = this.currentId === tile.id && this.currentStage !== null;
+        const stopping = this.runController?.signal.aborted;
+        const stopButton = active ? `<button type="button" data-tile-command="stop" class="danger-soft expression-stop-card" aria-label="Stop ${esc(tile.name)}" ${stopping ? 'disabled' : ''}>${stopping ? 'Stopping…' : 'Stop'}</button>` : '';
         const actions = generate ? `
             <textarea data-tile="prompt" rows="2" aria-label="Expression direction" ${disabled}>${esc(tile.prompt)}</textarea>
             ${this.cardError(tile)}
@@ -290,13 +394,13 @@ export class ExpressionStudio {
             <small>${result && result.seed >= 0 ? `Seed ${result.seed}` : 'Shared seed'}</small>
             <details class="expression-disclosure" data-pipeline-part="motion" ${['liveportrait', 'hybrid'].includes(this.project.engine) ? '' : 'hidden'}><summary>Face controls</summary><div class="expression-motion">${Object.entries(tile.motion).map(([key, value]) => `<label><span>${esc(key.replaceAll('_', ' '))}</span><input data-motion="${key}" type="number" min="${motionLimits[key as keyof ExpressionMotion][0]}" max="${motionLimits[key as keyof ExpressionMotion][1]}" step="${key === 'smile' ? .05 : .5}" value="${value}" ${disabled}/></label>`).join('')}</div></details>
             <div class="expression-card-actions">
-                <button data-tile-command="render" class="primary-button" ${disabled || tile.locked ? 'disabled' : ''}>${this.project.engine === 'liveportrait' ? 'Apply face' : tile.image ? 'Reroll' : 'Render'}</button>
+                ${stopButton || `<button data-tile-command="render" class="primary-button" ${disabled || tile.locked ? 'disabled' : ''}>${this.project.engine === 'liveportrait' ? 'Apply face' : tile.image ? 'Reroll' : 'Render'}</button>`}
                 <button data-tile-command="reference" class="ghost-button" title="Use this portrait as the character reference" ${result && !this.running ? '' : 'disabled'}>Ref</button>
                 <button data-tile-command="download" class="ghost-button" ${result ? '' : 'disabled'}>PNG</button>
                 <button data-tile-command="up" title="Move earlier" ${disabled}>↑</button><button data-tile-command="down" title="Move later" ${disabled}>↓</button><button data-tile-command="remove" title="Remove card" ${disabled}>×</button>
             </div>` : `
             ${this.cardError(tile)}
-            <div class="expression-processing-meta"><small data-stage-state="${tile.id}"></small>${result ? '<button data-tile-command="download" class="ghost-button">PNG</button>' : ''}</div>`;
+            <div class="expression-processing-meta"><small data-stage-state="${tile.id}"></small>${stopButton}${result ? '<button data-tile-command="download" class="ghost-button">PNG</button>' : ''}</div>`;
         const lastStage = tile.stage ?? 'generate';
         const latest = !preview && tile.image && lastStage !== stage && this.availableStages().includes(lastStage);
         const empty = latest ? 'Earlier image unavailable' : generate ? 'Ready for direction' : 'No image yet';
@@ -309,7 +413,7 @@ export class ExpressionStudio {
             <div class="expression-card-image" ${stage === 'background' && result ? 'data-cutout' : ''} style="aspect-ratio:${this.project.width}/${this.project.height}">
                 ${preview ? `<img src="${esc(preview.image)}" alt="${esc(tile.name)} · ${result ? stageLabels[stage] : 'Source'}"/>`
                     : `<div><span>${esc(tile.name)}</span><small>${empty}</small></div>`}
-                ${working ? `<span class="expression-render-overlay">${stageLabels[stage]}…</span>` : ''}
+                ${working ? `<img class="expression-live-preview" data-expression-live-preview alt="Live preview for ${esc(tile.name)}" ${this.livePreview ? `src="${esc(this.livePreview)}"` : 'hidden'}/><span class="expression-render-overlay">${stageLabels[stage]}…</span>` : ''}
             </div>
             <div class="expression-card-body">
                 ${latest ? `<button type="button" class="ghost-button" data-open-stage="${lastStage}">View latest result</button>` : ''}
@@ -381,7 +485,12 @@ export class ExpressionStudio {
                 this.host?.querySelectorAll<HTMLInputElement>('[data-setting="name"]').forEach(other => { if (other !== input)
                     other.value = this.project.name; });
         }));
-        root.querySelector<HTMLInputElement>('[data-reference]')?.addEventListener('change', e => void this.loadReference((e.currentTarget as HTMLInputElement).files?.[0]));
+        root.querySelector<HTMLInputElement>('[data-reference]')?.addEventListener('change', event => {
+            const input = event.currentTarget as HTMLInputElement;
+            const file = input.files?.[0];
+            input.value = '';
+            void this.loadReference(file);
+        });
         root.querySelector<HTMLInputElement>('[data-project-import]')?.addEventListener('change', e => void this.importProject((e.currentTarget as HTMLInputElement).files?.[0]));
         bindActionMenus(root);
         const openGuide = this.bridge.openAnimaGuide;
@@ -410,6 +519,13 @@ export class ExpressionStudio {
                 const result = imageForStage(tile, this.screen);
                 if (result) void this.saveTile(tile.name, result).catch(error => this.bridge.notify(String(error), true));
                 return;
+            } if (command === 'stop' && this.currentId === tile.id && this.runController) {
+                this.stopped = true;
+                this.runController.abort();
+                this.livePreview = '';
+                this.status = `Stopping ${tile.name}…`;
+                this.draw();
+                return;
             } if (this.running)
                 return; if (command === 'reference') {
                 this.project.reference = imageForStage(tile, 'generate')?.image ?? '';
@@ -418,8 +534,6 @@ export class ExpressionStudio {
                 this.draw();
                 return;
             } if (command === 'render') {
-                if (tile.image && this.project.engine !== 'liveportrait')
-                    tile.seedOffset++;
                 void this.run([tile], true, 'generate');
                 return;
             } if (command === 'lock')
@@ -442,6 +556,14 @@ export class ExpressionStudio {
             }
             if (command === 'pick-identity') {
                 this.openIdentityPicker();
+                return;
+            }
+            if (command === 'browse-reference') {
+                if (!this.running) this.bridge.browseReference?.((source, name) => this.setReference(source, name));
+                return;
+            }
+            if (command === 'upload-reference') {
+                this.host?.querySelector<HTMLInputElement>('[data-reference]')?.click();
                 return;
             }
             if (command === 'stop') {
@@ -497,6 +619,7 @@ export class ExpressionStudio {
                 return;
             }
             if (command === 'clear-reference') {
+                this.referenceRequest++;
                 this.project.reference = '';
                 this.project.referenceName = '';
             }
@@ -565,6 +688,7 @@ export class ExpressionStudio {
                 const model = resolveModelFileName(identity.model, this.bridge.models().map(item => item.name));
                 const checkpoint = this.modelsForEngine(project.engine).find(item => item.name.replaceAll('\\', '/') === model);
                 const loras = cloneLoraStack(identity.loraStack);
+                this.referenceRequest++;
                 Object.assign(project, {
                     subject: (identity.positivePrompt.trim() || defaults.subject).slice(0, 20000),
                     negative: (identity.negativePrompt.trim() || defaults.negative).slice(0, 20000),
@@ -596,27 +720,32 @@ export class ExpressionStudio {
             throw new Error('Choose a portrait under 30 MB.');
         const url = URL.createObjectURL(file);
         try {
-            const reference = await portraitDataUrl(url);
-            if (this.running)
-                throw new Error('Wait for the sheet queue to finish before changing its reference.');
-            this.project.reference = reference;
-            this.project.referenceName = file.name;
+            await this.setReference(url, file.name);
         }
         finally {
             URL.revokeObjectURL(url);
         }
-        this.persist();
-        this.draw();
     }
     catch (error) {
         this.bridge.notify(String(error), true);
     } }
+    private async setReference(source: string | Promise<string>, name: string): Promise<void> {
+        const request = ++this.referenceRequest;
+        const reference = await portraitDataUrl(await source);
+        if (request !== this.referenceRequest) return;
+        if (this.running) throw new Error('Wait for the sheet queue to finish before changing its reference.');
+        this.project.reference = reference;
+        this.project.referenceName = name;
+        this.persist();
+        this.draw();
+    }
     private async importProject(file?: File): Promise<void> { if (!file)
         return; try {
         const imported = normalizeSheet(JSON.parse(await file.text()));
         if (this.running)
             throw new Error('Wait for the sheet queue to finish before opening a project.');
         this.project = imported;
+            this.referenceRequest++;
         this.screen = 'generate';
         this.persist();
         this.draw();
@@ -693,21 +822,33 @@ export class ExpressionStudio {
         if (this.setupError) throw new Error(this.setupError);
         return animaWorkflow(project, tile, this.schema, loras, this.bridge.models().find(model => model.name === project.model));
     }
-    private async generateTile(snapshot: SheetProject, tile: ExpressionTile, loras: ExpressionLora[], transient: boolean) {
+    private async generateTile(snapshot: SheetProject, tile: ExpressionTile, loras: ExpressionLora[], transient: boolean, signal: AbortSignal) {
         const request = expressionRequest(snapshot, tile, this.bridge.params());
         if (snapshot.engine === 'anima')
             request.comfyworkflowraw = JSON.stringify(this.animaGraph(snapshot, tile, loras));
         if (snapshot.engine === 'liveportrait')
             request.comfyworkflowraw = JSON.stringify(livePortraitWorkflow(snapshot.reference, tile.motion, this.schema));
         if (transient || (snapshot.autoDeleteDrafts && snapshot.engine === 'hybrid')) request.donotsave = true;
-        const output = await this.bridge.generate(request, loras, fraction => this.updateProgress(snapshot.engine === 'hybrid' ? fraction / 2 : fraction));
+        const preview = (image: string) => this.updatePreview(image);
+        const output = await this.bridge.generate(request, loras, fraction => this.updateProgress(snapshot.engine === 'hybrid' ? fraction / 2 : fraction), undefined, preview, signal);
+        signal.throwIfAborted();
         if (snapshot.engine !== 'hybrid') return output;
+        preview(output.image);
         const facial: SwarmGenerationRequest = {
             ...request, promptimages: undefined, useipadapter: undefined, steps: 1, cfgscale: 1, seed: output.seed,
             donotsave: transient || undefined,
             comfyworkflowraw: JSON.stringify(livePortraitWorkflow(output.image, tile.motion, this.schema)),
         };
-        return this.bridge.generate(facial, [], fraction => this.updateProgress(.5 + fraction / 2));
+        return this.bridge.generate(facial, [], fraction => this.updateProgress(.5 + fraction / 2), undefined, preview, signal);
+    }
+    private updatePreview(image: string): void {
+        if (!image || !this.currentId || !this.currentStage || this.runController?.signal.aborted) return;
+        this.livePreview = image;
+        const node = this.host?.querySelector<HTMLImageElement>('[data-expression-live-preview]');
+        if (node) {
+            node.src = image;
+            node.hidden = false;
+        }
     }
     private updateProgress(value: number): void {
         this.progress = value;
@@ -730,6 +871,8 @@ export class ExpressionStudio {
             return;
         }
         this.running = true;
+        this.runController = new AbortController();
+        const signal = this.runController.signal;
         this.stopped = false;
         this.status = 'Checking pipeline settings…';
         this.draw();
@@ -764,6 +907,8 @@ export class ExpressionStudio {
             for (const [index, { tile, stages }] of queue.entries()) {
                 if (this.stopped) break;
                 this.currentId = tile.id;
+                const oldSeedOffset = tile.seedOffset;
+                if (regenerate && stageOnly === 'generate' && tile.image && snapshot.engine !== 'liveportrait') tile.seedOffset++;
                 tile.error = '';
                 tile.errorStage = undefined;
                 try {
@@ -774,21 +919,25 @@ export class ExpressionStudio {
                         this.currentStage = stage;
                         this.status = `${index + 1} / ${queue.length} · ${tile.name} · ${stageLabels[stage]}`;
                         this.progress = 0;
+                        this.livePreview = '';
                         this.draw();
                         let output;
                         if (stage === 'generate') {
-                            output = await this.generateTile(snapshot, tile, loras, transient);
+                            output = await this.generateTile(snapshot, tile, loras, transient, signal);
+                            signal.throwIfAborted();
                             if (tile.image) {
                                 tile.variants = [...(tile.variants ?? []), { image: tile.image, path: tile.path, seed: tile.seed, stage: tile.stage }].slice(-8);
                             }
                         } else {
                             const source = await readProcessingImage(tile.image);
+                            signal.throwIfAborted();
                             const request = processingRequest(source, workflows.get(stage)!(source), {
                                 model: snapshot.model, seed: tile.seed, prompt: tile.prompt, negativeprompt: snapshot.negative,
                             });
                             if (transient) request.donotsave = true;
-                            output = await this.bridge.generate(request, [], value => this.updateProgress(value), stage);
+                            output = await this.bridge.generate(request, [], value => this.updateProgress(value), stage, image => this.updatePreview(image), signal);
                         }
+                        signal.throwIfAborted();
                         recordStageImage(tile, stage, output);
                         this.persist();
                     }
@@ -798,6 +947,10 @@ export class ExpressionStudio {
                     }
                     completed++;
                 } catch (error) {
+                    if (signal.aborted) {
+                        tile.seedOffset = oldSeedOffset;
+                        break;
+                    }
                     const message = error instanceof Error ? error.message : String(error);
                     const failure = expressionFailure(message);
                     const stage = this.currentStage;
@@ -816,6 +969,8 @@ export class ExpressionStudio {
         } finally {
             this.currentId = '';
             this.currentStage = null;
+            this.runController = null;
+            this.livePreview = '';
             this.persist(true);
             await this.saving;
             this.running = false;

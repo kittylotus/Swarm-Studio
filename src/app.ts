@@ -373,7 +373,7 @@ interface PendingGenerationApproval {
 export class StudioApp {
   private expressionStudio: ExpressionStudio | null = null;
   private imageEditor: ImageEditor | null = null;
-  private editorPickingImage = false;
+  private libraryImagePicker: { view: "editor" | "identities" | "expressions"; title: string; apply?: (output: OutputRecord) => void | Promise<void> } | null = null;
   private pendingEditorImage: { id: string; inpaint: boolean } | null = null;
 
   private readonly root: HTMLElement;
@@ -754,7 +754,10 @@ export class StudioApp {
 
   private navigateToView(requested: StudioView): void {
     if (requested === "settings" && this.view === "settings") return;
-    if (requested !== "library") this.editorPickingImage = false;
+    if (requested !== "library" && this.libraryImagePicker) {
+      this.libraryImagePicker = null;
+      this.libraryFiltersOpen = false;
+    }
     if (requested !== "editor") this.pendingEditorImage = null;
     if (this.view !== "settings") this.lastNonSettingsView = this.view;
     this.view = requested;
@@ -1775,7 +1778,7 @@ export class StudioApp {
           <button class="icon-button mobile-nav" data-action="mobile-menu" aria-label="Open navigation">☰</button>
         </header>
         <main class="main-area ${this.libraryBrowseDockActive() ? "has-library-browse-dock" : ""}">
-          ${this.view === "library" && this.editorPickingImage ? this.renderEditorPickerHeader() : compactHeader}
+          ${this.view === "library" && this.libraryImagePicker ? this.renderLibraryPickerHeader() : compactHeader}
           <section class="content ${this.view === "create" ? "content--create" : ""} ${this.view === "civitai" ? "content--civitai" : ""}" id="view-host">${this.renderView()}</section>
         </main>
       </div>
@@ -3460,16 +3463,16 @@ export class StudioApp {
   }
 
   private renderLibrarySelectionRail(): string {
-    if (this.view !== "library" || !this.librarySelectMode || this.librarySyncing || this.editorPickingImage) return "";
+    if (this.view !== "library" || !this.librarySelectMode || this.librarySyncing || this.libraryImagePicker) return "";
     const selectedCount = this.librarySelected.size;
     const outputs = this.libraryVisibleOutputs().slice(0, this.libraryRenderLimit);
     return `<div class="library-selection-rail ${this.libraryBatchBusy ? "is-busy" : ""}"><span><b>${selectedCount}</b> selected${this.libraryBatchBusy ? `<small>Working…</small>` : ""}</span><div class="library-selection-actions"><button class="ghost-button" data-action="select-mounted-outputs" ${outputs.length && !this.libraryBatchBusy ? "" : "disabled"}>Select shown</button><button class="ghost-button" data-action="favorite-selected-outputs" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>★ Favorite</button><button class="ghost-button" data-action="unfavorite-selected-outputs" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>☆ Unfavorite</button><button class="ghost-button" data-action="open-library-move" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>Move</button><button class="danger-soft" data-action="delete-selected-outputs" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>Delete</button><button class="ghost-button" data-action="clear-output-selection" ${selectedCount && !this.libraryBatchBusy ? "" : "disabled"}>Clear</button><button class="secondary-button" data-action="finish-library-selection" ${this.libraryBatchBusy ? "disabled" : ""}>Done</button></div></div>`;
   }
 
-  private renderEditorPickerHeader(): string {
+  private renderLibraryPickerHeader(): string {
     return `<header class="section-header editor-picker-heading">
-      <div><h1>Choose an image for Editor</h1></div>
-      <button type="button" class="secondary-button" data-action="cancel-editor-picker">Cancel</button>
+      <div><h1 tabindex="-1">${escapeHtml(this.libraryImagePicker?.title)}</h1></div>
+      <button type="button" class="secondary-button" data-action="cancel-library-picker">Cancel</button>
     </header>`;
   }
 
@@ -3484,16 +3487,16 @@ export class StudioApp {
 
     const allOutputs = this.libraryVisibleOutputs();
     const outputs = allOutputs.slice(0, this.libraryRenderLimit);
-    const selecting = this.librarySelectMode && !this.editorPickingImage;
-    const selectedCount = this.editorPickingImage ? 0 : this.librarySelected.size;
+    const selecting = this.librarySelectMode && !this.libraryImagePicker;
+    const selectedCount = this.libraryImagePicker ? 0 : this.librarySelected.size;
     const remaining = Math.max(0, allOutputs.length - outputs.length);
     const syncDisabled = !this.connected || this.libraryBatchBusy;
     return `<div class="library-layout library-layout--single"><section class="library-main ${selecting ? "is-selecting" : ""}">
       <div class="library-toolbar library-toolbar--simple">
         <div class="library-toolbar-count"><b>${allOutputs.length}</b> matching output${allOutputs.length === 1 ? "" : "s"}<small>${outputs.length < allOutputs.length ? ` · ${outputs.length} mounted` : ""}${selectedCount ? ` · ${selectedCount} selected` : ""}</small></div>
         <div class="library-toolbar-actions library-toolbar-actions--grouped">
-          <div class="library-browse-actions"><button type="button" class="secondary-button" data-action="open-library-filters">${filterSvg} Browse</button>${this.editorPickingImage ? "" : `<button type="button" class="secondary-button library-select-toggle ${this.librarySelectMode ? "is-active" : ""}" data-action="toggle-library-selection" aria-pressed="${this.librarySelectMode}" aria-label="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}">${batchSelectSvg}<span>${this.librarySelectMode ? "Done selecting" : "Select"}</span></button>`}</div>
-          <div class="library-maintenance-actions">${this.editorPickingImage ? `<button type="button" class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button>` : `${actionMenu("library-tools-menu", "Tools", "Library tools", `<div class="studio-menu-section"><button type="button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}<small>Reconcile the index with files saved in Swarm.</small></button></div><div class="studio-menu-section"><small>CLEAN UP CURRENT RESULTS</small><button type="button" class="danger-soft" aria-labelledby="library-delete-name" aria-describedby="library-delete-help" data-action="delete-nonfavorite-outputs" ${!syncDisabled && allOutputs.some(output => !output.starred) ? "" : "disabled"}><span id="library-delete-name">Delete all non-favorited</span><small id="library-delete-help">Favorites are preserved. Review the count before confirming.</small></button></div>`)}<button type="button" class="primary-button library-generate-action" data-nav="create">Generate</button>`}</div>
+          <div class="library-browse-actions"><button type="button" class="secondary-button" data-action="open-library-filters">${filterSvg} Browse</button>${this.libraryImagePicker ? "" : `<button type="button" class="secondary-button library-select-toggle ${this.librarySelectMode ? "is-active" : ""}" data-action="toggle-library-selection" aria-pressed="${this.librarySelectMode}" aria-label="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}">${batchSelectSvg}<span>${this.librarySelectMode ? "Done selecting" : "Select"}</span></button>`}</div>
+          <div class="library-maintenance-actions">${this.libraryImagePicker ? `<button type="button" class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button>` : `${actionMenu("library-tools-menu", "Tools", "Library tools", `<div class="studio-menu-section"><button type="button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}<small>Reconcile the index with files saved in Swarm.</small></button></div><div class="studio-menu-section"><small>CLEAN UP CURRENT RESULTS</small><button type="button" class="danger-soft" aria-labelledby="library-delete-name" aria-describedby="library-delete-help" data-action="delete-nonfavorite-outputs" ${!syncDisabled && allOutputs.some(output => !output.starred) ? "" : "disabled"}><span id="library-delete-name">Delete all non-favorited</span><small id="library-delete-help">Favorites are preserved. Review the count before confirming.</small></button></div>`)}<button type="button" class="primary-button library-generate-action" data-nav="create">Generate</button>`}</div>
         </div>
       </div>
       <div class="library-filter-readout"><span>${escapeHtml(this.libraryFilterSummary())}</span>${selecting ? `<b>Selection active · Shift-click for ranges</b>` : ""}</div>
@@ -3502,7 +3505,7 @@ export class StudioApp {
   }
 
   private outputCard(output: OutputRecord): string {
-    const picking = this.editorPickingImage;
+    const picking = this.libraryImagePicker;
     const selecting = this.librarySelectMode && !picking;
     const selected = selecting && this.librarySelected.has(output.id);
     const preview = this.libraryPreviewUrl(output);
@@ -3510,7 +3513,7 @@ export class StudioApp {
     return `
       <article class="image-card ${selected ? "is-selected" : ""}" data-output-card="${output.id}">
         ${selecting ? `<button class="output-select-check" data-select-output="${output.id}" aria-label="${this.librarySelected.has(output.id) ? "Deselect" : "Select"} output">${this.librarySelected.has(output.id) ? "✓" : ""}</button>` : ""}
-        <div class="image-card-media-wrap"><button class="image-card-media" ${picking ? `data-edit-output="${output.id}" aria-label="Load ${pickLabel} in Editor"` : selecting ? `data-select-output="${output.id}"` : `data-inspect-output="${output.id}"`}><img ${this.swarmImageAttributes(preview)} alt="${escapeHtml(output.prompt || "Swarm output")}" loading="lazy" decoding="async" /></button>${picking || selecting ? "" : `<button class="star-button ${output.starred ? "is-starred" : ""}" data-star="${output.id}" title="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}" aria-label="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}">${heartSvg}</button>`}</div>
+        <div class="image-card-media-wrap"><button class="image-card-media" ${picking ? `data-pick-library-output="${escapeHtml(output.id)}" aria-label="Choose ${pickLabel}"` : selecting ? `data-select-output="${output.id}"` : `data-inspect-output="${output.id}"`}><img ${this.swarmImageAttributes(preview)} alt="${escapeHtml(output.prompt || "Swarm output")}" loading="lazy" decoding="async" /></button>${picking || selecting ? "" : `<button class="star-button ${output.starred ? "is-starred" : ""}" data-star="${output.id}" title="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}" aria-label="${output.starred ? "Remove from Swarm Starred" : "Add to Swarm Starred"}">${heartSvg}</button>`}</div>
         <div class="image-card-body">
           <b>${escapeHtml(prettyName(output.model) || "Swarm output")}</b>
           <p>${escapeHtml(output.prompt || output.sentPrompt || "No prompt recorded")}</p>
@@ -3533,7 +3536,7 @@ export class StudioApp {
           <form id="identity-form">
             <input type="hidden" name="id" value="${escapeHtml(editing?.id || "")}" />
             <input type="hidden" name="avatarUrl" value="${escapeHtml(avatar || "")}" />
-            <div class="identity-editor-avatar">${avatar ? `<img src="${escapeHtml(avatar)}" alt="" />` : `<span>${escapeHtml((source.name || "?").slice(0, 1).toUpperCase())}</span>`}<div><button type="button" class="secondary-button" data-action="choose-identity-picture">Choose picture</button><button type="button" class="ghost-button" data-action="clear-identity-picture" ${avatar ? "" : "hidden"}>Remove picture</button></div><input id="identity-picture-input" type="file" accept="image/*" hidden /></div>
+            <div class="identity-editor-avatar">${avatar ? `<img src="${escapeHtml(avatar)}" alt="" />` : `<span>${escapeHtml((source.name || "?").slice(0, 1).toUpperCase())}</span>`}<div><button type="button" class="secondary-button" data-action="choose-identity-picture">Upload picture</button><button type="button" class="secondary-button" data-browse-identity-picture="">Browse Library</button><button type="button" class="ghost-button" data-action="clear-identity-picture" ${avatar ? "" : "hidden"}>Remove picture</button></div><input id="identity-picture-input" type="file" accept="image/*" hidden /></div>
             <div class="field-grid field-grid--2">
               <label class="field"><span>Name</span><input name="name" required value="${escapeHtml(source.name)}" placeholder="Hugo, Lycaon, Scenery…" /></label>
               <label class="field"><span>Folder</span><select name="folderId">${this.identityFolderOptions(source.folderId)}</select></label>
@@ -3565,7 +3568,7 @@ export class StudioApp {
       <article class="panel identity-card">
         <div class="identity-avatar">${identity.avatarUrl ? `<img src="${escapeHtml(identity.avatarUrl)}" alt="" />` : escapeHtml(identity.name.slice(0, 1).toUpperCase())}</div>
         <div class="identity-card-copy"><span class="tiny-tag">${escapeHtml(folder)}</span><h3>${escapeHtml(identity.name)}</h3><p>${escapeHtml(identity.positivePrompt || "No base prompt yet.")}</p><div class="card-meta"><span>${escapeHtml(identity.model ? prettyName(identity.model) : "Current checkpoint")}</span><span>${identity.loraStack.length} LoRA${identity.loraStack.length === 1 ? "" : "s"}</span></div></div>
-        <div class="identity-card-actions"><button class="secondary-button" data-apply-identity="${identity.id}">Use in Create</button><details class="identity-menu"><summary class="icon-button" title="Identity actions" aria-label="Actions for ${escapeHtml(identity.name)}">…</summary><div><button data-edit-identity="${identity.id}" aria-label="Edit identity ${escapeHtml(identity.name)}">Edit</button><button data-picture-identity="${identity.id}" aria-label="Change picture for ${escapeHtml(identity.name)}">Picture</button><button class="danger-soft" data-delete-identity="${identity.id}" aria-label="Delete identity ${escapeHtml(identity.name)}">Delete</button></div></details><input type="file" accept="image/*" hidden data-identity-picture-input="${identity.id}" /></div>
+        <div class="identity-card-actions"><button class="secondary-button" data-apply-identity="${identity.id}">Use in Create</button><details class="identity-menu"><summary class="icon-button" title="Identity actions" aria-label="Actions for ${escapeHtml(identity.name)}">…</summary><div><button data-edit-identity="${identity.id}" aria-label="Edit identity ${escapeHtml(identity.name)}">Edit</button><button data-picture-identity="${identity.id}" aria-label="Upload picture for ${escapeHtml(identity.name)}">Upload picture</button><button data-browse-identity-picture="${identity.id}" aria-label="Browse Library for ${escapeHtml(identity.name)}">Browse Library</button><button class="danger-soft" data-delete-identity="${identity.id}" aria-label="Delete identity ${escapeHtml(identity.name)}">Delete</button></div></details><input type="file" accept="image/*" hidden data-identity-picture-input="${identity.id}" /></div>
       </article>`;
   }
 
@@ -5349,28 +5352,50 @@ export class StudioApp {
 
   private async renderToolImage(
     request: SwarmGenerationRequest, loras: ExpressionLora[], progress: (value: number) => void,
-    label: string, stage?: ProcessingStage,
+    label: string, stage?: ProcessingStage, onPreview?: (image: string) => void, signal?: AbortSignal,
   ) {
+    signal?.throwIfAborted();
     if (!this.connected || this.generating) throw new Error("Swarm is disconnected or another generation is running.");
     const client = this.client;
     const submitted = applyExpressionLoras(request, loras);
     const normalized = normalizeGenerationRequest({ ...submitted, model: submitted.model || undefined } as SwarmGenerationRequest, this.params).request;
     let finalMetadata = "";
     this.addLog(`${label} · ${request.model || "Comfy workflow"} · seed ${request.seed}`, "info", "api");
+    let streaming = true;
+    let previewSequence = 0;
+    let displayedPreview = 0;
     const images = await client.generateStream(normalized, event => {
+      if (signal?.aborted) return;
       const current = event.gen_progress?.current_percent;
       const overall = event.gen_progress?.overall_percent;
       const fraction = Number(stage ? overall ?? current : current ?? overall);
       if (Number.isFinite(fraction)) progress(clamp(fraction > 1 ? fraction / 100 : fraction, 0, 1));
+      if (streaming && onPreview && event.gen_progress?.preview) {
+        const preview = client.imageUrl(event.gen_progress.preview);
+        const sequence = ++previewSequence;
+        if (runtime.kind === "tauri" && /^https?:/i.test(preview)) {
+          void runtime.fetchDataUrl(preview, client.authToken).then(image => {
+            if (streaming && !signal?.aborted && this.client === client && sequence > displayedPreview) {
+              displayedPreview = sequence;
+              onPreview(image);
+            }
+          }).catch(() => {});
+        } else {
+          displayedPreview = sequence;
+          onPreview(preview);
+        }
+      }
       const metadata = this.metadataFromGenerationPayload(event);
       if (metadata) finalMetadata = metadata;
-    });
+    }, signal, error => this.notify(`Could not interrupt Swarm: ${String(error)}`, "error")).finally(() => { streaming = false; });
+    signal?.throwIfAborted();
     const result = images[0];
     if (!result?.image) throw new Error(`Swarm returned no image for ${label.toLowerCase()}.`);
     const path = result.image;
     const url = client.imageUrl(path);
     const image = url.startsWith("data:") ? url : await runtime.fetchDataUrl(url, client.authToken);
     const decoded = await readProcessingImage(image);
+    signal?.throwIfAborted();
     if (this.client !== client) throw new Error("The Swarm connection changed during generation.");
     const metadata = result.metadata || finalMetadata;
     const seed = this.resolvedSeedFor(result, metadata, request.seed);
@@ -5397,6 +5422,18 @@ export class StudioApp {
     };
   }
 
+  private openLibraryImagePicker(view: "editor" | "identities" | "expressions", title: string, apply?: (output: OutputRecord) => void | Promise<void>): void {
+    this.libraryImagePicker = { view, title, apply };
+    this.libraryFiltersOpen = false;
+    this.navigateToView("library");
+    this.root.querySelector<HTMLElement>(".editor-picker-heading h1")?.focus();
+  }
+
+  private readLibraryImage(output: OutputRecord): Promise<string> {
+    const url = this.outputImageUrl(output);
+    return url.startsWith("data:") ? Promise.resolve(url) : runtime.fetchDataUrl(url, this.client.authToken);
+  }
+
   private openOutputInEditor(id: string, inpaint = false): void {
     if (!this.outputById(id)) return;
     if (this.imageEditor?.busy || this.inpaintApplyingResult || this.inpaintAwaitingResult) {
@@ -5404,7 +5441,6 @@ export class StudioApp {
       return;
     }
     this.pendingEditorImage = { id, inpaint };
-    if (this.editorPickingImage) this.libraryFiltersOpen = false;
     this.navigateToView("editor");
   }
 
@@ -5414,19 +5450,13 @@ export class StudioApp {
       ...this.imageProcessingHost(),
       busy: () => this.generating || Boolean(this.expressionStudio?.busy),
       checkpoint: () => this.store.state.draft.model,
-      browseLibrary: () => {
-        this.editorPickingImage = true;
-        this.libraryFiltersOpen = false;
-        this.navigateToView("library");
-      },
+      browseLibrary: () => this.openLibraryImagePicker("editor", "Choose an image for Editor"),
       inpaintBusy: () => this.inpaintAwaitingResult || this.inpaintApplyingResult,
       load: async id => {
         const output = this.outputById(id);
         if (!output) throw new Error("This Library image is unavailable.");
-        const url = this.outputImageUrl(output);
-        const image = url.startsWith("data:") ? url : await runtime.fetchDataUrl(url, this.client.authToken);
         return {
-          ...await readProcessingImage(image), id: output.id,
+          ...await readProcessingImage(await this.readLibraryImage(output)), id: output.id,
           name: output.swarmPath.split(/[\\/]/).pop() || "Swarm output.png",
           model: output.model, seed: output.seed, prompt: output.prompt, negativeprompt: output.negativePrompt,
         };
@@ -5471,6 +5501,8 @@ export class StudioApp {
       probe: () => this.probeComfyNodes(),
       log: (message, error) => this.addLog(message, error ? "error" : "info", "studio"),
       openAnimaGuide: runtime.kind === "tauri" ? openNativeAnimaGuide : undefined,
+      browseReference: (apply) => this.openLibraryImagePicker("expressions", "Choose an expression reference", output =>
+        apply(this.readLibraryImage(output), output.swarmPath.split(/[\\/]/).pop() || "Library portrait")),
       identitySources: () => ({
         identities: this.store.state.identities,
         presets: this.presets.map(preset => {
@@ -5501,9 +5533,9 @@ export class StudioApp {
           return { ...item, name, triggerPhrase: String(lora?.trigger_phrase ?? "") };
         });
       },
-      generate: async (request, loras, progress, stage) => {
+      generate: async (request, loras, progress, stage, preview, signal) => {
         const { image, path, seed } = await this.renderToolImage(
-          request, loras, progress, stage ? processingLabels[stage] : "Expression render", stage,
+          request, loras, progress, stage ? processingLabels[stage] : "Expression render", stage, preview, signal,
         );
         return { image, path, seed };
       },
@@ -8824,10 +8856,22 @@ export class StudioApp {
       return failures;
     };
 
-    this.root.querySelector<HTMLElement>("[data-action='cancel-editor-picker']")?.addEventListener("click", () => {
-      this.libraryFiltersOpen = false;
-      this.navigateToView("editor");
+    this.root.querySelector<HTMLElement>("[data-action='cancel-library-picker']")?.addEventListener("click", () => {
+      const picker = this.libraryImagePicker;
+      if (picker) this.navigateToView(picker.view);
     });
+    this.root.querySelectorAll<HTMLElement>("[data-pick-library-output]").forEach(button => button.addEventListener("click", () => {
+      const picker = this.libraryImagePicker;
+      const output = this.outputById(button.dataset.pickLibraryOutput ?? "");
+      if (!picker || !output) return;
+      const apply = picker.apply;
+      if (!apply) {
+        this.openOutputInEditor(output.id);
+        return;
+      }
+      this.navigateToView(picker.view);
+      void Promise.resolve().then(() => apply(output)).catch(error => this.notify(error instanceof Error ? error.message : String(error), "error"));
+    }));
     this.root.querySelectorAll<HTMLElement>("[data-action='sync-swarm-history']").forEach((button) => button.addEventListener("click", () => void this.syncSwarmHistory()));
     this.root.querySelector<HTMLElement>("[data-action='delete-nonfavorite-outputs']")?.addEventListener("click", () => void this.deleteNonFavoriteOutputs());
     this.root.querySelector<HTMLElement>("[data-action='load-more-library']")?.addEventListener("click", () => { this.libraryRenderLimit += 240; this.render(); });
@@ -8913,7 +8957,7 @@ export class StudioApp {
     // Right-click is the fast path into batch mode: keep the user's place in a huge archive,
     // select the card under the pointer, and surface the sticky action rail immediately.
     this.root.querySelectorAll<HTMLElement>("[data-output-card]").forEach((card) => card.addEventListener("contextmenu", (event) => {
-      if (this.libraryBatchBusy) return;
+      if (this.libraryBatchBusy || this.libraryImagePicker) return;
       const id = card.dataset.outputCard ?? "";
       if (!id) return;
       event.preventDefault();
@@ -8927,7 +8971,7 @@ export class StudioApp {
     // Shift-clicking an image enters batch mode immediately, even if selection mode was not
     // already enabled. Once active, Shift-click selects the full range from the previous anchor.
     this.root.querySelectorAll<HTMLElement>("[data-output-card]").forEach((card) => card.addEventListener("click", (event) => {
-      if (!event.shiftKey || this.librarySelectMode || !(event.target as HTMLElement).closest(".image-card-media")) return;
+      if (this.libraryImagePicker || !event.shiftKey || this.librarySelectMode || !(event.target as HTMLElement).closest(".image-card-media")) return;
       event.preventDefault();
       event.stopPropagation();
       this.librarySelectMode = true;
@@ -9079,7 +9123,7 @@ export class StudioApp {
       const remove = this.root.querySelector<HTMLButtonElement>("[data-action='clear-identity-picture']");
       if (remove) remove.hidden = !url;
     };
-    const readPicture = async (file: File, id: string | null) => {
+    const readPicture = async (read: () => Blob | Promise<Blob>, id: string | null) => {
       const epoch = this.identityEditorEpoch;
       const picker = id ? this.root.querySelector<HTMLInputElement>(`[data-identity-picture-input="${CSS.escape(id)}"]`) : this.root.querySelector<HTMLInputElement>("#identity-picture-input");
       if (picker) picker.disabled = true;
@@ -9089,7 +9133,7 @@ export class StudioApp {
         if (submit) submit.disabled = true;
       }
       try {
-        const thumbnail = await identityThumbnail(file);
+        const thumbnail = await identityThumbnail(await read());
         const avatarUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(String(reader.result ?? ""));
@@ -9110,11 +9154,18 @@ export class StudioApp {
         }
       }
     };
+    this.root.querySelectorAll<HTMLElement>("[data-browse-identity-picture]").forEach(button => button.addEventListener("click", () => {
+      if (this.identityPictureReading || this.identitySaveBusy) return;
+      const id = button.dataset.browseIdentityPicture || null;
+      if (!id) captureDraft();
+      this.openLibraryImagePicker("identities", "Choose an identity picture", output =>
+        readPicture(async () => this.dataUrlToBlob(await this.readLibraryImage(output)), id));
+    }));
     this.root.querySelector<HTMLElement>("[data-action='choose-identity-picture']")?.addEventListener("click", () => this.root.querySelector<HTMLInputElement>("#identity-picture-input")?.click());
-    this.root.querySelector<HTMLInputElement>("#identity-picture-input")?.addEventListener("change", event => { const file = (event.currentTarget as HTMLInputElement).files?.[0]; if (file) void readPicture(file, null); });
+    this.root.querySelector<HTMLInputElement>("#identity-picture-input")?.addEventListener("change", event => { const file = (event.currentTarget as HTMLInputElement).files?.[0]; if (file) void readPicture(() => file, null); });
     this.root.querySelector<HTMLElement>("[data-action='clear-identity-picture']")?.addEventListener("click", () => updateEditorPicture(""));
     this.root.querySelectorAll<HTMLElement>("[data-picture-identity]").forEach(button => button.addEventListener("click", () => this.root.querySelector<HTMLInputElement>(`[data-identity-picture-input="${CSS.escape(button.dataset.pictureIdentity || "")}"]`)?.click()));
-    this.root.querySelectorAll<HTMLInputElement>("[data-identity-picture-input]").forEach(input => input.addEventListener("change", () => { const file = input.files?.[0]; const id = input.dataset.identityPictureInput ?? ""; if (file && id) void readPicture(file, id); }));
+    this.root.querySelectorAll<HTMLInputElement>("[data-identity-picture-input]").forEach(input => input.addEventListener("change", () => { const file = input.files?.[0]; const id = input.dataset.identityPictureInput ?? ""; if (file && id) void readPicture(() => file, id); }));
     const form = this.root.querySelector<HTMLFormElement>("#identity-form");
     form?.addEventListener("input", captureDraft);
     form?.addEventListener("change", captureDraft);

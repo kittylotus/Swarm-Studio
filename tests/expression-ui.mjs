@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { pathToFileURL } from 'node:url';
+import { openExpressionSettings, closeExpressionSettings } from './fixtures/expression-settings.mjs';
 
 // Use a developer's existing Playwright installation; no personal Studio state or backend.
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : 'playwright');
@@ -41,6 +42,7 @@ try {
         await page.waitForFunction(() => window.ready);
         assert.equal(await page.locator('h1').count(),1);
         assert.ok(parseFloat(await page.locator('h1').evaluate(el=>getComputedStyle(el).fontSize))<=22);
+        await openExpressionSettings(page, 'Generate');
         const sampling = page.locator('details').filter({has:page.locator('summary', {hasText:'Sampling & resolution'})});
         await sampling.locator('summary').click();
         await page.evaluate(()=>{window.originalSampler=document.querySelector('[data-setting="sampler"]');});
@@ -57,7 +59,7 @@ try {
         }
         await page.locator('[data-setting="engine"]').selectOption('liveportrait');
         assert.equal(await page.locator('[data-pipeline-part="checkpoint"]').isVisible(),false);
-        assert.equal(await page.locator('[data-pipeline-part="motion"]').first().isVisible(),true);
+        assert.equal(await page.locator('[data-pipeline-part="motion"]').first().getAttribute('hidden'),null);
         await page.locator('[data-setting="engine"]').selectOption('text');
         assert.ok((await page.locator('[data-setting="model"] option').allTextContents()).includes('anima.safetensors'));
         await page.locator('[data-setting="model"]').selectOption('anima.safetensors');
@@ -67,6 +69,7 @@ try {
         await page.locator('[data-setting="sampler"]').focus();
         await page.keyboard.press('Home');await page.keyboard.press('ArrowDown');await page.keyboard.press('Tab');
         assert.equal(await sampling.getAttribute('open'),'');
+        await closeExpressionSettings(page);
         for (let i=0;i<2;i++) {
             await page.getByRole('button',{name:'Expression sheet usage guide',exact:true}).click();
             await page.getByRole('dialog').waitFor();
