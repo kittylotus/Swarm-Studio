@@ -1,4 +1,6 @@
-import { actionMenu, bindActionMenus } from '../ui/action-menu';
+import { actionMenu, bindActionMenus, disclosureChevronSvg } from '../ui/action-menu';
+import { resolveLoraModelName as resolveModelFileName } from '../lora/request';
+import { cloneLoraStack } from '../lora/stack';
 import { ANIMA_INSTALL_GUIDE, animaWorkflow, isAnimaModel, nodeChoices, resolveAnimaSetup } from './anima';
 import { circleHelpIcon, openExpressionHelp } from './help';
 import { expressionFailure } from './errors';
@@ -7,14 +9,17 @@ import { pendingStages, processingLabels, processingRequest, readProcessingImage
 import { bindProcessingFields, resolveProcessing, type ProcessingChoices, type ProcessingHost } from './processing-ui';
 import type { ExpressionLora } from './loras';
 import type { SwarmGenerationRequest, SwarmModel, SwarmParamDefinition } from '../swarm/types';
+import type { IdentityRecord, LoraStackItem } from '../types';
 const esc = (value: unknown) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+type SavedIdentity = Pick<IdentityRecord, 'name' | 'positivePrompt' | 'negativePrompt' | 'avatarUrl' | 'model' | 'loraStack'>;
 export interface ExpressionHost {
     models(): SwarmModel[];
     processing?: ProcessingHost;
     params(): SwarmParamDefinition[];
     busy(): boolean;
     connected(): boolean;
-    captureLoras(model: string): ExpressionLora[];
+    identitySources?(): { identities: SavedIdentity[]; presets: SavedIdentity[] };
+    captureLoras(model: string, savedStack?: LoraStackItem[]): ExpressionLora[];
     generate(request: SwarmGenerationRequest, loras: ExpressionLora[], progress: (n: number) => void, stage?: ProcessingStage): Promise<{
         image: string;
         path: string;
@@ -34,6 +39,15 @@ const animaAssets = [
     ['Adapter weights', 'animaAdapter', 'AnimaRefAdapter', 'lora_name'],
 ] as const;
 const imageFrom = (src: string): Promise<HTMLImageElement> => new Promise((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error('Could not decode an expression image.')); image.src = src; });
+async function portraitDataUrl(src: string): Promise<string> {
+    const image = await imageFrom(src);
+    const scale = Math.min(1, 1024 / Math.max(image.width, image.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    canvas.getContext('2d')!.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/png');
+}
 function db(): Promise<IDBDatabase> { return new Promise((resolve, reject) => { const request = indexedDB.open('swarm-studio-expressions-v1', 1); request.onupgradeneeded = () => request.result.createObjectStore('projects'); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); }); }
 async function storedProject(write?: SheetProject): Promise<unknown> { const store = await db(); try {
     return await new Promise((resolve, reject) => { const tx = store.transaction('projects', write ? 'readwrite' : 'readonly'); const request = write ? tx.objectStore('projects').put(write, 'current') : tx.objectStore('projects').get('current'); request.onsuccess = () => { if (!write)
@@ -89,11 +103,15 @@ export class ExpressionStudio {
         if (immediate) write();
         else this.saveTimer = window.setTimeout(write, 250);
     }
+    private modelsForEngine(engine: SheetProject['engine']): SwarmModel[] {
+        return this.bridge.models().filter(model => engine === 'anima' ? isAnimaModel(model)
+            : !['ipadapter', 'hybrid'].includes(engine) || isAdapterModel(model));
+    }
     private draw(): void {
         if (!this.host?.isConnected)
             return;
         const p = this.project, disabled = this.running ? 'disabled' : '';
-        const models = this.bridge.models().filter(m => p.engine === 'anima' ? isAnimaModel(m) : !['ipadapter', 'hybrid'].includes(p.engine) || isAdapterModel(m));
+        const models = this.modelsForEngine(p.engine);
         if (!p.model || !models.some(m => m.name === p.model)) {
             if (models.length && !this.running)
                 p.model = models[0]!.name;
@@ -116,11 +134,11 @@ export class ExpressionStudio {
    ${this.pipelineTabs()}
    <div class="expression-layout" id="expression-stage-panel" role="tabpanel" aria-labelledby="expression-tab-${stage}">
    <aside class="expression-controls">
-    ${generatingScreen ? `<section class="expression-section"><div class="expression-section-head"><b>Identity</b></div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
+    ${generatingScreen ? `<section class="expression-section"><div class="expression-section-head"><b>Identity</b>${this.bridge.identitySources ? `<button type="button" class="secondary-button" data-command="pick-identity" aria-haspopup="dialog" ${disabled}>Choose saved identity</button>` : ''}</div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
     <div class="expression-reference">${p.reference ? `<img src="${esc(p.reference)}" alt="Character reference"/><span>${esc(p.referenceName)}</span>` : `<div class="expression-reference-empty"><b>＋</b><span>Add a face reference</span><small>Front-facing, neutral expression, clear eyes</small></div>`}</div>
     <div class="expression-button-row"><label class="secondary-button file-button">Upload portrait<input data-reference type="file" accept="image/png,image/jpeg,image/webp" hidden ${disabled}/></label><button data-command="clear-reference" class="ghost-button" ${disabled}>Clear</button></div><p class="helper-copy">Reference is resized to at most 1024 px and stored with this project. IPAdapter uses it to guide identity; LivePortrait edits the face directly.</p>
     <label class="field"><span>Character & framing</span><textarea rows="4" data-setting="subject" ${disabled}>${esc(p.subject)}</textarea></label><label class="field"><span>Avoid</span><textarea rows="3" data-setting="negative" ${disabled}>${esc(p.negative)}</textarea></label>
-    <label class="check-row"><input data-setting="useLoras" type="checkbox" ${p.useLoras ? 'checked' : ''} ${disabled}/>Use enabled LoRAs from the composer</label></section>
+    <label class="check-row"><input data-setting="useLoras" type="checkbox" ${p.useLoras ? 'checked' : ''} ${disabled}/>${p.savedIdentityLoras ? 'Use LoRAs from saved identity' : 'Use enabled LoRAs from the composer'}</label></section>
     <section class="expression-section"><div class="expression-section-head"><b>Generate</b></div>
     <label class="field"><span id="expression-engine-label">Render method</span><select data-setting="engine" aria-labelledby="expression-engine-label" ${disabled}>${[['ipadapter', 'IPAdapter · reference-guided'], ['anima', 'Anima Ref Adapter · reference-guided'], ['liveportrait', 'LivePortrait · facial edit'], ['hybrid', 'IPAdapter → LivePortrait · two passes'], ['img2img', 'Image-to-image · redraw'], ['text', 'Prompt only · baseline']].map(([v, label]) => `<option value="${v}" ${p.engine === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
     <label class="field" data-pipeline-part="style" ${p.engine === 'anima' ? 'hidden' : ''}><span id="expression-style-label">Style preset</span><select data-setting="style" aria-labelledby="expression-style-label" ${disabled}>${[['semireal', 'Semirealism'], ['realistic', 'Realistic portrait'], ['illustrated', 'Illustrated / anime']].map(([v, label]) => `<option value="${v}" ${p.style === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
@@ -306,7 +324,7 @@ export class ExpressionStudio {
         const adapter = ['ipadapter', 'hybrid'].includes(p.engine);
         const visible: Record<string, boolean> = { checkpoint: p.engine !== 'liveportrait', portrait: p.engine === 'liveportrait', adapter, style: p.engine !== 'anima', anima: p.engine === 'anima', img2img: p.engine === 'img2img', motion: ['liveportrait', 'hybrid'].includes(p.engine) };
         root.querySelectorAll<HTMLElement>('[data-pipeline-part]').forEach(part => { part.hidden = !visible[part.dataset.pipelinePart!]; });
-        const models = this.bridge.models().filter(model => p.engine === 'anima' ? isAnimaModel(model) : !adapter || isAdapterModel(model));
+        const models = this.modelsForEngine(p.engine);
         if (!models.some(model => model.name === p.model)) p.model = models[0]?.name ?? '';
         const select = root.querySelector<HTMLSelectElement>('[data-setting="model"]');
         if (select) {
@@ -422,6 +440,10 @@ export class ExpressionStudio {
                 openExpressionHelp();
                 return;
             }
+            if (command === 'pick-identity') {
+                this.openIdentityPicker();
+                return;
+            }
             if (command === 'stop') {
                 this.stopped = true;
                 this.status = 'Stopping after the current portrait finishes.';
@@ -495,21 +517,89 @@ export class ExpressionStudio {
             this.bridge.notify(error instanceof Error ? error.message : String(error), true);
         }
     }
+    private openIdentityPicker(): void {
+        const host = this.host, sources = this.bridge.identitySources?.();
+        if (!host || !sources || this.running || host.querySelector('.expression-identity-dialog')) return;
+        const groups = [
+            { title: 'Studio identities', entries: sources.identities, empty: 'No saved identities. Create one in Identities.' },
+            { title: 'Swarm presets', entries: sources.presets, empty: 'No Swarm presets loaded. Connect to Swarm to see your presets.' },
+        ];
+        const dialog = document.createElement('dialog');
+        dialog.className = 'expression-identity-dialog';
+        dialog.setAttribute('aria-labelledby', 'expression-identity-title');
+        dialog.innerHTML = `
+            <header><div><h2 id="expression-identity-title">Choose saved identity</h2><p>Bring in prompts, a reference portrait, and LoRAs.</p></div><button type="button" class="icon-button" data-close aria-label="Close identity picker" autofocus>×</button></header>
+            <div class="expression-identity-choices">
+                ${groups.map(({ title, entries, empty }, groupIndex) => `
+                    <details class="expression-disclosure" name="expression-identity-source" ${groupIndex === (sources.identities.length || !sources.presets.length ? 0 : 1) ? 'open' : ''}>
+                        <summary>${title}<span>${entries.length}</span></summary>
+                        <div class="expression-identity-options">${entries.map((entry, index) => {
+                            const loras = entry.loraStack.filter(lora => lora.enabled);
+                            const portrait = entry.avatarUrl && groupIndex === 0
+                                ? `<img src="${esc(entry.avatarUrl)}" alt="" loading="lazy"/>`
+                                : esc([...entry.name.trim()][0]?.toUpperCase() ?? '?');
+                            return `<button type="button" class="secondary-button" data-identity-group="${groupIndex}" data-identity-index="${index}">
+                                <span class="expression-identity-avatar" aria-hidden="true">${portrait}</span>
+                                <span class="expression-identity-copy"><b>${esc(entry.name)}</b>${loras.length ? `<small>LoRAs · ${esc(loras.map(lora => `${lora.title || lora.name} × ${lora.weight}`).join(' · '))}</small>` : ''}</span>
+                                ${disclosureChevronSvg}
+                            </button>`;
+                        }).join('') || `<p class="helper-copy">${empty}</p>`}</div>
+                    </details>`).join('')}
+                <p class="expression-error" data-identity-error role="alert" hidden></p>
+            </div>`;
+        dialog.querySelector('[data-close]')?.addEventListener('click', () => dialog.close());
+        dialog.addEventListener('keydown', event => event.stopPropagation());
+        dialog.addEventListener('close', () => dialog.remove(), { once: true });
+        const buttons = [...dialog.querySelectorAll<HTMLButtonElement>('[data-identity-group]')];
+        buttons.forEach(button => button.addEventListener('click', async () => {
+            const identity = groups[Number(button.dataset.identityGroup)]?.entries[Number(button.dataset.identityIndex)];
+            if (!identity || this.running) return;
+            const errorNote = dialog.querySelector<HTMLElement>('[data-identity-error]')!;
+            errorNote.hidden = true;
+            buttons.forEach(option => { option.disabled = true; });
+            try {
+                const reference = identity.avatarUrl ? await portraitDataUrl(identity.avatarUrl) : '';
+                if (!dialog.open || !dialog.isConnected || this.running) return;
+                const project = this.project;
+                const defaults = defaultSheet();
+                const model = resolveModelFileName(identity.model, this.bridge.models().map(item => item.name));
+                const checkpoint = this.modelsForEngine(project.engine).find(item => item.name.replaceAll('\\', '/') === model);
+                const loras = cloneLoraStack(identity.loraStack);
+                Object.assign(project, {
+                    subject: (identity.positivePrompt.trim() || defaults.subject).slice(0, 20000),
+                    negative: (identity.negativePrompt.trim() || defaults.negative).slice(0, 20000),
+                    model: checkpoint?.name ?? project.model,
+                    reference,
+                    referenceName: reference ? identity.name : '',
+                    savedIdentityLoras: loras.length ? loras : undefined,
+                    useLoras: loras.some(lora => lora.enabled),
+                });
+                this.status = `${identity.name} loaded.${identity.model && !checkpoint ? ' The saved checkpoint is unavailable for the current render method.' : ''}`;
+                this.persist(true);
+                dialog.close();
+                dialog.remove();
+                this.draw();
+                this.host?.querySelector<HTMLElement>('[data-command="pick-identity"]')?.focus({ preventScroll: true });
+            } catch (error) {
+                errorNote.textContent = error instanceof Error ? error.message : String(error);
+                errorNote.hidden = false;
+                buttons.forEach(option => { option.disabled = false; });
+                button.focus({ preventScroll: true });
+            }
+        }));
+        host.append(dialog);
+        dialog.showModal();
+    }
     private async loadReference(file?: File): Promise<void> { if (!file)
         return; try {
         if (file.size > 30 * 1024 * 1024)
             throw new Error('Choose a portrait under 30 MB.');
         const url = URL.createObjectURL(file);
         try {
-            const image = await imageFrom(url);
-            const scale = Math.min(1, 1024 / Math.max(image.width, image.height));
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.round(image.width * scale);
-            canvas.height = Math.round(image.height * scale);
-            canvas.getContext('2d')!.drawImage(image, 0, 0, canvas.width, canvas.height);
+            const reference = await portraitDataUrl(url);
             if (this.running)
                 throw new Error('Wait for the sheet queue to finish before changing its reference.');
-            this.project.reference = canvas.toDataURL('image/png');
+            this.project.reference = reference;
             this.project.referenceName = file.name;
         }
         finally {
@@ -659,7 +749,7 @@ export class ExpressionStudio {
                 }
             }
             const loras = required.has('generate') && snapshot.useLoras && snapshot.engine !== 'liveportrait'
-                ? this.bridge.captureLoras(snapshot.model) : [];
+                ? this.bridge.captureLoras(snapshot.model, snapshot.savedIdentityLoras) : [];
             if (required.has('generate') && !this.stopped) {
                 if (['anima', 'liveportrait', 'ipadapter', 'hybrid'].includes(snapshot.engine)) await this.probe();
                 if (snapshot.engine === 'anima') {

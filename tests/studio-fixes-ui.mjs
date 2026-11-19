@@ -107,6 +107,58 @@ try {
     await form.getByRole('button',{name:'Save identity',exact:false}).click();
     await page.waitForFunction(()=>app.store.state.identities.length===32);
 
+    await page.evaluate(()=>{
+      app.models[0].architecture='sdxl';
+      app.models[1].architecture='sdxl';
+      app.loras[0].trigger_phrase='fixture trigger';
+      const identity=app.store.state.identities.find(item=>item.name==='Subject 0');
+      identity.loraStack=[{id:'saved',name:'root-lora',title:'Identity LoRA',weight:.65,enabled:true,useTrigger:true,sourceUrl:''}];
+      app.presets=[{title:'Swarm character',param_map:{Prompt:'{value}, preset subject',NegativePrompt:'preset negative',Model:'anime/one',LoRAs:'["anime/one-lora", "root-lora"]',LoRAWeights:'[null, 0.45]'}}];
+      show('expressions');
+    });
+    const chooseIdentity=page.getByRole('button',{name:'Choose saved identity',exact:true});
+    const identityPicker=page.getByRole('dialog',{name:'Choose saved identity'});
+    const subject=page.getByLabel('Character & framing');
+    await chooseIdentity.click();
+    await identityPicker.screenshot({path:`test-results/studio-fixes/expression-identity-${viewport.width}.png`});
+    await identityPicker.getByRole('button',{name:/^Subject 0 LoRAs · Identity LoRA × 0.65$/}).click();
+    await identityPicker.waitFor({state:'detached'});
+    assert.equal(await subject.inputValue(),'subject');
+    assert.match(await page.getByRole('img',{name:'Character reference'}).getAttribute('src'),/^data:image\/png;base64,/);
+    assert.ok(await page.getByRole('checkbox',{name:'Use LoRAs from saved identity'}).isChecked());
+    assert.deepEqual(await page.evaluate(()=>app.expressionStudio.bridge.captureLoras('root.safetensors',app.expressionStudio.project.savedIdentityLoras)
+      .map(({name,weight,triggerPhrase,useTrigger})=>({name,weight,triggerPhrase,useTrigger}))),
+      [{name:'root-lora.safetensors',weight:.65,triggerPhrase:'fixture trigger',useTrigger:true}]);
+    await chooseIdentity.click();
+    await identityPicker.locator('summary',{hasText:'Swarm presets'}).click();
+    assert.equal(await identityPicker.locator('details[open]').count(),1);
+    await identityPicker.screenshot({path:`test-results/studio-fixes/expression-presets-${viewport.width}.png`});
+    await identityPicker.getByRole('button',{name:/^Swarm character/}).click();
+    assert.equal(await subject.inputValue(),'preset subject');
+    assert.equal(await page.locator('[data-setting="negative"]').inputValue(),'preset negative');
+    assert.equal(await page.locator('[data-setting="model"]').inputValue(),'anime/one.safetensors');
+    assert.equal(await page.getByRole('img',{name:'Character reference'}).count(),0);
+    assert.equal(await chooseIdentity.evaluate(button=>document.activeElement===button),true);
+    assert.deepEqual(await page.evaluate(()=>app.store.state.draft.loras),[]);
+    await page.locator('[data-setting="engine"]').selectOption('text');
+    await page.evaluate(()=>{
+      const studio=app.expressionStudio;
+      studio.project.refine.mode=studio.project.backgroundRemoval.mode='off';
+      studio.bridge.connected=()=>true;
+      studio.bridge.generate=async (request,loras)=>{
+        window.expressionCall={request,loras};
+        return {image:document.createElement('canvas').toDataURL(),path:'fixture.png',seed:123};
+      };
+    });
+    await page.locator('[data-tile-command="render"]').first().click();
+    await page.waitForFunction(()=>window.expressionCall&&!app.expressionStudio.busy);
+    assert.deepEqual(await page.evaluate(()=>expressionCall.loras.map(({name,weight})=>[name,weight])),
+      [['anime/one-lora.safetensors',1],['root-lora.safetensors',.45]]);
+    await page.evaluate(()=>{app.expressionStudio=null;app.render();});
+    await chooseIdentity.waitFor();
+    assert.equal(await subject.inputValue(),'preset subject');
+    assert.ok(await page.getByRole('checkbox',{name:'Use LoRAs from saved identity'}).isChecked());
+
     await page.evaluate(()=>show('models'));
     const checkpoints=page.locator('.checkpoint-section'),loras=page.locator('.lora-library-section');
     const depthControl=checkpoints.locator('.checkpoint-depth-control');

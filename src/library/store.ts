@@ -1,4 +1,5 @@
 import { createId } from "../id";
+import { cloneLoraStack } from "../lora/stack";
 import { loadAvatar, storeAvatar, deleteAvatar } from "./avatars";
 import { compareOutputDates } from "../swarm/history-metadata";
 import { emptyRegionalPromptDraft, normalizeRegionalPromptDraft } from "../regions";
@@ -87,22 +88,6 @@ const defaultUi: StudioUiState = {
 
 function normalizeLoraProfileFolder(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "Unsorted";
-}
-
-function cloneLoraStack(items: LoraStackItem[] | undefined): LoraStackItem[] {
-  if (!Array.isArray(items)) return [];
-  return items.flatMap((item) => {
-    if (!item || typeof item.name !== "string") return [];
-    return [{
-      id: typeof item.id === "string" && item.id ? item.id : createId(),
-      name: item.name,
-      title: typeof item.title === "string" ? item.title : item.name,
-      weight: Number.isFinite(Number(item.weight)) ? Number(item.weight) : 1,
-      enabled: item.enabled !== false,
-      useTrigger: item.useTrigger === true,
-      sourceUrl: typeof item.sourceUrl === "string" ? item.sourceUrl : "",
-    }];
-  });
 }
 
 function cloneDefaults(): PersistedStudioState {

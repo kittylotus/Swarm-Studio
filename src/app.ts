@@ -5471,9 +5471,29 @@ export class StudioApp {
       probe: () => this.probeComfyNodes(),
       log: (message, error) => this.addLog(message, error ? "error" : "info", "studio"),
       openAnimaGuide: runtime.kind === "tauri" ? openNativeAnimaGuide : undefined,
-      captureLoras: (model) => {
+      identitySources: () => ({
+        identities: this.store.state.identities,
+        presets: this.presets.map(preset => {
+          const params = preset.param_map ?? {};
+          const weights = this.stringList(this.metadataValue(params, "loraweights"), true);
+          const reference = this.metadataValue(params, "initimage");
+          return {
+            name: preset.title,
+            positivePrompt: this.presetTextApplied(this.metadataValue(params, "prompt"), ""),
+            negativePrompt: this.presetTextApplied(this.metadataValue(params, "negativeprompt"), ""),
+            model: String(this.metadataValue(params, "model") ?? ""),
+            avatarUrl: typeof reference === "string" && /^data:image\/(png|jpeg|webp);base64,/i.test(reference) ? reference : "",
+            loraStack: this.stringList(this.metadataValue(params, "loras"), true).flatMap((name, index) => {
+              if (!name) return [];
+              const weight = weights[index] ? Number(weights[index]) : 1;
+              return [{ id: name, name, title: prettyName(name), weight: Number.isFinite(weight) ? weight : 1, enabled: true, useTrigger: false, sourceUrl: "" }];
+            }),
+          };
+        }),
+      }),
+      captureLoras: (model, savedStack = this.store.state.draft.loras) => {
         const checkpoint = this.models.find((item) => item.name === model);
-        return cloneStack(this.store.state.draft.loras.filter((item) => item.enabled)).map((item) => {
+        return cloneStack(savedStack.filter((item) => item.enabled)).map((item) => {
           const name = resolveLoraModelName(item.name, this.loras.map((entry) => entry.name));
           if (!name) throw new Error(`LoRA is unavailable: ${item.name}`);
           const lora = this.loras.find((entry) => entry.name === name);
@@ -6457,16 +6477,17 @@ export class StudioApp {
       .trim();
   }
 
-  private stringList(value: unknown): string[] {
-    if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean);
+  private stringList(value: unknown, keepEmpty = false): string[] {
+    const normalize = (items: unknown[]) => items.map(item => String(item ?? "").trim()).filter(item => keepEmpty || Boolean(item));
+    if (Array.isArray(value)) return normalize(value);
     if (typeof value === "string") {
       const trimmed = value.trim();
       if (!trimmed) return [];
       try {
         const parsed = JSON.parse(trimmed);
-        if (Array.isArray(parsed)) return parsed.map(String).map((item) => item.trim()).filter(Boolean);
+        if (Array.isArray(parsed)) return normalize(parsed);
       } catch { /* plain string list */ }
-      return trimmed.split(/[;,]/).map((item) => item.trim()).filter(Boolean);
+      return normalize(trimmed.split(/[;,]/));
     }
     return [];
   }
