@@ -141,8 +141,18 @@ try {
     await system.click();
     const systemText = expanded.getByRole('textbox', { name: 'System prompt', exact: true });
     const defaults = await systemText.inputValue();
-    assert.match(defaults, /Selected image checkpoint: anima.safetensors/);
-    assert.match(defaults, /Additional style preferences: Use the fixture style\./);
+    assert.match(defaults, /Selected image checkpoint: \{\{checkpoint\}\}/);
+    assert.match(defaults, /\{\{style_preferences\}\}/);
+    await expanded.getByRole('button', { name: 'Syntax / glossary', exact: true }).click();
+    const glossary = page.getByRole('dialog', { name: 'System prompt syntax / glossary', exact: true });
+    assert.equal(await glossary.getByLabel('Current value of checkpoint', { exact: true }).textContent(), 'anima.safetensors');
+    assert.equal(await glossary.getByLabel('Current value of custom_instructions', { exact: true }).textContent(), 'Use the fixture style.');
+    const resolvedDefaults = await glossary.locator('section').last().locator('pre').textContent();
+    assert.match(resolvedDefaults, /Selected image checkpoint: anima.safetensors/);
+    await page.keyboard.press('Escape');
+    await glossary.waitFor({ state: 'detached' });
+    assert.equal(await expanded.getByRole('button', { name: 'Syntax / glossary', exact: true }).evaluate(el => el === document.activeElement), true);
+    assert.equal(await systemText.inputValue(), defaults);
     if (viewport.width !== 320) await page.screenshot({ path: `test-results/expanded-system-prompt-${viewport.width}.png` });
     await systemText.fill(''); await done.click();
     assert.match(await expanded.getByRole('status').textContent(), /restore the default/);
@@ -152,6 +162,38 @@ try {
     assert.equal(requests.length, beforeOpen, 'opening or editing never starts a request');
     await run.click(); await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled);
     assert.equal(requests.at(-1).body.instructions, 'Fixture instructions from expanded editor');
+    await apply.click(); await dialog.waitFor({ state: 'detached' });
+    await page.reload(); await page.waitForFunction(() => window.ready);
+    await page.evaluate(() => configure('openai', false, 'Use the fixture style.'));
+    await enhance.click();
+    await system.click();
+    assert.equal(await systemText.inputValue(), 'Fixture instructions from expanded editor', 'custom instructions survive apply and reload');
+    await expanded.getByRole('button', { name: 'Prompt stash', exact: true }).click();
+    const stash = page.getByRole('dialog', { name: 'Prompt stash', exact: true });
+    await stash.getByRole('button', { name: 'Save current prompt', exact: true }).click();
+    assert.match(await stash.getByRole('status').textContent(), /Enter a name/);
+    await stash.getByRole('textbox', { name: 'Prompt name', exact: true }).fill('Portrait fixture');
+    await stash.getByRole('button', { name: 'Save current prompt', exact: true }).click();
+    assert.match(await stash.getByRole('status').textContent(), /Saved/);
+    assert.equal(await stash.locator('[data-save]').evaluate(el => el.classList.contains('primary-button')), true);
+    const stashBox = await stash.boundingBox();
+    assert.ok(stashBox.width <= viewport.width && stashBox.height <= viewport.height, 'stash fits the viewport');
+    assert.equal(await stash.evaluate(el => el.scrollWidth <= el.clientWidth), true, 'stash has no horizontal overflow');
+    await page.screenshot({ path: `test-results/prompt-stash-${viewport.width}.png` });
+    await stash.getByRole('button', { name: 'Save current prompt', exact: true }).click();
+    assert.match(await stash.getByRole('status').textContent(), /already exists/);
+    await page.keyboard.press('Escape'); await stash.waitFor({ state: 'detached' });
+    await systemText.fill('temporary edit');
+    await expanded.getByRole('button', { name: 'Prompt stash', exact: true }).click();
+    await stash.getByRole('button', { name: 'Load prompt', exact: true }).click();
+    await stash.waitFor({ state: 'detached' });
+    assert.equal(await systemText.inputValue(), 'Fixture instructions from expanded editor');
+    await expanded.getByRole('button', { name: 'Prompt stash', exact: true }).click();
+    await stash.getByRole('button', { name: 'Delete saved prompt', exact: true }).click();
+    assert.equal(await stash.getByRole('button', { name: 'Load prompt', exact: true }).isDisabled(), true);
+    await page.keyboard.press('Escape'); await stash.waitFor({ state: 'detached' });
+    await done.click(); await expanded.waitFor({ state: 'detached' });
+    await run.click(); await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled);
     await system.click();
     await expanded.getByRole('button', { name: 'Restore default', exact: true }).click();
     assert.equal(await systemText.inputValue(), defaults);
@@ -159,12 +201,18 @@ try {
     assert.equal(await apply.isEnabled(), false, 'restoring instructions invalidates the prior result');
     assert.equal(await dialog.locator('[data-output]').inputValue(), 'A café portrait 🌸, gentle light');
     await run.click(); await page.waitForFunction(() => !document.querySelector('[data-apply]').disabled);
-    assert.equal(requests.at(-1).body.instructions, defaults);
+    assert.equal(requests.at(-1).body.instructions, resolvedDefaults);
     await dialog.getByRole('button', { name: 'Expand enhanced prompt', exact: true }).click();
     await expanded.getByRole('textbox', { name: 'Enhanced prompt', exact: true }).fill('Edited enhancement');
     await done.click(); await expanded.waitFor({ state: 'detached' });
     await apply.click(); await dialog.waitFor({ state: 'detached' });
     assert.equal(await promptField.inputValue(), 'Edited enhancement');
+
+    if (process.env.PROMPT_MEMORY_ONLY) {
+      assert.deepEqual(errors, []);
+      await context.close();
+      continue;
+    }
 
     for (const provider of ['openai', 'compatible', 'anthropic', 'gemini', 'deepseek']) {
       await page.evaluate(provider => { configure(provider); create('a portrait'); }, provider);
@@ -326,7 +374,9 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
   }
+  if (!process.env.PROMPT_MEMORY_ONLY) {
   assert.ok(cancelled > 0, 'Stop must close the upstream request');
   assert.ok(requests.some(r => r.url.endsWith('/responses')) && requests.some(r => r.url.endsWith('/messages')) && requests.some(r => r.url.includes('streamGenerateContent')));
-  console.log('LLM relay + desktop/phone streaming, cancellation, settings and apply contracts: ok');
+  }
+  console.log(process.env.PROMPT_MEMORY_ONLY ? 'Enhancer prompt persistence and named stash: desktop + phone contracts ok' : 'LLM relay + desktop/phone streaming, cancellation, settings and apply contracts: ok');
 } finally { await browser?.close(); await server.close(); api.closeAllConnections(); await new Promise(resolve => api.close(resolve)); }

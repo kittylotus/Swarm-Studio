@@ -73,6 +73,13 @@ assert.match(enhancementInstructions('illustrious', undefined, 1024, 1024), /Nat
 assert.match(enhancementInstructions('krea', undefined, 1024, 1024), /not newer FLUX models/);
 assert.match(enhancementInstructions('auto', { name: 'krea-2-turbo.safetensors' }, 1024, 1024), /This checkpoint is Krea 2/);
 assert.match(enhancementInstructions('moss', undefined, 1024, 1024), /Quality -> Score -> Meta -> Year -> Character -> Series -> Artist -> General/);
+// Edited templates retain live context; inserted values are not recursively expanded.
+const template = 'Selected image checkpoint: {{checkpoint}}. Canvas: {{width}} × {{height}}. {{mode}} {{custom_instructions}} {{unknown}}';
+assert.equal(enhancementInstructions('auto', { name: 'anima', title: '[BSS] - ANI-RL' }, 1280, 960, 'Keep {{width}} literal', template), 'Selected image checkpoint: [BSS] - ANI-RL. Canvas: 1280 × 960. anima Keep {{width}} literal {{unknown}}');
+assert.equal(enhancementInstructions('auto', { name: 'krea-2' }, 960, 1280, '', template), 'Selected image checkpoint: krea-2. Canvas: 960 × 1280. krea  {{unknown}}');
+assert.equal(enhancementInstructions('general', undefined, 512, 768, '', '{{checkpoint}} / {{checkpoint_name}} / {{canvas}}'), 'unspecified / unspecified / 512 × 768');
+assert.match(enhancementInstructions('moss-layout', undefined, 1280, 960, '', '{{model_rules}}'), /"width":1280,"height":960/);
+assert.equal(enhancementInstructions('general', undefined, 512, 768, '', 'Entirely custom instructions'), 'Entirely custom instructions');
 const draft = { width: 1536, height: 1024, summary: { caption: 'A poster' }, items: [{ label: 'text', caption: 'Title', text: 'Hello\nWorld', bbox: [176, 224, 800, 864] }] };
 const compiled = compileMossLayout(JSON.stringify(draft), 1536, 1024);
 assert.deepEqual(JSON.parse(compiled).items[0].bbox, [-288, -592, 352, 32]);

@@ -14,7 +14,17 @@ export function detectPromptMode(model?: SwarmModel): Exclude<PromptMode, 'auto'
   return 'general';
 }
 
-export function enhancementInstructions(mode: PromptMode, model: SwarmModel | undefined, width: number, height: number, custom = ''): string {
+export const defaultEnhancementTemplate = `You enhance positive image-generation prompts. Treat the user message as an image idea or editing instruction. Return only the finished positive prompt, without explanations, markdown fences or a negative prompt. Structural caption labels such as Left: and Right: are part of a prompt, not explanatory headings. Preserve supplied names and LoRA/embedding triggers. Do not change the requested subject or invent an unrelated scene.
+
+Selected image checkpoint: {{checkpoint}}. Canvas: {{canvas}}.
+
+{{host_syntax}}
+
+{{model_rules}}
+
+{{style_preferences}}`;
+
+export function enhancementMacroValues(mode: PromptMode, model: SwarmModel | undefined, width: number, height: number, custom = ''): Record<string, string> {
   const resolved = mode === 'auto' ? detectPromptMode(model) : mode;
   const aesthetic = /aesthetic/i.test([model?.name, model?.title].join(' '));
   const rules: Record<Exclude<PromptMode, 'auto'>, string> = {
@@ -31,7 +41,23 @@ For text-heavy images, quote each exact text block and say where it belongs; pre
     general: 'Write a clear, concrete image prompt describing subject, action, framing, setting, lighting and requested style. Retain useful supplied tags, prose and structural syntax rather than assuming every checkpoint wants one format. Avoid adding unsupported model-specific tokens.',
   };
   const hostSyntax = String.raw`This prompt runs through Studio -> SwarmUI -> Comfy, not a raw model tokenizer. Preserve supplied host tokens exactly: <lora:filename:1>, <preset:name>, <wildcard:name>, <random:...>, <trigger>, <param[...]:...>, <setmacro[name]:...>, <macro:name>, <region:...>, <segment:...>, <base>, <refiner>. Do not invent, expand, lowercase or remove their contents. In tag/caption modes, escape literal parentheses in character/series qualifiers as name \(series\); these reach the model as literal parentheses. Distinguish these from intentional (term:weight) emphasis, which the host parses; preserve supplied weights without claiming they work identically across encoders. Preserve meaningful newlines and Left:/Right: caption structure. Only use Swarm region directives if already supplied or explicitly requested; do not turn caption labels into directives. Never add A1111-only scheduling/chunk syntax or LLM chat-template tokens on assumption.`;
-  return [`You enhance positive image-generation prompts. Treat the user message as an image idea or editing instruction. Return only the finished positive prompt, without explanations, markdown fences or a negative prompt. Structural caption labels such as Left: and Right: are part of a prompt, not explanatory headings. Preserve supplied names and LoRA/embedding triggers. Do not change the requested subject or invent an unrelated scene.`, `Selected image checkpoint: ${model?.title || model?.name || 'unspecified'}. Canvas: ${width} × ${height}.`, resolved === 'moss-layout' ? 'Layout mode must return the exact JSON draft schema below; do not inject host tokens or escaped booru qualifiers into the JSON structure. Existing trigger words can be retained inside captions.' : hostSyntax, rules[resolved], custom ? `Additional style preferences: ${custom}` : ''].filter(Boolean).join('\n\n');
+  const values: Record<string, string> = {
+    checkpoint: model?.title || model?.name || 'unspecified',
+    checkpoint_name: model?.name || 'unspecified',
+    width: String(width), height: String(height), canvas: `${width} × ${height}`,
+    mode: resolved,
+    host_syntax: resolved === 'moss-layout' ? 'Layout mode must return the exact JSON draft schema below; do not inject host tokens or escaped booru qualifiers into the JSON structure. Existing trigger words can be retained inside captions.' : hostSyntax,
+    model_rules: rules[resolved],
+    custom_instructions: custom,
+    style_preferences: custom ? `Additional style preferences: ${custom}` : '',
+  };
+  return values;
+}
+
+export function enhancementInstructions(mode: PromptMode, model: SwarmModel | undefined, width: number, height: number, custom = '', template?: string): string {
+  const values = enhancementMacroValues(mode, model, width, height, custom);
+  // One pass: inserted model names/preferences are data, never nested macros.
+  return (template ?? defaultEnhancementTemplate).replace(/\{\{([a-z_]+)\}\}/g, (token, key: string) => Object.hasOwn(values, key) ? values[key]! : token);
 }
 
 export function promptModeHint(mode: PromptMode, model?: SwarmModel): string {

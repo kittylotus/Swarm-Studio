@@ -1,9 +1,10 @@
-import { bindExpandedField, openExpandedEditor } from '../ui/expanded-editor';
+import { bindExpandedField, openExpandedDialog, openExpandedEditor } from '../ui/expanded-editor';
 import type { SwarmModel } from '../swarm/types';
 import { buildLlmRequest } from './contracts';
-import { compileMossLayout, detectPromptMode, enhancementInstructions, promptModeHint, promptModes, type PromptMode } from './prompts';
+import { compileMossLayout, defaultEnhancementTemplate, detectPromptMode, enhancementInstructions, enhancementMacroValues, promptModeHint, promptModes, type PromptMode } from './prompts';
 import { loadLlmSettings } from './settings';
 import { streamEnhancement } from './transport';
+import { loadPromptMemory, savePromptMemory, openPromptStash } from './prompt-memory';
 import './styles.css';
 
 interface EnhancerHost {
@@ -73,7 +74,8 @@ export function openPromptEnhancer(host: EnhancerHost): void {
   const run = dialog.querySelector<HTMLButtonElement>('[data-run]')!;
   const apply = dialog.querySelector<HTMLButtonElement>('[data-apply]')!;
   const settings = loadLlmSettings();
-  const systemEdits = new Map<PromptMode, string>();
+  const memory = loadPromptMemory();
+  const systemEdits = new Map<PromptMode, string>(Object.entries(memory.edits) as [PromptMode, string][]);
   let mode: PromptMode = 'auto';
   let controller: AbortController | null = null;
   let hasResult = false;
@@ -88,7 +90,7 @@ export function openPromptEnhancer(host: EnhancerHost): void {
   input.value = host.prompt;
   dialog.querySelector<HTMLElement>('[data-context]')!.textContent = `${host.model?.title || host.model?.name || 'No checkpoint selected'} · ${host.width} × ${host.height}`;
 
-  const defaultSystemPrompt = () => enhancementInstructions(mode, host.model, host.width, host.height, settings.customInstructions);
+  const defaultSystemPrompt = () => defaultEnhancementTemplate;
   const syncControls = () => {
     const streaming = controller !== null;
     run.textContent = streaming ? 'Stop' : hasResult ? 'Enhance again' : 'Enhance';
@@ -125,8 +127,53 @@ export function openPromptEnhancer(host: EnhancerHost): void {
       title: 'System prompt',
       value: current,
       trigger: systemButton,
-      description: promptModeHint(mode, host.model),
+      description: `${promptModeHint(mode, host.model)} Macros expand when Enhance runs: {{checkpoint}}, {{checkpoint_name}}, {{canvas}}, {{width}}, {{height}}, {{mode}}, {{host_syntax}}, {{model_rules}}, {{custom_instructions}}, {{style_preferences}}.`,
       actions: editor => {
+        const glossary = document.createElement('button');
+        glossary.type = 'button';
+        glossary.className = 'ghost-button';
+        glossary.textContent = 'Syntax / glossary';
+        glossary.setAttribute('aria-haspopup', 'dialog');
+        glossary.addEventListener('click', () => {
+          const content = document.createElement('div');
+          content.className = 'enhancer-glossary';
+          const hint = document.createElement('p');
+          hint.textContent = 'Use {{name}} in your system prompt. Values below match this enhancer’s checkpoint, canvas and selected mode. Replacing a macro with text makes that part fixed. Unknown macros stay unchanged; inserted values are not expanded again.';
+          content.append(hint);
+          const descriptions: Record<string, string> = {
+            checkpoint: 'Checkpoint display title, falling back to its model name.',
+            checkpoint_name: 'Checkpoint model name used by SwarmUI.',
+            width: 'Canvas width in pixels.', height: 'Canvas height in pixels.',
+            canvas: 'Canvas dimensions as width × height.',
+            mode: 'Resolved prompt mode; Auto follows the checkpoint.',
+            host_syntax: 'Instructions for preserving SwarmUI prompt syntax.',
+            model_rules: 'Prompting guidance for the resolved mode and checkpoint.',
+            custom_instructions: 'Additional style preferences from LLM settings, as entered.',
+            style_preferences: 'Additional style preferences with their heading; empty when unset.',
+          };
+          for (const [key, value] of Object.entries(enhancementMacroValues(mode, host.model, host.width, host.height, settings.customInstructions))) {
+            const item = document.createElement('section');
+            const token = document.createElement('code');
+            token.textContent = `{{${key}}}`;
+            const description = document.createElement('p');
+            description.textContent = descriptions[key] || key;
+            const resolved = document.createElement('pre');
+            resolved.tabIndex = 0;
+            resolved.setAttribute('aria-label', `Current value of ${key}`);
+            resolved.textContent = value || '(empty)';
+            item.append(token, description, resolved);
+            content.append(item);
+          }
+          const preview = document.createElement('section');
+          const title = document.createElement('h3');
+          title.textContent = 'Resolved system prompt';
+          const text = document.createElement('pre');
+          text.tabIndex = 0;
+          text.textContent = enhancementInstructions(mode, host.model, host.width, host.height, settings.customInstructions, editor.value);
+          preview.append(title, text);
+          content.append(preview);
+          openExpandedDialog({ title: 'System prompt syntax / glossary', content, trigger: glossary });
+        });
         const restore = document.createElement('button');
         restore.type = 'button';
         restore.className = 'ghost-button';
@@ -139,14 +186,21 @@ export function openPromptEnhancer(host: EnhancerHost): void {
           editor.scrollTop = 0;
           editor.dispatchEvent(new Event('input'));
         });
-        return [restore];
+        const stash = document.createElement('button');
+        stash.type = 'button';
+        stash.className = 'ghost-button';
+        stash.textContent = 'Prompt stash';
+        stash.setAttribute('aria-haspopup', 'dialog');
+        stash.addEventListener('click', () => openPromptStash(editor, stash));
+        return [glossary, stash, restore];
       },
       save: value => {
         if (!value.trim()) return 'Enter system instructions or restore the default.';
-        if (value === current) return;
         if (value === defaults) systemEdits.delete(mode);
         else systemEdits.set(mode, value);
-        invalidateResult();
+        memory.edits = Object.fromEntries(systemEdits);
+        if (!savePromptMemory({ ...loadPromptMemory(), edits: memory.edits })) return 'Could not remember this prompt on this device. Free browser storage and try Done again.';
+        if (value !== current) invalidateResult();
       },
     });
   });
@@ -201,7 +255,7 @@ export function openPromptEnhancer(host: EnhancerHost): void {
     syncControls();
 
     try {
-      const request = buildLlmRequest(settings, systemEdits.get(mode) ?? defaultSystemPrompt(), input.value);
+      const request = buildLlmRequest(settings, enhancementInstructions(mode, host.model, host.width, host.height, settings.customInstructions, systemEdits.get(mode) ?? defaultSystemPrompt()), input.value);
       await streamEnhancement(request, active.signal, delta => {
         if (!dialog.open || active.signal.aborted) return;
         const reasoning = delta.kind === 'thinking';
