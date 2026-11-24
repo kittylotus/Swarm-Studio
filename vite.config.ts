@@ -1,3 +1,4 @@
+import { lumiBridgePlugin } from "./scripts/lumi-bridge.mjs";
 import { defineConfig } from "vite";
 import { llmRelayPlugin } from "./scripts/llm-relay.mjs";
 import { expressionProjects } from "./scripts/expression-projects.mjs";
@@ -89,6 +90,7 @@ export default defineConfig({
   },
   plugins: [
     llmRelayPlugin(),
+    lumiBridgePlugin(),
     {
       name: "studio-host-control-bridge",
       configureServer(server) {

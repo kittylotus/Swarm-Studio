@@ -3,6 +3,40 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+export async function auditExpressionProjects(root, { maxFiles = 10000, maxBytes = 256 * 1024 * 1024 } = {}) {
+    const base = path.join(root, 'Projects', 'Expressions'), queue = [base], references = new Set(), checks = [];
+    let files = 0, bytes = 0, complete = true;
+    const deadline = Date.now() + 15000; let folders = 0;
+    const collect = (value, depth = 0) => {
+        if (depth > 30) throw new Error('Project reference depth exceeded.');
+        if (typeof value === 'string') {
+            if (value.length < 10000 && !/^(data:|blob:)/i.test(value) && (/^(https?:\/\/|\/?(?:View|Output)\/|raw\/)/i.test(value) || /\.(png|jpe?g|webp|gif)(?:[?#].*)?$/i.test(value))) references.add(value);
+        } else if (Array.isArray(value)) value.forEach(item => collect(item, depth + 1));
+        else if (value && typeof value === 'object') Object.values(value).forEach(item => collect(item, depth + 1));
+    };
+    try {
+        // Validate root ancestors too; an audit must not follow linked project folders.
+        for (const target of [path.dirname(base), base]) { try { if ((await lstat(target)).isSymbolicLink()) throw new Error('Linked project roots cannot be audited.'); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+        while (queue.length) {
+            if (++folders > 10000 || Date.now() > deadline) throw new Error('Project folder audit budget exceeded.');
+            const dir = queue.shift();
+            let entries; try { entries = await readdir(dir, { withFileTypes:true }); } catch(error) { if (error.code === 'ENOENT' && dir === base) break; throw error; }
+            for (const entry of entries) {
+                if (entry.name === '.studio-project-cache') continue;
+                const target = path.join(dir, entry.name);
+                const stat = await lstat(target);
+                if (stat.isSymbolicLink()) { complete = false; checks.push({source:'project-file',status:'unverified-link'}); continue; }
+                if (stat.isDirectory()) { queue.push(target); continue; }
+                if (!entry.name.endsWith('.expressions.json')) continue;
+                if (++files > maxFiles || (bytes += stat.size) > maxBytes) throw new Error('Project audit budget exceeded.');
+                try { const project = JSON.parse(await readFile(target, 'utf8')); if (![1,2].includes(project?.version) || !Array.isArray(project.tiles)) throw new Error('Unknown project schema'); collect(project); }
+                catch { complete = false; checks.push({source:'project-file',status:'unreadable'}); }
+            }
+        }
+    } catch { complete = false; checks.push({source:'project-files',status:'incomplete'}); }
+    return { complete, files, references:[...references], checks, checkedAt:Date.now() };
+}
+
 export function expressionProjects(root) {
     const base = path.join(root, 'Projects', 'Expressions');
     const resolve = async (relative = '') => {
@@ -24,6 +58,7 @@ export function expressionProjects(root) {
         return target;
     };
     return async (body) => {
+        if (body.action === 'audit') return auditExpressionProjects(root);
         const folder = String(body.folder ?? '');
         const directory = await resolve(folder);
         const cache = path.join(directory, '.studio-project-cache');

@@ -6,6 +6,7 @@ import { showProjectActivity } from './activity';
 import { linkedSvg, unlinkedSvg } from '../ui/resolution-icons';
 import { referenceIcon, samplingIcon, backendIcon } from './settings-icons';
 import { createId } from '../id';
+import { tagStudioRequest, newStudioMetadata, readStudioMetadata, type StudioMetadata } from '../library/provenance';
 import { resolveLoraModelName as resolveModelFileName } from '../lora/request';
 import { cloneLoraStack } from '../lora/stack';
 import { dimensionsForRatio } from '../resolution';
@@ -25,6 +26,7 @@ export interface ExpressionHost {
     processing?: ProcessingHost;
     params(): SwarmParamDefinition[];
     busy(): boolean;
+    provenance?(path: string): StudioMetadata | null;
     connected(): boolean;
     identitySources?(): { identities: SavedIdentity[]; presets: SavedIdentity[] };
     browseReference?(apply: (source: Promise<string>, name: string) => Promise<void>): void;
@@ -128,6 +130,7 @@ export class ExpressionStudio {
     private processingChoices: Record<ProcessingStage, ProcessingChoices> = { refine: {}, background: {} };
     constructor(private readonly bridge: ExpressionHost) { }
     get busy(): boolean { return this.running; }
+    get referenceState(): unknown { return this.project; }
     async mount(host: HTMLElement): Promise<void> { this.host = host; if (!this.loaded) {
         this.loaded = true;
         try {
@@ -1167,6 +1170,8 @@ export class ExpressionStudio {
     }
     private async generateTile(snapshot: SheetProject, tile: ExpressionTile, loras: ExpressionLora[], transient: boolean, signal: AbortSignal) {
         const request = expressionRequest(snapshot, tile, this.bridge.params());
+        const hasProcessing = pendingStages('completed', 'generate', snapshot.refine, snapshot.backgroundRemoval).some(next => this.availableStages().includes(next));
+        tagStudioRequest(request, hasProcessing || snapshot.engine === 'hybrid' ? 'expression_draft' : 'expression_final', this.bridge.provenance?.(tile.path));
         if (snapshot.engine === 'anima')
             request.comfyworkflowraw = JSON.stringify(this.animaGraph(snapshot, tile, loras));
         if (snapshot.engine === 'liveportrait')
@@ -1178,7 +1183,7 @@ export class ExpressionStudio {
         if (snapshot.engine !== 'hybrid') return output;
         preview(output.image);
         const facial: SwarmGenerationRequest = {
-            ...request, promptimages: undefined, useipadapter: undefined, steps: 1, cfgscale: 1, seed: output.seed,
+            ...request, extra_metadata: newStudioMetadata(transient ? 'expression_draft' : 'expression_final', readStudioMetadata(request.extra_metadata)), promptimages: undefined, useipadapter: undefined, steps: 1, cfgscale: 1, seed: output.seed,
             donotsave: transient || undefined,
             comfyworkflowraw: JSON.stringify(livePortraitWorkflow(output.image, tile.motion, this.schema)),
         };
@@ -1277,6 +1282,7 @@ export class ExpressionStudio {
                             const request = processingRequest(source, workflows.get(stage)!(source), {
                                 model: snapshot.model, seed: tile.seed, prompt: tile.prompt, negativeprompt: snapshot.negative,
                             });
+                            tagStudioRequest(request, stage === 'background' ? 'background_removed' : 'upscale_result', this.bridge.provenance?.(tile.path));
                             if (transient) request.donotsave = true;
                             output = await this.bridge.generate(request, [], value => this.updateProgress(value), stage, image => this.updatePreview(image), signal);
                         }

@@ -1,3 +1,4 @@
+import { originalImageByteSize, originalImageRangeByteSize } from "../library/file-size";
 import { isCivitaiHost } from "../civitai/urls";
 import { createId } from "../id";
 import { studioSwarmRelayUrl } from "./relay";
@@ -69,6 +70,7 @@ export interface RuntimeBridge {
   getText(url: string, authToken?: string): Promise<string>;
   probe(url: string, authToken?: string): Promise<boolean>;
   fetchDataUrl(url: string, authToken?: string): Promise<string>;
+  imageByteSize(url: string, authToken?: string, signal?: AbortSignal): Promise<number | null>;
   saveDataUrl(dataUrl: string, suggestedName: string): Promise<string | null>;
   hostControlStatus(): Promise<RuntimeHostControlStatus>;
   installHostControl(): Promise<RuntimeHostControlStatus>;
@@ -338,6 +340,22 @@ const browserRuntime: RuntimeBridge = {
       return false;
     }
   },
+  async imageByteSize(url, authToken, signal) {
+    syncBrowserToken(authToken);
+    const controller = new AbortController(), abort = () => controller.abort();
+    const timer = setTimeout(abort, 8000); signal?.addEventListener("abort", abort, { once:true }); if (signal?.aborted) abort();
+    try {
+      const response = await fetch(browserRelayUrl(url), { method: "HEAD", credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
+      const bytes=originalImageByteSize(response.status,response.headers.get("content-type"),response.headers.get("content-length"),response.headers.get("content-encoding"));
+      if(bytes!==null||![405,501].includes(response.status))return bytes;
+      await response.body?.cancel();
+      // Swarm's MapGet image route may reject HEAD. Read only a one-byte range;
+      // cancel the body after headers even if an intermediary ignores Range.
+      const ranged=await fetch(browserRelayUrl(url),{method:"GET",headers:{Range:"bytes=0-0"},credentials:"same-origin",cache:"no-store",redirect:"error",signal:controller.signal});
+      try{return originalImageRangeByteSize(ranged.status,ranged.headers.get("content-type"),ranged.headers.get("content-length"),ranged.headers.get("content-encoding"),ranged.headers.get("content-range"));}
+      finally{await ranged.body?.cancel();}
+    } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
+  },
   async fetchDataUrl(url, authToken) {
     syncBrowserToken(authToken);
     const response = await fetch(browserRelayUrl(url), { credentials: "same-origin" });
@@ -463,6 +481,11 @@ const tauriRuntime: RuntimeBridge = {
   },
   async probe(url, authToken) {
     return tauriInvoke<boolean>("probe_url", { url, authToken: authToken || null });
+  },
+  async imageByteSize(url, authToken, signal) {
+    signal?.throwIfAborted();
+    const result = await tauriInvoke<number | null>("http_head_image_size", { url, authToken: authToken || null });
+    signal?.throwIfAborted(); return result;
   },
   async fetchDataUrl(url, authToken) {
     return tauriInvoke<string>("http_get_data_url", { url, authToken: authToken || null });

@@ -3248,9 +3248,11 @@ version = "0.63.21"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "getrandom 0.2.17",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "subtle",
  "tauri",
  "tauri-build",
  "tokio",

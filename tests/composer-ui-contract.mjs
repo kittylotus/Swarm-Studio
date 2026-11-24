@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(fileURLToPath(new URL('..', import.meta.url)));
-const app = readFileSync(join(root, 'src/app.ts'), 'utf8');
-const css = readFileSync(join(root, 'src/styles.css'), 'utf8');
+const app = readFileSync(join(root, 'src/app.ts'), 'utf8').replaceAll('\r\n','\n');
+const css = readFileSync(join(root, 'src/styles.css'), 'utf8').replaceAll('\r\n','\n');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);

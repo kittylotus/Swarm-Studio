@@ -170,6 +170,7 @@ export interface SwarmGenerationEvent extends SwarmApiErrorShape {
 
 export interface SwarmImageListItem {
   src: string;
+  size?: number;
   metadata?: string;
 }
 

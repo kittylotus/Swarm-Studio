@@ -1,4 +1,7 @@
+import { swarmImageViewPath } from "./history";
+import { exactOutputPath } from "../library/inventory";
 import { runtime } from "../runtime";
+import { tagStudioRequest } from "../library/provenance";
 import { historyListingLimit } from "../library/cleanup";
 import { studioSwarmRelayUrl } from "../runtime/relay";
 import { readSavedProcessingWorkflow, type SavedProcessingWorkflow } from "../expressions/processing";
@@ -65,6 +68,9 @@ export function normalizeGenerationImage(raw: unknown, index = 0): SwarmGenerati
 
 export class SwarmClient {
   private sessionId = "";
+  private outputScope = "";
+  private historySession: SwarmSession | null = null;
+  get historyScope(): string { return this.outputScope; }
   readonly baseUrl: string;
   readonly authToken: string;
 
@@ -96,6 +102,9 @@ export class SwarmClient {
     if (error) throw error;
     if (!session.session_id) throw new Error("SwarmUI did not return a session_id.");
     this.sessionId = session.session_id;
+    this.historySession = session;
+    this.outputScope = session.user_id && typeof session.output_append_user === "boolean"
+      ? JSON.stringify([this.baseUrl, session.user_id, session.output_append_user]) : "";
     return session;
   }
 
@@ -242,9 +251,44 @@ export class SwarmClient {
     await this.call<SwarmApiErrorShape>("DeletePreset", { preset: title });
   }
 
+  async imageByteSize(path: string, signal?: AbortSignal): Promise<number | null> {
+    exactOutputPath(path); await this.ensureSession();
+    if (!this.historyScope) return null;
+    return runtime.imageByteSize(this.imageUrl(swarmImageViewPath(path, this.historySession)), this.authToken, signal);
+  }
+
   async imageHistoryLimit(): Promise<number> {
     const payload = await this.call<SwarmApiErrorShape & { settings?: Record<string, unknown> }>("GetUserSettings", {});
     return historyListingLimit(payload.settings ?? {});
+  }
+
+  async reviewedDeletionState(): Promise<{scope:string;serverId:string;recycle:'enabled'|'disabled'|'unknown'}> {
+    const session=await this.connect();
+    if(!this.historyScope||!session.server_id)throw new Error('Swarm server/user identity could not be verified.');
+    let status:Record<string,unknown>|undefined;
+    try { status=(await this.call<SwarmApiErrorShape & {status:Record<string,unknown>}>('GetGlobalStatus',{})).status; }
+    catch { throw new Error('Cannot verify global Swarm activity. This account needs permission to read server status before reviewed cleanup.'); }
+    for(const key of ['waiting_gens','loading_models','waiting_backends','live_gens']) {
+      if(typeof status?.[key]!=='number'||!Number.isFinite(status[key])||Number(status[key])<0)throw new Error('Swarm returned an unverifiable activity status.');
+      if(Number(status[key])>0)throw new Error('Swarm has active or queued jobs. Wait until it is idle.');
+    }
+    let recycle:'enabled'|'disabled'|'unknown'='unknown';
+    try {
+      const settings=await this.listServerSettings(),values:boolean[]=[];
+      const inspect=(value:unknown,depth=0)=>{if(depth>8||!value||typeof value!=='object')return;for(const [key,entry] of Object.entries(value)){
+        if(key.replace(/[^a-z]/gi,'').toLowerCase()==='recycledeletedimages') {const raw=entry&&typeof entry==='object'?(entry as {value?:unknown}).value:entry;if(typeof raw==='boolean')values.push(raw);}
+        else inspect(entry,depth+1);
+      }};inspect(settings);if(values.length===1)recycle=values[0]?'enabled':'disabled';
+    } catch { /* A non-admin may delete without permission to inspect server settings. */ }
+    return {scope:this.historyScope,serverId:session.server_id,recycle};
+  }
+
+  async deleteReviewedImage(path:string,identity:{scope:string;serverId:string}):Promise<void> {
+    exactOutputPath(path);
+    if(this.historyScope!==identity.scope||this.historySession?.server_id!==identity.serverId)throw new Error('Swarm identity changed before deletion.');
+    // No invalid-session retry: a changed server/user must be reviewed again.
+    const response=await this.call<SwarmApiErrorShape & {success?:boolean}>('DeleteImage',{path},false);
+    if(response.success!==true)throw new Error('Swarm did not confirm image deletion.');
   }
 
   async deleteImage(path: string): Promise<void> {
@@ -263,6 +307,7 @@ export class SwarmClient {
       sortBy: "Date",
       sortReverse: true,
     });
+    if (!Array.isArray(payload.files) || !Array.isArray(payload.folders)) throw new Error("Malformed Swarm history listing.");
     return {
       ...payload,
       folders: (payload.folders ?? []).map(String),
@@ -279,6 +324,7 @@ export class SwarmClient {
   }
 
   async generate(request: SwarmGenerationRequest): Promise<SwarmGenerationResponse> {
+    tagStudioRequest(request);
     return this.call<SwarmGenerationResponse>("GenerateText2Image", request as Record<string, unknown>);
   }
 
@@ -295,6 +341,7 @@ export class SwarmClient {
   async addImageToHistory(image: string, rawInput: Record<string, unknown>): Promise<SwarmGenerationResponse> {
     // Swarm's AddImageToHistory route consumes the same root T2I parameter map as generation.
     // Keep the params at the root beside `image`; `call()` adds the session id for us.
+    tagStudioRequest(rawInput);
     return this.call<SwarmGenerationResponse>("AddImageToHistory", { image, ...rawInput });
   }
 
@@ -304,6 +351,7 @@ export class SwarmClient {
     signal?: AbortSignal,
     onInterruptError?: (error: unknown) => void,
   ): Promise<SwarmGenerationImage[]> {
+    tagStudioRequest(request);
     const run = async (retry: boolean): Promise<SwarmGenerationImage[]> => {
       const sessionId = await this.ensureSession();
       signal?.throwIfAborted();

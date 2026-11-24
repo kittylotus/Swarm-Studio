@@ -1,3 +1,9 @@
+import {automaticSettings,automaticProof,automaticSelection,automaticCandidates,type AutomaticSettings} from './library/automatic-cleanup';
+import {branchChoices,type BranchChoice} from './library/branch-retention';
+import { cleanupPlan, executeCleanup, fileIdentity, cleanupRead, cleanupMutation, CleanupBlocked, type CleanupPlan, type CleanupState, type CleanupTarget, type CleanupOutcome } from './library/reviewed-cleanup';
+import { lumiReferenceBridge, liveSnapshot, type LumiLinkState, type LumiPairing } from "./library/reference-connection";
+import { readExpressionWorkspace, referencesFromStudioState, matchReferencePath, type ReferenceAudit } from "./library/local-references";
+import { projectFiles } from "./expressions/projects";
 import { advancedCatalog, activeAdvancedParams, applyAdvancedFeature, featureEnabled, featureInStudio, featureValues, publicExtraParam, type AdvancedFeature } from "./advanced/catalog";
 import { openAdvancedFeatures } from "./advanced/dialog";
 import { advancedIcon } from "./advanced/icons";
@@ -14,7 +20,12 @@ import { validateMossComposition } from "./llm/prompts";
 import { builtInThemes, isLightTheme, themeFontOptions, themeFontStack } from "./theme";
 import { StudioStore, folderIds, PERSISTED_OUTPUT_CACHE_LIMIT } from "./library/store";
 import { identityThumbnail } from "./library/avatars";
-import { nonFavoriteTargets, readSwarmFavorites } from "./library/cleanup";
+import { assetVersions, versionGraph, outputTag, retentionEntry, type RetentionEntry } from "./library/lifecycle";
+import { LUMI_LIBRARY_VIEW, isLumiSwarmOutput, defaultVacuumView, vacuumViewRows } from "./library/views";
+import { scanSwarmHistory } from "./library/inventory";
+import { classifyVacuum, withManualReview, vacuumPolicy, originVacuumPolicy, parseLumiSnapshot, type LumiSnapshot, type VacuumRow, type VacuumContext } from "./library/vacuum";
+import { tagStudioRequest, readStudioMetadata } from "./library/provenance";
+import "./library/vacuum.css";
 import { normalizeLibraryFolderSelection, shouldAutoSyncLibraryHistory } from "./library/session";
 import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
 import { importLumiSwarmStack } from "./lora/import";
@@ -409,6 +420,43 @@ export class StudioApp {
   private libraryLastSelectedId = "";
   private libraryRenderLimit = 240;
   private libraryBatchBusy = false;
+  private inspectorVersionsOpen = false;
+  private vacuumLiveState: LumiLinkState | null = null;
+  private vacuumLiveMode = false;
+  private vacuumLiveFresh = false;
+  private vacuumLinkOpen = false;
+  private vacuumPairingCode = "";
+  private vacuumLinkMessage = "Pair once in LumiSwarm to receive fresh references automatically.";
+  private vacuumLinkOrigin = "";
+  private vacuumAuditOpen = false;
+  private vacuumStep: 'configure' | 'select' | 'review' | 'results' = 'configure';
+  private vacuumPositions: Record<string, { scroll: number; focus: string; value?: string; caret?: [number | null, number | null] }> = {};
+  private vacuumStepFocus = false;
+  private vacuumLocalAudit: ReferenceAudit | null = null;
+  private vacuumSizeScan: AbortController | null = null;
+  private vacuumSizeMessage = "";
+  private vacuumSelected = new Set<string>();
+  private vacuumReview: CleanupPlan | null = null;
+  private vacuumReviewAck = false;
+  private vacuumDeleteBusy = false;
+  private vacuumDeleteAbort: AbortController | null = null;
+  private vacuumCleanupRuns: Array<{id:string;scope:string;serverId:string;createdAt:number;finishedAt?:number;reviewedAt?:number;policyKey?:string;referenceSnapshotAt?:number;recycle:string;targets:Array<{path:string;assetId:string;stage:string;origin:string;manual?:boolean;reason?:string}>;results:CleanupOutcome[];pendingPath?:string;automatic?:boolean}> = [];
+  private vacuumOpen = false;
+  private vacuumHistoryOpen = false;
+  private vacuumPage = 0;
+  private vacuumView = defaultVacuumView();
+  private vacuumRows: VacuumRow[] = [];
+  private vacuumSnapshot: LumiSnapshot | null = null;
+  private vacuumScan: AbortController | null = null;
+  private vacuumExclusions = new Set<string>();
+  private vacuumMessage = "Run a complete Swarm scan to preview. Nothing will be deleted.";
+  private vacuumHistory: Array<{ at: number; scope: string; count: number; candidates: number }> = [];
+  private vacuumFiles: import("./library/vacuum").VacuumFile[] = [];
+  private vacuumFavorites = new Set<string>();
+  private vacuumScope = "";
+  private vacuumAutoScannedScope = "";
+  private vacuumAutomaticBusy=false;
+  private vacuumLastInteraction=Date.now();
   private libraryAutoSyncStarted = false;
   private toast: ToastMessage | null = null;
   private toastTimer = 0;
@@ -1049,6 +1097,9 @@ export class StudioApp {
     }
     this.applyTheme();
     this.startMemoryDiagnostics();
+    const noteActivity=()=>{this.vacuumLastInteraction=Date.now();};
+    window.addEventListener('pointerdown',noteActivity,{passive:true});window.addEventListener('keydown',noteActivity);
+    window.setInterval(()=>void this.maybeAutomaticCleanup(),60000);
     runtime.subscribeLogs((event) => {
       this.addLog(event.message, event.level, "swarm");
       this.scheduleProcessStatusRefresh();
@@ -1807,6 +1858,7 @@ export class StudioApp {
       ${this.renderLoraProfileManagerModal()}
       ${this.renderPresetEditorModal()}
       ${this.renderRegionPresetEditorModal()}
+      ${this.renderVacuum()}
       ${this.renderLibraryFiltersModal()}
       ${this.renderLibraryMoveModal()}
       ${this.renderLibrarySelectionRail()}
@@ -2196,6 +2248,53 @@ export class StudioApp {
     </div>`;
   }
 
+  private branchChoicesReadable():boolean {try{const raw=JSON.parse(localStorage.getItem('studio-branches-v1:'+this.client.historyScope)||'[]');return Array.isArray(raw)&&raw.length<=10000&&branchChoices(raw).length===raw.length;}catch{return false;}}
+  private readBranchChoices():BranchChoice[] {try{return branchChoices(JSON.parse(localStorage.getItem('studio-branches-v1:'+this.client.historyScope)||'[]'));}catch{return [];}}
+  private saveBranchChoice(assetId:string,decision:string):void {
+    const matches=this.store.state.outputs.filter(output=>outputTag(output)?.studio_asset_id===assetId);
+    if(matches.length!==1||!this.client.historyScope)return;
+    const output=matches[0]!,tag=outputTag(output)!;if(!output.swarmSourcePath)return;
+    const choices=this.readBranchChoices().filter(c=>c.assetId!==assetId||c.origin!==tag.studio_origin);
+    if(decision==='keep'||decision==='discard')choices.push({assetId,origin:tag.studio_origin,pipelineId:tag.studio_pipeline_id,path:output.swarmSourcePath,decision});
+    try{localStorage.setItem('studio-branches-v1:'+this.client.historyScope,JSON.stringify(choices));this.vacuumReview=null;this.vacuumReviewAck=false;this.render();}catch{this.notify('Could not save branch choice.','error');}
+  }
+  private retentionKey(): string { return "studio-retention-v1:" + this.client.historyScope; }
+  private keepFinalEnabled(): boolean { try { return localStorage.getItem(this.retentionKey() + ":enabled") === "true"; } catch { return false; } }
+  private setKeepFinal(enabled: boolean): void { try { localStorage.setItem(this.retentionKey() + ":enabled", String(enabled)); } catch { this.notify("Could not save retention preference.", "error"); } }
+  private retentionQueue(): RetentionEntry[] {
+    try { const value = JSON.parse(localStorage.getItem(this.retentionKey()) || "[]"); return Array.isArray(value) ? value.filter(item => item?.scope === this.client.historyScope && typeof item.sourceAssetId === "string" && typeof item.replacementAssetId === "string" && typeof item.sourcePath === "string" && typeof item.replacementPath === "string" && Number.isFinite(item.queuedAt)) : []; } catch { return []; }
+  }
+  private queueReplacement(result: OutputRecord, decoded: boolean, enabled: boolean): void {
+    if (!enabled) return;
+    const tag = outputTag(result); if (!tag?.studio_parent_id) return;
+    const sources = this.store.state.outputs.filter(output => outputTag(output)?.studio_asset_id === tag.studio_parent_id);
+    if (sources.length !== 1) return;
+    const entry = retentionEntry(sources[0]!, result, this.client.historyScope, decoded); if (!entry) return;
+    try { localStorage.setItem(this.retentionKey(), JSON.stringify([...this.retentionQueue().filter(item => item.sourceAssetId !== entry.sourceAssetId), entry])); }
+    catch { this.notify("Replacement saved, but its source could not be queued for review.", "error"); }
+  }
+  private renderRetentionPolicy(): string {
+    return `<label class="retention-policy"><input type="checkbox" data-keep-final ${this.keepFinalEnabled() ? 'checked' : ''}/><span>Keep final only<small>Queue replaced sources for Vacuum review. Originals stay saved until cleanup is approved.</small></span></label>`;
+  }
+  private renderVersionReview(output: OutputRecord): string {
+    if (!this.inspectorVersionsOpen) return "";
+    const nodes = assetVersions(output, this.store.state.outputs);
+    const queue = this.retentionQueue(),choices=this.readBranchChoices();
+    const graph=versionGraph(nodes),current=nodes.find(node=>node.output?.id===output.id),path=new Set<string>();
+    let cursor=current?.assetId;while(cursor&&!path.has(cursor)){path.add(cursor);cursor=graph.edges.find(edge=>edge.child===cursor)?.parent;}
+    const edges=graph.edges.map(edge=>{
+      const x1=edge.from.x+graph.cardWidth/2,y1=edge.from.y+graph.cardHeight,x2=edge.to.x+graph.cardWidth/2,y2=edge.to.y;
+      return `<path class="${path.has(edge.child)?'is-current-path':''} ${!edge.from.node.output?'is-missing':''}" data-version-edge="${escapeHtml(edge.child)}" d="M${x1} ${y1} V${y2-19} H${x2} V${y2}"/>`;
+    }).join('');
+    const cards=graph.nodes.map(point=>{
+      const node=point.node,isCurrent=node.output?.id===output.id,queued=queue.some(item=>item.sourceAssetId===node.assetId);
+      const state=node.ambiguous?'Ambiguous ID':point.unresolved?'Unresolved link':!node.output?'Missing parent':!point.children?'Branch end':point.children>1?point.children+' branches':node.parentId?'Continues':'Pipeline source';
+      const parent=nodes.find(parent=>parent.assetId===node.parentId);
+      return `<li class="version-node ${isCurrent?'is-current':''} ${!node.output?'is-missing':''}" style="left:${point.x}px;top:${point.y}px" data-version-node="${escapeHtml(node.assetId)}"><div class="version-card-main"><span class="version-thumb">${node.output?`<img ${this.swarmImageAttributes(this.outputImageUrl(node.output))} alt="" loading="lazy" />`:'?'}</span><div><strong>${escapeHtml(node.stage.replaceAll('_',' '))}</strong><code title="${escapeHtml(node.assetId)}">${escapeHtml(node.assetId.slice(0,8))}…</code><small class="version-origin ${node.pipelineConflict?'has-conflict':''}" title="${node.pipelineConflict?'Exact parent ID resolves, but parent and child pipeline tags differ':escapeHtml(node.origin||'Unknown producer')}">${node.pipelineConflict?'Pipeline tag differs':node.origin==='lumiswarm'?'LumiSwarm':node.origin==='standalone'?'Standalone':'Not indexed'}</small></div></div><div class="version-card-state"><span class="version-state ${state==='Branch end'?'is-end':''} ${node.ambiguous||point.unresolved||!node.output?'is-warning':''}" title="${escapeHtml(node.parentId?`Parent: ${parent?.stage||'unknown'} · ${node.parentId}`:'Pipeline source')}">${state}</span>${queued?'<span class="version-queued" title="Queued for Vacuum review" aria-label="Queued for Vacuum review">Queued</span>':''}</div>${node.output?`<select class="version-branch-choice" data-branch-choice="${escapeHtml(node.assetId)}" aria-label="Retention for branch ${escapeHtml(node.assetId)}" ${node.ambiguous||point.unresolved?'disabled':''}><option value="policy">Follow policy</option><option value="keep" ${choices.some(c=>c.assetId===node.assetId&&c.decision==='keep')?'selected':''}>Keep this branch</option><option value="discard" ${choices.some(c=>c.assetId===node.assetId&&c.decision==='discard')?'selected':''}>Discard · review required</option></select>`:''}${node.output?`<button type="button" class="secondary-button" data-inspect-output="${escapeHtml(node.output.id)}" ${node.ambiguous||isCurrent?'disabled':''}>${node.ambiguous?'Ambiguous ID':isCurrent?'Viewing':'Inspect'}</button>`:'<small>Not in current index</small>'}</li>`;
+    }).join('');
+    return `<section class="inspector-versions" id="inspector-versions" aria-label="Version review"><header><h3>Version review</h3><small>${nodes.length} known assets</small></header>${nodes.length?`<div class="version-map-viewport" tabindex="0" role="region" aria-label="Scrollable asset lineage"><div class="version-map" style="width:${graph.width}px;height:${graph.height}px"><svg class="version-connectors" width="${graph.width}" height="${graph.height}" aria-hidden="true">${edges}</svg><ol aria-label="Assets and branches">${cards}</ol></div></div><p class="version-map-hint">Follow the connectors · scroll to explore branches.</p><p>Branch choices apply to that asset and its descendants. Siblings and shared ancestors keep their own rules. Discard still requires reviewed deletion.</p>`:'<p>No parent metadata is recorded for this image. Sync Swarm history to find saved versions.</p>'}<p>Exact parent IDs connect both Studios. Pipeline conflicts are shown; Vacuum policy decides retention. Missing parents and ambiguous IDs are never guessed.</p></section>`;
+  }
+
   private renderInspector(): string {
     const id = this.store.state.ui.selectedOutputId;
     if (!id) return "";
@@ -2223,7 +2322,10 @@ export class StudioApp {
                 <button class="secondary-button" data-inpaint-output="${output.id}">Inpaint</button>
                 <button class="secondary-button" data-copy-resolved-prompt="${output.id}">Copy prompt</button>
                 <button class="secondary-button" data-nav="library">Open library</button>
+                <button class="secondary-button" data-review-versions aria-expanded="${this.inspectorVersionsOpen}" aria-controls="inspector-versions">Review versions</button>
               </div>
+              ${this.renderVersionReview(output)}
+              ${this.renderRetentionPolicy()}
               <div class="metadata-facts metadata-facts--timing">
                 <span><b>Total time</b><em>${this.formatDuration(timing.totalTimeMs)}</em></span>
                 <span><b>Prepping</b><em>${this.formatDuration(timing.prepTimeMs)}</em></span>
@@ -3280,6 +3382,7 @@ export class StudioApp {
 
   private libraryFilterSummary(): string {
     const bits: string[] = [];
+    if (this.libraryFolder === LUMI_LIBRARY_VIEW) bits.push("LumiSwarm · virtual collection");
     const folder = this.libraryFolder === "all" ? null : this.store.state.folders.find((item) => item.id === this.libraryFolder);
     if (folder) bits.push(folder.name);
     if (this.libraryDateFrom || this.libraryDateTo) {
@@ -3340,12 +3443,13 @@ export class StudioApp {
           </section>
 
           <section class="library-filter-section">
-            <div class="section-minihead"><b>Studio folders</b><div class="library-folder-actions">
+            <div class="section-minihead"><b>Collections & folders</b><div class="library-folder-actions">
               ${customFolder ? `<button type="button" class="ghost-button danger-icon" data-delete-library-folder="${escapeHtml(customFolder.id)}" aria-label="Delete folder ${escapeHtml(customFolder.name)}">${trashSvg}<span>Delete</span></button>` : ""}
               <button type="button" class="ghost-button" data-action="new-folder">＋ New</button>
             </div></div>
             <div class="library-folder-tiles">
               <button type="button" class="library-folder-tile ${this.libraryFolder === "all" ? "is-active" : ""}" data-library-modal-folder="all"><span>✦</span><b>All outputs</b><small>${this.store.state.outputs.length}</small></button>
+              <button type="button" class="library-folder-tile ${this.libraryFolder === LUMI_LIBRARY_VIEW ? "is-active" : ""}" data-library-modal-folder="${LUMI_LIBRARY_VIEW}" title="Virtual collection from saved Swarm metadata. Files stay in their original folders."><span>✧</span><b>LumiSwarm</b><small>${this.store.state.outputs.filter(isLumiSwarmOutput).length} · virtual</small></button>
               ${this.store.state.folders.map((folder) => `<button type="button" class="library-folder-tile ${this.libraryFolder === folder.id ? "is-active" : ""}" data-library-modal-folder="${folder.id}"><span>${folder.id === folderIds.favorites ? "★" : "▱"}</span><b>${escapeHtml(folder.name)}</b><small>${folder.id === folderIds.favorites ? folderCounts.get(folderIds.favorites) ?? 0 : folderCounts.get(folder.id) ?? 0}</small></button>`).join("")}
             </div>
           </section>
@@ -3367,8 +3471,9 @@ export class StudioApp {
   private libraryVisibleOutputs(): OutputRecord[] {
     const query = this.librarySearch.trim().toLowerCase();
     return this.store.state.outputs.filter((output) => {
+      if (this.libraryFolder === LUMI_LIBRARY_VIEW && !isLumiSwarmOutput(output)) return false;
       if (this.libraryFolder !== "all" && this.libraryFolder === folderIds.favorites && !output.starred) return false;
-      if (this.libraryFolder !== "all" && this.libraryFolder !== folderIds.favorites && output.folderId !== this.libraryFolder) return false;
+      if (this.libraryFolder !== "all" && this.libraryFolder !== LUMI_LIBRARY_VIEW && this.libraryFolder !== folderIds.favorites && output.folderId !== this.libraryFolder) return false;
       const dateKey = this.libraryOutputDateKey(output);
       if (this.libraryDateFrom && (!dateKey || dateKey < this.libraryDateFrom)) return false;
       if (this.libraryDateTo && (!dateKey || dateKey > this.libraryDateTo)) return false;
@@ -3380,48 +3485,615 @@ export class StudioApp {
     });
   }
 
-  private async deleteNonFavoriteOutputs(): Promise<void> {
-    if (!this.connected || this.libraryBatchBusy || this.librarySyncing) return;
-    const matching = this.libraryVisibleOutputs();
-    const scope = this.libraryFilterSummary();
-    this.libraryBatchBusy = true;
-    this.render();
-    let deleted = 0, failed = 0, preserved = 0;
-    const progress = (message: string) => { const button = this.root.querySelector<HTMLElement>("[data-action='delete-nonfavorite-outputs']"); if (button) (button.querySelector("#library-delete-name") ?? button).textContent = message; };
-    progress("Checking Swarm favorites…");
+  private renderVacuum(): string {
+    this.vacuumSelected ||= new Set<string>();
+    this.vacuumCleanupRuns ||= [];
+
+    if (!this.vacuumOpen) return "";
+    this.captureVacuumPosition();
+    this.vacuumStep ||= 'configure';
+    if(this.vacuumStep==='review'&&!this.vacuumReview&&!this.vacuumDeleteBusy)this.vacuumStep='select';
+    this.refreshVacuumRows();
+    const candidates = this.vacuumRows.filter(row => row.status === "candidate");
+    const protectedCount = this.vacuumRows.filter(row => row.status === "protected").length;
+    const view = this.vacuumView || defaultVacuumView();
+    const visible = vacuumViewRows(this.vacuumRows, this.vacuumFiles, view);
+    const pageStart = Math.max(0, Math.min(this.vacuumPage * 100, Math.max(0, Math.ceil(visible.length / 100) - 1) * 100));
+    const option = (value: string, label: string, selected: string) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`;
+    const bytes = candidates.reduce((sum, row) => sum + (row.bytes ?? 0), 0);
+    const unknown = candidates.filter(row => row.bytes === undefined).length;
+    const snapshot = this.vacuumSnapshot;
+    const scanned = Boolean(this.vacuumScope);
+    const icon = (path: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+    const archive = icon('<path d="M4 7h16v13H4zM3 3h18v4H3zM9 11h6"/>');
+    const upload = icon('<path d="M12 16V3m-4 4 4-4 4 4M4 15v5h16v-5"/>');
+    const check = icon('<path d="m6 12 4 4 8-8"/>');
+    const lumiConnection=`        <section class="vacuum-source" aria-label="Lumi references"><span class="vacuum-source-icon ${snapshot ? 'is-loaded' : ''}">${snapshot ? check : icon('<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-2 2m2 6a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l2-2"/>')}</span><div><h3>${snapshot ? (this.vacuumLiveMode ? 'Live Lumi references' : 'Lumi references imported') : 'Connect your Lumi references'}</h3><p>${snapshot ? `${snapshot.claims.length} asset claims · ${escapeHtml(new Date(snapshot.generatedAt).toLocaleString())}` : 'Import a snapshot from LumiSwarm Settings → Metadata.'}</p></div><button type="button" class="secondary-button" data-vacuum-choose>${upload}<span>${snapshot ? 'Replace snapshot' : 'Import references'}</span></button><input type="file" accept="application/json,.json" data-vacuum-import aria-label="Import Lumi reference snapshot" hidden /></section>
+        <div class="vacuum-connection-bar"><span>${this.vacuumLiveMode ? (this.vacuumLiveFresh && this.vacuumLiveState?.receivedAt ? 'Live feed · updated ' + escapeHtml(new Date(this.vacuumLiveState.receivedAt).toLocaleTimeString()) : this.vacuumLiveState?.paired && !this.vacuumLiveState?.receivedAt ? 'Paired · waiting for first Lumi update' : 'Live feed · stale or disconnected') : this.vacuumLiveState?.paired ? 'Paired · waiting for a fresh update' : 'Manual snapshot'}</span><button type="button" class="ghost-button" data-vacuum-connect>${this.vacuumLiveState?.paired ? 'Manage live connection' : 'Connect LumiSwarm'}</button><button type="button" class="ghost-button" data-vacuum-audit aria-expanded="${this.vacuumAuditOpen}">Reference checks</button></div>
+        ${this.renderVacuumConnection()}
+        ${this.vacuumAuditOpen ? this.renderReferenceAudit() : ''}
+`;
+    return `<dialog class="vacuum-panel" aria-labelledby="vacuum-title" aria-describedby="vacuum-description" data-vacuum-dialog data-vacuum-step="${this.vacuumStep}">
+      <header class="vacuum-head"><div class="vacuum-heading"><span class="vacuum-eyebrow">LIBRARY / MAINTENANCE</span><div class="vacuum-title-row"><h2 id="vacuum-title">Vacuum preview</h2><button type="button" class="ghost-button vacuum-help-button" data-vacuum-help aria-label="About Vacuum" aria-expanded="false" aria-controls="vacuum-help">${icon('<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4m0 3v.1"/>')}</button></div><div id="vacuum-help" class="vacuum-help-popover" popover="auto" role="note"><strong>Your originals, your rules</strong><p>Scan Swarm outputs, then configure LumiSwarm and standalone independently. Chains keep the last saved output in each branch. Metadata stages can include last outputs when you select them.</p><p>Favorites, exclusions, active jobs and known direct references stay protected. Lumi copy bindings are optional protection. Candidates follow automatic policy. Any unblocked file can be manually selected, including untagged images and policy-retained versions. The review lists exact paths and recycle behavior. Automatic cleanup is off by default. After a successful reviewed run, you can enable old superseded-source cleanup in What to keep.</p></div><p id="vacuum-description">Make room, one considered choice at a time.</p></div><div class="vacuum-head-actions"><span class="vacuum-mode">Review before deleting</span><button type="button" class="icon-button" data-vacuum-close aria-label="Close Vacuum">×</button></div></header>
+      <nav class="vacuum-steps" role="tablist" aria-label="Vacuum workflow">${(['configure','select','review','results'] as const).map((step,index)=>`<button type="button" role="tab" id="vacuum-tab-${step}" aria-controls="vacuum-pane-${step}" aria-selected="${this.vacuumStep===step}" tabindex="${this.vacuumStep===step?'0':'-1'}" data-vacuum-go="${step}" ${this.vacuumDeleteBusy||(step==='review'&&!this.vacuumReview)?'disabled':''}><span class="vacuum-step-number">${index+1}</span><span>${{configure:'What to keep',select:'Select files',review:'Review',results:'Results'}[step]}</span>${step==='select'&&this.vacuumSelected.size?`<small>${this.vacuumSelected.size}</small>`:''}</button>`).join('')}</nav>
+      <div class="vacuum-body">
+        <section role="tabpanel" id="vacuum-pane-configure" aria-labelledby="vacuum-tab-configure" ${this.vacuumStep==='configure'?'':'hidden'}>
+        ${this.renderVacuumPolicy(lumiConnection)}
+        ${snapshot && !snapshot.complete ? `<div class="vacuum-coverage"><span class="vacuum-dot"></span><p><strong>Reference coverage is incomplete.</strong> ${this.readVacuumPolicy().basis === 'lineage' ? 'Metadata lifecycle mode uses saved chains; known relay references add protection.' : 'Some host references are not verified yet, so eligibility stays blocked in complete-coverage mode.'}</p></div>` : ''}
+        <div class="vacuum-preferences"><label class="vacuum-auto"><input type="checkbox" data-vacuum-auto ${this.vacuumAutoEnabled() ? 'checked' : ''} /><span>Review automatically<small>Scan when Library opens and Studio is idle.</small></span></label><button type="button" class="ghost-button vacuum-history-toggle" data-vacuum-history aria-expanded="${Boolean(this.vacuumHistoryOpen)}" aria-controls="vacuum-history">Scan history <span>${this.vacuumHistory.length}</span></button></div>
+        <section id="vacuum-history" class="vacuum-history" aria-label="Scan history" ${this.vacuumHistoryOpen ? '' : 'hidden'}>${this.vacuumHistory.length ? this.vacuumHistory.slice().reverse().map(scan => `<div><time>${escapeHtml(new Date(scan.at).toLocaleString())}</time><span>${scan.count.toLocaleString()} files · ${scan.candidates} candidates</span><small>Preview</small></div>`).join('') : '<p>No completed scans yet. Your reviews will appear here.</p>'}</section>
+        </section>
+        <section role="tabpanel" id="vacuum-pane-select" aria-labelledby="vacuum-tab-select" ${this.vacuumStep==='select'?'':'hidden'}>
+        <div class="vacuum-results-head"><h3>Archive review</h3><span>${this.vacuumScan ? 'Scanning…' : scanned ? `${this.vacuumRows.length.toLocaleString()} files reviewed` : 'Awaiting first scan'}</span></div><div class="vacuum-archive-actions">${this.vacuumRows.length?'<button type="button" class="ghost-button" data-vacuum-export>Export preview</button>':''}<button type="button" class="ghost-button" data-vacuum-scan ${this.vacuumScan||this.vacuumSizeScan||this.libraryBatchBusy||this.librarySyncing||!this.connected?'disabled':''}>${scanned?'Scan Swarm history again':'Scan Swarm history'}</button></div>
+        ${this.vacuumRows.length ? `<div class="vacuum-stats"><div><strong>${candidates.length.toLocaleString()}</strong><span>Preview candidates</span></div><div><strong>${protectedCount.toLocaleString()}</strong><span>Protected</span></div><div><strong>${(this.vacuumRows.length - candidates.length - protectedCount).toLocaleString()}</strong><span>Need review</span></div><div><strong>${unknown && bytes === 0 ? 'Unknown' : (bytes / 1048576).toFixed(1) + ' MB'}</strong><span>Candidate size${unknown ? ' · some unknown' : ''}</span></div></div>
+        <form class="vacuum-filters" data-vacuum-filters role="search" aria-label="Filter archive review"><label class="vacuum-search"><span>Search archive</span><input type="search" data-vacuum-search value="${escapeHtml(view.search)}" placeholder="Path, stage, asset ID…" /></label><label><span>Status</span><select data-vacuum-status>${[['all','All states'],['candidate','Candidates'],['review','Needs review'],['protected','Protected']].map(([v,l]) => option(v!,l!,view.status)).join('')}</select></label><label><span>Source</span><select data-vacuum-origin>${[['all','All outputs'],['lumiswarm','LumiSwarm'],['standalone','Standalone'],['tagged','Tagged only'],['untagged','Untagged']].map(([v,l]) => option(v!,l!,view.origin)).join('')}</select></label><label><span>Sort</span><select data-vacuum-sort>${[['newest','Newest first'],['oldest','Oldest first'],['priority','Candidates first']].map(([v,l]) => option(v!,l!,view.sort)).join('')}</select></label></form>
+        <div class="vacuum-selection"><div><strong>${this.vacuumSelected.size} selected</strong><span>Select any unblocked file for manual review. Candidate selection follows your policy; manual selection can override age, stages and missing tags.</span></div><div><button type="button" class="ghost-button" data-vacuum-select-matching ${this.vacuumDeleteBusy||this.vacuumReview?'disabled':''}>Select matching candidates</button><button type="button" class="ghost-button" data-vacuum-select-manual ${this.vacuumDeleteBusy||this.vacuumReview?'disabled':''}>Select matching for manual review</button><button type="button" class="ghost-button" data-vacuum-clear-selection ${this.vacuumDeleteBusy||this.vacuumReview?'disabled':''}>Clear selection</button></div></div>
+        <div class="vacuum-filter-summary"><span>${visible.length.toLocaleString()} of ${this.vacuumRows.length.toLocaleString()} match</span><div class="vacuum-filter-actions"><button type="button" class="ghost-button" data-vacuum-sizes ${this.vacuumSizeScan ? 'disabled' : ''}>${this.vacuumSizeScan ? 'Reading sizes…' : 'Read matching file sizes'}</button><button type="button" class="ghost-button" data-vacuum-reset>Reset filters</button></div></div>
+        ${!visible.length ? '<p class="vacuum-no-matches">No files match these filters. Try another source or clear your search.</p>' : ''}
+        <ul class="vacuum-list">${visible.slice(pageStart, pageStart + 100).map((row) => `<li class="vacuum-row"><label class="vacuum-select"><input type="checkbox" data-vacuum-select="${this.vacuumRows.indexOf(row)}" aria-label="Select ${escapeHtml(row.path)} for reviewed deletion" ${this.vacuumSelected.has(row.path)?'checked':''} ${!row.manualAllowed||this.vacuumDeleteBusy||this.vacuumReview?'disabled':''}/></label><div class="vacuum-row-main"><strong>${escapeHtml(row.stage.replaceAll('_', ' '))}</strong><span class="vacuum-path">${escapeHtml(row.path)}</span><p>${escapeHtml(row.reason)}</p></div><div class="vacuum-row-meta"><span class="vacuum-status" data-status="${row.status}">${row.status === 'candidate' ? 'Candidate' : row.status === 'protected' ? 'Protected' : row.manualAllowed ? 'Manual review' : 'Needs review'}</span><small>${row.bytes === undefined ? 'Size unknown' : (row.bytes / 1048576).toFixed(1) + ' MB'}</small></div><label class="vacuum-exclude"><input type="checkbox" data-vacuum-exclude="${this.vacuumRows.indexOf(row)}" ${this.vacuumExclusions.has(row.path) ? 'checked' : ''} />Exclude</label></li>`).join('')}</ul>` : `<section class="vacuum-empty ${this.vacuumScan ? 'is-scanning' : ''}"><span>${archive}</span><h4>${this.vacuumScan ? 'Reading your Swarm archive' : scanned ? 'No outputs found' : 'Ready to review your archive'}</h4><p>${this.vacuumScan ? 'Checking saved files, lineage and favorites. You can cancel at any time.' : scanned ? 'The folder walk returned no saved outputs for this connection.' : 'Scan saved outputs to see what is protected, what needs review, and what may be redundant.'}</p><small>Branch ends & favorites retained <span>·</span> ${this.readVacuumPolicy().basis==='lineage'?this.readVacuumPolicy().graceDays:7}-day grace period</small></section>`}
+        ${visible.length > 100 ? `<nav class="vacuum-pagination" aria-label="Review pages"><button type="button" class="secondary-button" data-vacuum-prev ${pageStart ? '' : 'disabled'}>Previous files</button><span>${pageStart + 1}–${Math.min(pageStart + 100, visible.length)} of ${visible.length}</span><button type="button" class="secondary-button" data-vacuum-next ${pageStart + 100 < visible.length ? '' : 'disabled'}>Next files</button></nav>` : ''}
+        <p class="vacuum-size-note">${escapeHtml(this.vacuumSizeMessage || "Sizes use original-file headers; unavailable sizes stay unknown.")}</p>
+        </section>
+        <section role="tabpanel" id="vacuum-pane-review" aria-labelledby="vacuum-tab-review" ${this.vacuumStep==='review'?'':'hidden'}>${this.renderCleanupReview()}</section>
+        <section role="tabpanel" id="vacuum-pane-results" aria-labelledby="vacuum-tab-results" ${this.vacuumStep==='results'?'':'hidden'}>${this.renderCleanupHistory()}</section>
+      </div>
+      <p class="vacuum-feedback" role="status">${escapeHtml(this.vacuumMessage)}</p>
+      ${this.renderVacuumFooter(scanned,check)}
+    </dialog>`;
+  }
+
+  private readAutomaticSettings(scope=this.client.historyScope):AutomaticSettings {try{return automaticSettings(JSON.parse(localStorage.getItem('studio-vacuum-automatic-v1:'+scope)||'{}'));}catch{return automaticSettings();}}
+  private writeAutomaticSettings(value:AutomaticSettings,scope=this.client.historyScope):void {localStorage.setItem('studio-vacuum-automatic-v1:'+scope,JSON.stringify(value));}
+  private renderAutomaticCleanup():string {
+    const settings=this.readAutomaticSettings(),proof=automaticProof(this.readCleanupRuns(),this.client.historyScope,JSON.stringify(this.readVacuumPolicy()));
+    return `<section class="vacuum-automation" aria-label="Automatic cleanup"><div><span class="vacuum-policy-kicker">OPTIONAL · AFTER A SUCCESSFUL REVIEWED RUN</span><h3>Clean repeats while Studio is idle</h3><p>Only tagged, superseded sources at least seven days old. Branch ends, manual overrides, favorites and kept branches stay out. Every file gets the same fresh verification and cleanup log.</p></div><label class="vacuum-policy-choice"><input type="checkbox" data-vacuum-automatic ${settings.enabled?'checked':''} ${!proof&&!settings.enabled?'disabled':''}/><span>Enable automatic cleanup on this connection</span></label><label class="vacuum-policy-mode">Maximum originals per run<select data-vacuum-automatic-limit>${[5,10,20].map(n=>`<option value="${n}" ${settings.maxFiles===n?'selected':''}>${n} files</option>`).join('')}</select></label><p>${proof?'Checks run every 30 minutes after at least a minute of inactivity, while Studio is open. Swarm’s recycle setting applies.':'Complete a successful reviewed cleanup under these exact settings to unlock automation. Policy and branch changes require a new reviewed run.'}</p>${settings.message?`<p role="note">${escapeHtml(settings.message)}</p>`:''}</section>`;
+  }
+  private assertAutomaticApproval(plan:CleanupPlan):void {
+    const settings=this.readAutomaticSettings(),proof=automaticProof(this.readCleanupRuns().filter(run=>run.id!==plan.id),plan.scope,plan.policyKey);
+    if(!settings.enabled||!proof||proof.serverId!==plan.serverId||proof.recycle!==plan.recycle||plan.scope!==this.client.historyScope||JSON.stringify(this.readVacuumPolicy())!==plan.policyKey)throw new CleanupBlocked('Automatic approval changed. Complete another reviewed cleanup before enabling it.');
+    if(plan.targets.some(target=>target.manual))throw new CleanupBlocked('Automatic cleanup cannot execute manual or branch-discard overrides.');
+  }
+  private async maybeAutomaticCleanup():Promise<void> {
+    const scope=this.client.historyScope,settings=this.readAutomaticSettings(scope),now=Date.now(),policyKey=JSON.stringify(this.readVacuumPolicy());
+    if(!settings.enabled||this.vacuumAutomaticBusy||this.vacuumOpen||!this.connected||this.vacuumDeleteBusy||this.vacuumScan||this.vacuumSizeScan||this.libraryBatchBusy||this.librarySyncing||this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||document.visibilityState!=='visible'||now-this.vacuumLastInteraction<60000||now-settings.lastAttemptAt<30*60000||!automaticProof(this.readCleanupRuns(),this.client.historyScope,policyKey))return;
+    const controller=new AbortController();this.vacuumAutomaticBusy=true;this.vacuumDeleteBusy=true;this.vacuumDeleteAbort=controller;this.libraryBatchBusy=true;
     try {
-      const limit = await this.client.imageHistoryLimit();
-      const favorites = await readSwarmFavorites((path, depth) => this.client.listImageDirectory(path, depth), limit, (parent, child) => this.joinSwarmHistoryPath(parent, child));
-      const targets = nonFavoriteTargets(matching, this.store.state.outputs, favorites, output => this.outputMutationPath(output));
-      if (!targets.length) { this.notify("No non-favorited Swarm outputs to delete in this scope.", "info"); return; }
-      if (!window.confirm(`Delete ${targets.length} non-favorited Swarm image${targets.length === 1 ? "" : "s"}?\n\nScope: ${scope}\nIncludes all matching indexed outputs, including those below Load more. Favorites are preserved.\n\nThis cannot be undone.`)) return;
-      for (let offset = 0; offset < targets.length; offset += 6) {
-        progress(`Deleting ${offset}/${targets.length}…`);
-        const removed = new Set<string>();
-        await Promise.all(targets.slice(offset, offset + 6).map(async target => {
-          if (this.store.state.outputs.some(output => target.ids.includes(output.id) && output.starred)) { preserved++; return; }
-          try {
-            await this.client.deleteImage(target.path);
-            target.ids.forEach(id => removed.add(id));
-            deleted++;
-          } catch (error) {
-            failed++;
-            this.addLog(`Could not delete ${target.path}: ${error instanceof Error ? error.message : String(error)}`, "error", "api");
-          }
-        }));
-        this.store.state.outputs = this.store.state.outputs.filter(output => !removed.has(output.id));
-        for (const id of removed) this.librarySelected.delete(id);
-        this.store.save();
-        await this.yieldLibrarySync();
+      this.writeAutomaticSettings({...settings,lastAttemptAt:now,message:'Checking old superseded sources…'},scope);
+      this.vacuumScope=scope;
+      const state=await this.checkedVacuumState([],controller.signal);
+      const selected=automaticSelection(state.files,this.vacuumContext(),settings.maxFiles);
+      if(!selected.size){this.writeAutomaticSettings({...this.readAutomaticSettings(scope),message:'Last idle check found no eligible superseded sources.'},scope);return;}
+      for(const file of state.files.filter(file=>selected.has(file.path))){const bytes=await this.client.imageByteSize(file.path,controller.signal);if(!bytes)selected.delete(file.path);else file.bytes=bytes;}
+      if(!selected.size){this.writeAutomaticSettings({...this.readAutomaticSettings(scope),enabled:false,message:'Paused: original-file headers could not be verified. Review the files before re-enabling.'},scope);return;}
+      this.vacuumReview=cleanupPlan(createId(),state,selected);this.vacuumReviewAck=false;
+      this.assertAutomaticApproval(this.vacuumReview);
+      this.vacuumDeleteBusy=false;this.libraryBatchBusy=false;
+      await this.executeVacuumReview(true);
+    }catch(error){try{this.writeAutomaticSettings({...this.readAutomaticSettings(scope),enabled:false,message:'Paused: '+String(error instanceof Error?error.message:error)},scope);}catch{this.notify('Automatic cleanup stopped; its settings could not be saved.','error');}}
+    finally{this.vacuumAutomaticBusy=false;this.vacuumDeleteBusy=false;this.vacuumDeleteAbort=null;this.libraryBatchBusy=false;this.vacuumReview=null;this.refreshVacuumRows();if(this.vacuumOpen)this.render();}
+  }
+  private vacuumAutoEnabled(): boolean { try { return localStorage.getItem("studio-vacuum-auto-preview-v1") === "true"; } catch { return false; } }
+
+  private vacuumContext(): VacuumContext {
+    const current = this.client.historyScope;
+    let referencesComplete=true;
+    const refs = new Set(this.vacuumLocalAudit?.paths || []);
+    try {
+      const [server, user, appendUser] = JSON.parse(current || "[]");
+      const active = referencesFromStudioState(this.store.state, this.expressionStudio?.referenceState);
+      for (const id of [...(this.imageEditor?.referencedOutputIds || []), this.inpaintSourceId, this.inpaintPendingResultRecord?.id]) {
+        const output = this.store.state.outputs.find(output => output.id === id); if (output?.swarmSourcePath) refs.add(output.swarmSourcePath);
       }
-      this.clearNativeImageCache();
-      this.notify(`Deleted ${deleted} non-favorited image${deleted === 1 ? "" : "s"}${preserved ? ` · ${preserved} newly favorited preserved` : ""}${failed ? ` · ${failed} failed and kept in Library` : ""}.`, failed ? "info" : "success");
-    } catch (error) {
-      this.notify(error instanceof Error ? error.message : String(error), "error");
-    } finally {
-      this.libraryBatchBusy = false;
-      this.render();
+      for (const raw of active) { const path = matchReferencePath(raw, server, user, { appendUser, studioOrigin: window.location.origin }); if (path) refs.add(path); }
+    } catch { referencesComplete=false; }
+    return {
+      scope: current === this.vacuumScope ? current : "", now: Date.now(), complete: Boolean(this.vacuumScope) && current === this.vacuumScope,
+      activeJobs: this.generating || Boolean(this.expressionStudio?.busy || this.imageEditor?.busy),
+      policy: this.readVacuumPolicy(),
+      snapshot: this.vacuumSnapshot, favorites: this.vacuumFavorites, exclusions: this.vacuumExclusions, localReferences: refs, localAuditComplete: referencesComplete && this.branchChoicesReadable() && Boolean(this.vacuumLocalAudit?.complete),
+    };
+  }
+  private refreshVacuumRows(): void {
+    const queued = new Set(this.retentionQueue().map(item => item.sourceAssetId + "|" + item.sourcePath));
+    const context=this.vacuumContext();
+    this.vacuumRows = withManualReview(classifyVacuum(this.vacuumFiles,context),this.vacuumFiles,context).map(row => queued.has(row.assetId + "|" + row.path) ? { ...row, reason: "Queued for reviewed cleanup · " + row.reason } : row);
+  }
+
+  private renderVacuumFooter(scanned:boolean,check:string):string {
+    const disabled=this.vacuumScan||this.vacuumSizeScan||this.libraryBatchBusy||this.librarySyncing||!this.connected;
+    const scan=`<button type="button" class="${this.vacuumStep==='configure'&&!scanned?'primary-button':'secondary-button'}" data-vacuum-scan ${disabled?'disabled':''}>${this.vacuumScan?'Scanning archive…':scanned?'Scan Swarm history again':'Scan Swarm history'}</button>`;
+    let actions='';
+    if(this.vacuumDeleteBusy)actions=`<button type="button" class="secondary-button" data-vacuum-delete-cancel>${this.vacuumStep==='review'?'Cancel review checks':'Cancel cleanup'}</button>`;
+    else if(this.vacuumStep==='configure')actions=`${this.vacuumScan?'<button type="button" class="secondary-button" data-vacuum-cancel>Cancel scan</button>':''}${scan}${scanned?'<button type="button" class="primary-button" data-vacuum-go="select">Next: select files →</button>':''}`;
+    else if(this.vacuumStep==='review'&&this.vacuumReview&&!this.vacuumReview.targets.length)actions=`<button type="button" class="secondary-button" data-vacuum-review-back>Back to selection</button><button type="button" class="primary-button" data-vacuum-review-selected ${disabled?'disabled':''}>Retry verification</button>`;
+    else if(this.vacuumStep==='review'&&this.vacuumReview)actions=`<button type="button" class="secondary-button" data-vacuum-review-back>Back to selection</button><button type="button" class="danger-soft" data-vacuum-delete-confirm ${!this.vacuumReview.targets.length||!this.vacuumReviewAck?'disabled':''}>Delete ${this.vacuumReview.targets.length} reviewed originals</button>`;
+    else if(this.vacuumStep==='results')actions='<button type="button" class="secondary-button" data-vacuum-close>Done</button><button type="button" class="primary-button" data-vacuum-go="select">Return to files →</button>';
+    else actions=`${this.vacuumScan?'<button type="button" class="secondary-button" data-vacuum-cancel>Cancel scan</button>':this.vacuumSizeScan?'<button type="button" class="secondary-button" data-vacuum-size-cancel>Cancel size check</button>':`<button type="button" class="secondary-button" data-vacuum-go="configure">← What to keep</button>`}<button type="button" class="primary-button" data-vacuum-review-selected ${disabled||!this.vacuumSelected.size?'disabled':''}>${this.vacuumSelected.size?'Review '+this.vacuumSelected.size+' selected':'Select files to continue'}</button>`;
+    return `<footer class="vacuum-footer"><p>${check}<span>${this.vacuumDeleteBusy?'Stops after any in-flight request':this.vacuumStep==='review'?(this.vacuumReview?.targets.length?'Approve only these exact paths':'Nothing deleted · selection retained'):this.vacuumStep==='select'?this.vacuumSelected.size+' selected · nothing deleted':this.readAutomaticSettings().enabled?'Idle automation enabled':'No automatic deletion'}</span></p><div>${actions}</div></footer>`;
+  }
+
+  private renderCleanupReview():string {
+    const plan=this.vacuumReview;
+    if(!plan)return this.vacuumDeleteBusy&&this.vacuumStep==='review'?'<section class="vacuum-empty" aria-label="Checking selection"><span aria-hidden="true">…</span><h4>Rechecking your selection</h4><p>Verifying file headers, favorites, current references and Swarm activity before preparing the exact paths for approval.</p><small>Nothing is being deleted. You can cancel these checks.</small></section>':'';
+    if(!plan.targets.length)return `<section class="vacuum-review" aria-label="Verification failed"><header><div><span class="vacuum-policy-kicker">NOTHING DELETED</span><h3 tabindex="-1" data-vacuum-review-heading>No selected originals could be verified</h3></div></header><p>All ${plan.omitted.length} selected files were omitted during rechecking. Your selection is retained. Check the reasons below, then retry verification or return to selection.</p><ul class="vacuum-review-omitted">${plan.omitted.map(item=>`<li><code>${escapeHtml(item.path)}</code><span>${escapeHtml(item.reason)}</span></li>`).join('')}</ul></section>`;
+    let server=plan.scope,account='Unverified';try{const routing=JSON.parse(plan.scope);server=String(routing[0]);account=String(routing[1])+(routing[2]?' · user output root':' · shared output root');}catch{}
+    const frozenPolicy=vacuumPolicy(JSON.parse(plan.policyKey));
+    const modes=['lumiswarm','standalone'].filter(origin=>plan.targets.some(target=>target.origin===origin)).map(origin=>`${origin==='lumiswarm'?'LumiSwarm':'Standalone'}: ${frozenPolicy.basis==='references'?'complete reference coverage':originVacuumPolicy(frozenPolicy,origin as 'lumiswarm'|'standalone').mode==='stages'?'explicit metadata stages (can include branch ends)':'superseded chains'}`).join('; ');
+    const manualCount=plan.targets.filter(target=>target.manual).length;
+    const bytes=plan.targets.reduce((sum,target)=>sum+(target.file.bytes||0),0),unknown=plan.targets.filter(target=>target.file.bytes===undefined).length;
+    return `<section class="vacuum-review" aria-label="Review deletion"><header><div><span class="vacuum-policy-kicker">EXPLICIT APPROVAL</span><h3 tabindex="-1" data-vacuum-review-heading>Delete ${plan.targets.length} Swarm originals?</h3></div></header><p>Lumi images and records stay. Swarm also removes associated metadata and preview sidecars. Sizes below estimate originals only.</p><dl><div><dt>Swarm server</dt><dd>${escapeHtml(server)}</dd></div><div><dt>Output account</dt><dd>${escapeHtml(account)}</dd></div><div><dt>Server identity</dt><dd>${escapeHtml(plan.serverId)}</dd></div><div><dt>Measured originals</dt><dd>${(bytes/1048576).toFixed(1)} MB${unknown?' · '+unknown+' sizes unknown':''}</dd></div><div><dt>Reviewed policy</dt><dd>${escapeHtml(modes||'Legacy / unknown origin · manual path review')} · ${manualCount?'automatic grace rules overridden for manual selections':(frozenPolicy.basis==='references'?7:frozenPolicy.graceDays)+'-day minimum'}</dd></div><div><dt>Reference evidence</dt><dd>${this.vacuumLiveMode?'Live Lumi feed':this.vacuumSnapshot?'Imported Lumi snapshot':'Metadata policy · no Lumi snapshot'} · standalone projects rechecked</dd></div></dl><p class="vacuum-delete-notice">${plan.recycle==='enabled'?'Swarm reports recycling enabled. Recovery depends on that server.':plan.recycle==='disabled'?'Swarm reports recycling disabled. Treat these deletions as permanent.':'Recycle behavior could not be read. Treat these deletions as permanent.'} Server identity, activity, metadata and eligibility are checked again before each request.</p>${manualCount?`<p class="vacuum-delete-notice"><strong>${manualCount} manual overrides</strong> · These selections override lifecycle/grace rules, copy bindings or missing Studio tags. Favorites and known direct references still block deletion.</p>`:''}<ol class="vacuum-review-files">${plan.targets.map(target=>`<li><div><strong>${escapeHtml(target.stage.replaceAll('_',' '))}</strong><span>${escapeHtml(target.origin)}</span></div><code>${escapeHtml(target.file.path)}</code><small>${escapeHtml(target.assetId||'No Studio ID · reviewed by exact file path')}</small>${target.manual?`<p class="vacuum-manual-reason">Manual override: ${escapeHtml(target.reason)}</p>`:''}</li>`).join('')}</ol>${plan.omitted.length?`<p>${plan.omitted.length} originally selected files were omitted after rechecking.</p><ul class="vacuum-review-omitted">${plan.omitted.map(item=>`<li>${escapeHtml(item.path)} — ${escapeHtml(item.reason)}</li>`).join('')}</ul>`:''}<label class="vacuum-delete-ack"><input type="checkbox" data-vacuum-review-ack ${this.vacuumReviewAck?'checked':''} ${this.vacuumDeleteBusy?'disabled':''}/><span>I reviewed these exact paths${manualCount?' and the manual overrides':''} and approve deleting their Swarm originals and sidecars.</span></label></section>`;
+  }
+  private renderCleanupHistory():string {
+    const runs=this.readCleanupRuns();
+    return `<section class="vacuum-cleanup-results" data-vacuum-cleanup-results tabindex="-1" aria-label="Cleanup history"><header><h3>Cleanup history</h3><button type="button" class="ghost-button" data-vacuum-cleanup-export ${runs.length?'':'disabled'}>Export cleanup log</button></header>${runs.length?runs.slice().reverse().map(run=>`<article><header><time>${escapeHtml(new Date(run.createdAt).toLocaleString())}</time><span>${run.automatic?'Automatic · ':''}${run.results.filter(item=>item.status==='deleted').length} deleted / ${run.targets.length} reviewed</span></header>${!run.finishedAt?`<p>${this.vacuumDeleteBusy?'In progress':'Interrupted — rescan before another attempt'}. ${run.pendingPath?'An in-flight deletion may have completed: '+escapeHtml(run.pendingPath):''}</p>`:''}<ul>${run.results.map(item=>`<li><span class="vacuum-outcome" data-outcome="${escapeHtml(item.status)}">${escapeHtml(item.status)}</span><div><code>${escapeHtml(item.path)}</code><small>${escapeHtml(item.reason)}</small></div></li>`).join('')}</ul></article>`).join(''):'<p>No reviewed cleanup has run for this connection.</p>'}</section>`;
+  }
+
+  private readVacuumPolicy() {
+    let policy;try { policy=vacuumPolicy(JSON.parse(localStorage.getItem('studio-vacuum-policy-v1:'+this.client.historyScope)||'{}')); } catch { policy=vacuumPolicy(); }
+    return {...policy,branches:this.readBranchChoices()};
+  }
+  private renderVacuumPolicy(connection = ""): string {
+    const p=this.readVacuumPolicy();
+    const renderOrigin=(origin:'lumiswarm'|'standalone')=>{
+      const key=origin==='lumiswarm'?'lumi':'standalone',o=originVacuumPolicy(p,origin);
+      const check=(field:keyof typeof o,label:string)=>`<label class="vacuum-policy-choice"><input type="checkbox" data-vacuum-policy="${key}.${field}" ${o[field]?'checked':''} /><span>${label}</span></label>`;
+      const stage=(value:string,label:string)=>`<label class="vacuum-policy-choice"><input type="checkbox" data-vacuum-stage="${value}" data-policy-origin="${key}" ${o.stages.includes(value)?'checked':''} /><span>${label}<small>${value}</small></span></label>`;
+      return `<section class="vacuum-origin-policy" aria-label="${origin==='lumiswarm'?'LumiSwarm':'Standalone'} lifecycle"><header><div><span class="vacuum-policy-kicker">${origin==='lumiswarm'?'LUMIVERSE COPIES':'STUDIO OUTPUTS'}</span><h4>${origin==='lumiswarm'?'LumiSwarm':'Standalone'}</h4></div><span>${o.mode==='chains'?'Keep branch ends':'Choose stages'}</span></header><label class="vacuum-policy-mode">Selection method<select data-vacuum-policy="${key}.mode"><option value="chains" ${o.mode==='chains'?'selected':''}>Superseded chains</option><option value="stages" ${o.mode==='stages'?'selected':''}>Metadata stages · include last outputs</option></select></label>${o.mode==='chains'?`<fieldset><legend>Expression repeats</legend>${check('expressionDraft','Base renders')}${check('expressionUpscale','Upscaled versions')}${check('expressionBackground','Background-removed versions')}</fieldset><fieldset><legend>Other processing sources</legend>${check('upscaleSources','Upscale drafts')}${check('inpaintSources','Inpaint alternatives')}${check('backgroundSources','Background-removal drafts')}</fieldset>${check('reviewGenerations','Review unfavorited main generations')}`:`<p class="vacuum-policy-notice">Selected stages may include branch ends. Favorites and direct references remain protected.</p><div class="vacuum-stage-actions"><button type="button" class="ghost-button" data-vacuum-stage-preset="all" data-policy-origin="${key}">Select all stages</button><button type="button" class="ghost-button" data-vacuum-stage-preset="none" data-policy-origin="${key}">Clear stages</button></div><fieldset><legend>Match saved metadata</legend>${stage('expression_draft','Expression drafts')}${stage('expression_final','Expression final renders')}${stage('inline_illustration','Inline illustrations')}${stage('general_generation','Main Studio renders')}${stage('quick_create','Quick Create renders')}${stage('inpaint_variant','Inpaint alternatives')}${stage('upscale_result','Upscales & enhancements')}${stage('background_removed','Background removal')}${stage('inline_inpaint_variant','Inline inpaint alternatives')}${stage('inline_upscale_result','Inline enhancements')}${stage('inline_background_removed','Inline background removal')}</fieldset><p>New jobs distinguish these surfaces. Older shared tags remain unchanged.</p>`}${check('protectCopyBindings','Protect bindings to Lumi’s stored copies')}<p>Direct Swarm-path references and favorites always protect originals. Copy bindings refer to separately stored Lumi images.</p></section>`;
+    };
+    return `<section class="vacuum-policy" aria-label="Lifecycle policy"><header class="vacuum-policy-head"><div class="vacuum-policy-title"><span class="vacuum-policy-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7h16v13H4zM3 3h18v4H3zM9 11h6m-5 4 2 2 4-4"/></svg></span><div><h3>What to keep</h3><p>Two Studios. Independent choices.</p></div></div></header><div class="vacuum-policy-options"><div class="vacuum-policy-controls"><label>Evidence<select data-vacuum-policy="basis"><option value="lineage" ${p.basis==='lineage'?'selected':''}>Metadata & parent chains</option><option value="references" ${p.basis==='references'?'selected':''}>Require complete Lumi coverage</option></select></label><label>Grace period (days)<input type="number" min="0" max="365" data-vacuum-policy="graceDays" value="${p.graceDays}" /></label></div><div class="vacuum-origin-grid">${renderOrigin('lumiswarm')}${renderOrigin('standalone')}</div><p>Selections are scoped to this Swarm connection. Untagged images stay review-only. Complete-coverage mode uses the legacy reference checks and a seven-day minimum.</p></div>${this.renderAutomaticCleanup()}<section class="vacuum-policy-references" aria-label="Optional Lumi relay"><span class="vacuum-policy-kicker">EXTRA REFERENCE EVIDENCE</span>${connection}</section></section>`;
+  }
+
+  private renderVacuumConnection(): string {
+    if (!this.vacuumLinkOpen) return "";
+    return `<section class="vacuum-connection" aria-label="Live reference connection"><h3>Keep Lumi references fresh</h3><p>Pair with LumiSwarm → Settings → Metadata → Live references. Only reference snapshots can be published; this connection cannot modify Lumi data.</p><label>Studio address reachable from Lumiverse<input type="url" data-vacuum-link-origin value="${escapeHtml(this.vacuumLinkOrigin || (runtime.kind === 'tauri' ? 'http://127.0.0.1' : window.location.origin))}" /></label><p class="vacuum-link-note">${runtime.kind === 'tauri' ? 'Native Studio adds its receiver port. Use this computer’s LAN hostname if Lumi runs on another computer.' : 'Use the Studio address Lumi can reach. Renew pairing after this Studio server restarts.'}</p><div class="vacuum-actions"><button type="button" class="secondary-button" data-vacuum-pair ${!this.connected ? 'disabled' : ''}>Create pairing code</button><button type="button" class="secondary-button" data-vacuum-link-refresh>Check connection</button><button type="button" class="secondary-button" data-vacuum-disconnect>Revoke connection</button></div>${this.vacuumPairingCode ? `<label>Pairing code<textarea data-vacuum-pairing-code rows="4" readonly spellcheck="false">${escapeHtml(this.vacuumPairingCode)}</textarea></label><button type="button" class="secondary-button" data-vacuum-copy-pairing>Copy pairing code</button>` : ''}<p class="vacuum-link-note">${escapeHtml(this.vacuumLinkMessage)}</p></section>`;
+  }
+  private renderReferenceAudit(): string {
+    const host = this.vacuumSnapshot?.referenceAudit || [];
+    const local = this.vacuumLocalAudit?.checks || [{ source: 'standalone-projects', status: 'not-scanned' }];
+    const claims = this.vacuumSnapshot?.claims || [];
+    return `<section class="vacuum-audit" aria-label="Reference coverage"><h3>Reference coverage</h3><p>${claims.filter(claim => claim.usableCopyVerified).length} Lumi originals decoded · ${claims.filter(claim => claim.copyCheck?.status === 'readable-bytes').length} byte-read only. Checks are evidence, not deletion approval.</p><ul>${[...host,...local].map(check => `<li><div><strong>${escapeHtml(check.source.replaceAll('-',' '))}</strong>${check.reason ? `<small>${escapeHtml(check.reason)}</small>` : ''}</div><span>${escapeHtml(check.status.replaceAll('-',' '))}${'records' in check && check.records != null ? ' · ' + check.records : ''}</span></li>`).join('')}</ul></section>`;
+  }
+  private async refreshLumiConnection(redraw = true): Promise<void> {
+    try {
+      const state = await lumiReferenceBridge<LumiLinkState>('state');
+      const prior = this.vacuumSnapshot?.generatedAt;
+      this.vacuumLiveState = state;
+      const snapshot = liveSnapshot(state, this.client.historyScope);
+      this.vacuumLiveFresh = Boolean(snapshot);
+      if (snapshot && !this.vacuumLiveMode && this.vacuumSnapshot && snapshot.generatedAt < this.vacuumSnapshot.generatedAt) {
+        this.vacuumLinkMessage = `Keeping the newer imported snapshot (${this.vacuumSnapshot.claims.length} claims). The live receiver still has an older snapshot (${snapshot.claims.length} claims); check publication status in LumiSwarm.`;
+        return;
+      }
+      if (snapshot) { this.vacuumSnapshot = snapshot; this.vacuumLiveMode = true; this.vacuumPairingCode = ''; this.vacuumLinkMessage = 'Connected. Fresh, authenticated snapshots arrive automatically.'; }
+      else if (this.vacuumLiveMode) { this.vacuumSnapshot = null; this.vacuumLinkMessage = state.paired && !state.receivedAt ? 'Receiver ready. Paste the pairing code into LumiSwarm → Settings → Metadata → Live references.' : 'Live references are stale, disconnected, or belong to another Swarm scope.'; }
+      if (redraw && this.vacuumOpen && prior !== this.vacuumSnapshot?.generatedAt) this.render();
+    } catch { this.vacuumLiveFresh = false; this.vacuumLinkMessage = 'Live receiver unavailable. Manual snapshot import is still available.'; if (this.vacuumLiveMode) { this.vacuumSnapshot = null; if (redraw && this.vacuumOpen) this.render(); } }
+  }
+  private async auditStandaloneReferences(scope: string, signal?: AbortSignal): Promise<ReferenceAudit> {
+    const result: ReferenceAudit = { paths: new Set(), checkedAt: Date.now(), complete: true, checks: [] };
+    const [server,user,appendUser] = JSON.parse(scope);
+    const read = async <T>(task: () => Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let abort: (() => void) | undefined;
+      try {
+        signal?.throwIfAborted();
+        return await Promise.race([Promise.resolve().then(task), new Promise<T>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Reference audit timed out.')), 20000);
+          abort = () => reject(new DOMException('Reference audit cancelled.', 'AbortError'));
+          signal?.addEventListener('abort', abort, { once: true });
+        })]);
+      } finally { if (timer) clearTimeout(timer); if (abort) signal?.removeEventListener('abort', abort); }
+    };
+    const collect = (values: Iterable<string>) => { for (const raw of values) { const path = matchReferencePath(raw, server, user, { appendUser, studioOrigin: window.location.origin }); if (path) result.paths.add(path); } };
+    try {
+      const workspace = await read(readExpressionWorkspace);
+      if (workspace.some((project: any) => ![1,2].includes(project?.version) || !Array.isArray(project?.tiles))) throw new Error("Unknown workspace schema");
+      collect(referencesFromStudioState(this.store.state, [workspace,this.expressionStudio?.referenceState]));
+      result.checks.push({source:'browser-expression-workspace-and-takes',status:'complete',records:workspace.length});
+    } catch { result.complete = false; result.checks.push({source:'browser-expression-workspace',status:'unreadable'}); }
+    try {
+      const disk = await read(() => projectFiles({action:'audit'})) as unknown as { complete:boolean; files:number; references:string[]; checks:ReferenceAudit['checks'] };
+      if (!Array.isArray(disk.references) || typeof disk.complete !== 'boolean') throw new Error('Invalid project audit');
+      collect(disk.references); result.complete &&= disk.complete;
+      result.checks.push({source:'saved-expression-projects-and-variants',status:disk.complete?'complete':'partial',records:disk.files}, ...(disk.checks || []));
+    } catch { result.complete = false; result.checks.push({source:'saved-expression-projects',status:'unavailable-or-unreadable'}); }
+    result.checks.push({source:'expression-bank',status:'image-free-templates',reason:'The bank stores directions, not image paths.'}, {source:'editor-inpaint-and-identities',status:'checked-live',reason:'Current sources and undo images are checked on every review.'}, {source:'external-project-files',status:'out-of-scope',reason:'Only this Studio project root and browser workspace are readable.'});
+    return result;
+  }
+  private async measureVacuumSizes(): Promise<void> {
+    if (this.vacuumDeleteBusy || this.vacuumSizeScan || this.vacuumScan || !this.vacuumScope || typeof this.client.imageByteSize !== 'function') return;
+    const client = this.client, scope = this.vacuumScope, controller = new AbortController(); this.vacuumSizeScan = controller;
+    const targets = vacuumViewRows(this.vacuumRows, this.vacuumFiles, this.vacuumView || defaultVacuumView());
+    let read = 0, known = 0; this.vacuumSizeMessage = `Reading original headers for ${targets.length} matching files…`; this.render();
+    try {
+      const byPath = new Map(this.vacuumFiles.map(file=>[file.path,file]));
+      for (let offset = 0; offset < targets.length; offset += 4) {
+        controller.signal.throwIfAborted();
+        const sizes = await Promise.all(targets.slice(offset,offset+4).map(async row => { try { return [row.path, await client.imageByteSize(row.path,controller.signal)] as const; } catch { return [row.path,null] as const; } }));
+        if (client !== this.client || scope !== this.client.historyScope) throw new Error('Swarm connection changed. Size results discarded.');
+        controller.signal.throwIfAborted();
+        for (const [path,size] of sizes) { read++; const file = byPath.get(path); if (file && size != null && Number.isSafeInteger(size) && size >= 0) { file.bytes=size; known++; } }
+        this.vacuumSizeMessage = `Checked ${read}/${targets.length} matching originals · ${known} sizes available`; await this.yieldLibrarySync();
+      }
+      const bytes = this.vacuumFiles.reduce((sum,file)=>sum+(file.bytes||0),0), count = this.vacuumFiles.filter(file=>file.bytes!=null).length;
+      this.vacuumSizeMessage = `${(bytes/1048576).toFixed(1)} MB measured across ${count} originals · ${this.vacuumFiles.length-count} sizes unknown. No image bodies downloaded.`;
+    } catch(error) { this.vacuumSizeMessage = controller.signal.aborted?'Size reading cancelled.':String(error instanceof Error?error.message:error); }
+    finally { this.vacuumSizeScan=null; this.refreshVacuumRows(); this.render(); }
+  }
+
+  private async scanVacuum(): Promise<void> {
+    if (this.vacuumDeleteBusy || this.vacuumScan || this.librarySyncing || this.libraryBatchBusy || !this.connected) return;
+    if (this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) { this.vacuumMessage = "Wait until generation and processing jobs are idle."; this.render(); return; }
+    const client = this.client, controller = new AbortController();
+    this.vacuumSelected=new Set();this.vacuumReview=null;this.vacuumReviewAck=false;
+    this.vacuumScan = controller;
+    this.vacuumPage = 0; this.vacuumRows = []; this.vacuumFiles = []; this.vacuumScope = "";
+    this.vacuumMessage = "Scanning all folders and favorites…";
+    this.render();
+    try {
+      const limit = await client.imageHistoryLimit();
+      const scope = client.historyScope;
+      if (!scope) throw new Error("Swarm user/output-root scope could not be verified.");
+      await this.refreshLumiConnection(false);
+      this.vacuumLocalAudit = await this.auditStandaloneReferences(scope, controller.signal);
+      const inventory = await scanSwarmHistory((path, depth) => client.listImageDirectory(path, depth), limit,
+        (parent, child) => this.joinSwarmHistoryPath(parent, child), controller.signal, async () => this.yieldLibrarySync());
+      controller.signal.throwIfAborted();
+      if (client !== this.client || scope !== client.historyScope) throw new Error("Connection changed during scan. Preview discarded.");
+      this.vacuumScope = scope;
+      try {
+        const saved = JSON.parse(localStorage.getItem("studio-vacuum-ledger-v1:" + scope) || "{}");
+        this.vacuumExclusions = new Set(Array.isArray(saved.exclusions) ? saved.exclusions.filter((x: unknown) => typeof x === "string") : []);
+        this.vacuumHistory = Array.isArray(saved.scans) ? saved.scans.filter((x: any) => Number.isFinite(x.at) && Number.isFinite(x.count) && Number.isFinite(x.candidates)).slice(-19) : [];
+      } catch { this.vacuumExclusions = new Set(); this.vacuumHistory = []; }
+      this.vacuumFavorites = inventory.favorites;
+      const localFavorites = new Set(this.store.state.outputs.filter(output => output.starred).map(output => this.outputMutationPath(output)));
+      this.vacuumFiles = inventory.files.map(file => ({ path: file.src, metadata: file.metadata,
+        starred: localFavorites.has(file.src),
+        bytes: Number.isFinite(file.size) && Number(file.size) >= 0 ? Number(file.size) : undefined }));
+      this.refreshVacuumRows();
+      this.vacuumHistory.push({ at: Date.now(), scope, count: this.vacuumRows.length, candidates: this.vacuumRows.filter(row => row.status === "candidate").length });
+      this.saveVacuumLedger();
+      if(this.vacuumStep==='configure'||this.vacuumStep==='select')this.changeVacuumStep('select',false);
+      this.vacuumMessage = `Completed folder walk: ${this.vacuumRows.length} listed files. No files deleted. References and file state may change after this preview.`;
+    } catch (error) { this.vacuumRows = []; this.vacuumFiles = []; this.vacuumScope = ""; this.vacuumMessage = controller.signal.aborted ? "Scan cancelled. No files deleted." : String(error instanceof Error ? error.message : error); }
+    finally { this.vacuumScan = null; this.render(); }
+  }
+
+  private saveVacuumLedger(): void {
+    if (!this.vacuumScope) return;
+    try { localStorage.setItem("studio-vacuum-ledger-v1:" + this.vacuumScope, JSON.stringify({ exclusions: [...this.vacuumExclusions], scans: this.vacuumHistory.slice(-20) })); }
+    catch { this.notify("Vacuum preview preferences could not be persisted.", "info"); }
+  }
+
+  private assertCleanupReferences(scope:string):void {
+    if((this.vacuumLiveMode||this.vacuumLiveState?.paired)&&(!this.vacuumLiveState||!liveSnapshot(this.vacuumLiveState,scope)))throw new Error('Paired Lumi references became stale. Refresh the feed before cleanup.');
+    if(this.vacuumSnapshot&&(Date.now()-this.vacuumSnapshot.generatedAt>15*60000||this.vacuumSnapshot.generatedAt>Date.now()+5000))throw new Error('Imported Lumi references are stale. Refresh them before cleanup.');
+  }
+
+  private async checkedVacuumState(ancestors:import('./library/vacuum').VacuumFile[],signal:AbortSignal,client=this.client,target?:CleanupTarget):Promise<CleanupState> {
+    signal.throwIfAborted();
+    if(client!==this.client||!this.connected||this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||this.librarySyncing)throw new Error('Connection or active Studio jobs changed.');
+    const read=<T>(task:()=>Promise<T>)=>cleanupRead(task,signal);
+    const identity=await read(()=>client.reviewedDeletionState());signal.throwIfAborted();
+    if(client!==this.client||identity.scope!==this.vacuumScope)throw new Error('Swarm user/output routing changed. Scan and review again.');
+    if(this.vacuumLiveMode||this.vacuumLiveState?.paired) {
+      const state=await read(()=>lumiReferenceBridge<LumiLinkState>('state')),snapshot=liveSnapshot(state,identity.scope);
+      if(!snapshot)throw new Error('Paired Lumi references are unavailable or stale. Refresh the feed before cleanup.');
+      this.vacuumLiveState=state;this.vacuumLiveFresh=true;
+      if(!this.vacuumSnapshot||snapshot.generatedAt>=this.vacuumSnapshot.generatedAt)this.vacuumSnapshot=snapshot;
     }
+    this.assertCleanupReferences(identity.scope);
+    try {
+      const ledger=JSON.parse(localStorage.getItem('studio-vacuum-ledger-v1:'+identity.scope)||'{}');
+      if(ledger.exclusions!==undefined&&(!Array.isArray(ledger.exclusions)||!ledger.exclusions.every((path:unknown)=>typeof path==='string')))throw new Error('Invalid exclusions');
+      for(const path of ledger.exclusions||[])this.vacuumExclusions.add(path);
+    }catch{throw new Error('Cleanup exclusions could not be read. No further deletion requests will be sent.');}
+    this.vacuumLocalAudit=await read(()=>this.auditStandaloneReferences(identity.scope,signal));
+    const limit=await read(()=>client.imageHistoryLimit());
+    const inventory=await scanSwarmHistory((path,depth)=>read(()=>client.listImageDirectory(path,depth)),limit,(parent,child)=>this.joinSwarmHistoryPath(parent,child),signal,async()=>this.yieldLibrarySync());
+    signal.throwIfAborted();
+    if(client!==this.client||client.historyScope!==identity.scope)throw new Error('Swarm changed during verification.');
+    const previous=new Map(this.vacuumFiles.map(file=>[file.path,file]));
+    const starred=new Set(this.store.state.outputs.filter(output=>output.starred).map(output=>this.outputMutationPath(output)));
+    this.vacuumFiles=inventory.files.map(file=>({path:file.src,metadata:file.metadata,starred:starred.has(file.src),bytes:Number.isFinite(file.size)?Number(file.size):undefined}));
+    for(const file of this.vacuumFiles){const old=previous.get(file.path);try{if(old&&fileIdentity(old)===fileIdentity(file)&&file.bytes===undefined)file.bytes=old.bytes;}catch{/* Untagged legacy files may have no parseable metadata. */}}
+    this.vacuumFavorites=inventory.favorites;
+    for(const ancestor of ancestors)if(this.vacuumFiles.some(file=>file.path===ancestor.path))throw new Error('A deleted source path reappeared. Stop and reconcile history.');
+    const context=this.vacuumContext(),evaluationFiles=[...this.vacuumFiles,...ancestors];
+    const rows=withManualReview(classifyVacuum(evaluationFiles,context),evaluationFiles,context);
+    if(target) {
+      const currentFile=this.vacuumFiles.find(file=>file.path===target.file.path),row=rows.find(row=>row.path===target.file.path);
+      if(currentFile&&(target.manual?row?.manualAllowed:row?.status==='candidate')) {
+        const size=await read(()=>client.imageByteSize(currentFile.path,signal));
+        if(size===null||size<=0)throw new Error('Cannot verify original-file headers. Check Swarm image access before deleting.');
+        currentFile.bytes=size;
+        const tag=readStudioMetadata(currentFile.metadata),policy=this.readVacuumPolicy();
+        if(!target.manual&&tag&&(this.vacuumAutomaticBusy||policy.basis==='references'||originVacuumPolicy(policy,tag.studio_origin).mode==='chains')) {
+          const replacements=this.vacuumFiles.filter(file=>{const child=readStudioMetadata(file.metadata);return child?.studio_parent_id===tag.studio_asset_id&&child.studio_pipeline_id===tag.studio_pipeline_id&&child.studio_origin===tag.studio_origin;});
+          let available=false;
+          for(const replacement of replacements){const replacementSize=await read(()=>client.imageByteSize(replacement.path,signal));if(replacementSize!==null&&replacementSize>0){available=true;break;}}
+          if(!available)throw new Error('No saved replacement has verifiable original-file headers. Source retained.');
+        }
+      }
+    }
+
+    // Check global activity/server identity again after the potentially long folder walk.
+    const finalIdentity=await read(()=>client.reviewedDeletionState());signal.throwIfAborted();
+    if(client!==this.client||identity.scope!==finalIdentity.scope||identity.serverId!==finalIdentity.serverId||identity.recycle!==finalIdentity.recycle)throw new Error('Swarm identity or recycle setting changed during verification.');
+    if(this.generating||this.expressionStudio?.busy||this.imageEditor?.busy)throw new Error('Studio jobs became active.');
+    this.assertCleanupReferences(identity.scope);
+    return {...identity,files:this.vacuumFiles,rows,policyKey:JSON.stringify(this.readVacuumPolicy())};
+  }
+
+  private async prepareVacuumReview():Promise<void> {
+    if(this.vacuumDeleteBusy||this.vacuumScan||this.vacuumSizeScan||this.libraryBatchBusy||!this.vacuumSelected?.size)return;
+    const selected=new Set(this.vacuumSelected),controller=new AbortController(),client=this.client;
+    this.vacuumDeleteBusy=true;this.vacuumDeleteAbort=controller;this.libraryBatchBusy=true;this.vacuumReview=null;this.vacuumReviewAck=false;
+    this.changeVacuumStep('review',false);
+    this.vacuumMessage='Checking selected files, all favorites, jobs and references…';this.render();
+    try {
+      const state=await this.checkedVacuumState([],controller.signal,client);
+      const candidates=state.files.filter(file=>selected.has(file.path)&&state.rows.some(row=>row.path===file.path&&(row.status==='candidate'||row.manualAllowed)));
+      for(let offset=0;offset<candidates.length;offset+=4) {
+        controller.signal.throwIfAborted();
+        await Promise.all(candidates.slice(offset,offset+4).map(async file=>{
+          let size:number|null=null;try{size=await client.imageByteSize(file.path,controller.signal);}catch{}
+          if(size!==null&&size>0)file.bytes=size;
+          else{const row=state.rows.find(row=>row.path===file.path);if(row){row.status='review';row.manualAllowed=false;row.manualBlock='Original-file headers unavailable';row.reason='Original-file headers unavailable; file presence could not be verified for deletion.';}}
+        }));
+      }
+      controller.signal.throwIfAborted();
+      this.vacuumReview=cleanupPlan(createId(),state,selected);
+      this.changeVacuumStep('review',false);
+      this.vacuumSelected=this.vacuumReview.targets.length?new Set(this.vacuumReview.targets.map(target=>target.file.path)):selected;
+      this.vacuumMessage=this.vacuumReview.targets.length?'Review the exact files below. Nothing has been deleted.':'No selected files remain eligible. Nothing was deleted.';
+    } catch(error){this.vacuumMessage=controller.signal.aborted?'Review checks cancelled. Nothing deleted.':String(error instanceof Error?error.message:error);}
+    finally{this.vacuumDeleteBusy=false;this.vacuumDeleteAbort=null;this.libraryBatchBusy=false;this.refreshVacuumRows();this.render();this.root.querySelector<HTMLElement>('[data-vacuum-review-heading]')?.focus({preventScroll:true});}
+  }
+
+  private readCleanupRuns(scope=this.client.historyScope):typeof this.vacuumCleanupRuns {
+    try {const stored=JSON.parse(localStorage.getItem('studio-vacuum-cleanup-v1:'+scope)||'[]');return Array.isArray(stored)?stored.filter(run=>run&&typeof run.id==='string'&&Array.isArray(run.targets)&&Array.isArray(run.results)).slice(-20):[];}catch{return [];}
+  }
+  private saveCleanupRun(run:(typeof this.vacuumCleanupRuns)[number]):void {
+    const records=this.readCleanupRuns(run.scope).filter(item=>item.id!==run.id);records.push(run);
+    localStorage.setItem('studio-vacuum-cleanup-v1:'+run.scope,JSON.stringify(records.slice(-20)));
+    this.vacuumCleanupRuns=records.slice(-20);
+  }
+  private reconcileVacuumDeletion(target:CleanupTarget):void {
+    const ids=new Set(this.store.state.outputs.filter(output=>this.outputMutationPath(output)===target.file.path).map(output=>output.id));
+    this.store.state.outputs=this.store.state.outputs.filter(output=>!ids.has(output.id));
+    if(ids.has(this.store.state.ui.selectedOutputId||''))this.store.updateUi({selectedOutputId:""});
+    for(const id of ids)this.librarySelected.delete(id);
+    this.vacuumFiles=this.vacuumFiles.filter(file=>file.path!==target.file.path);this.vacuumSelected.delete(target.file.path);this.store.save();
+  }
+  private async executeVacuumReview(automatic=false):Promise<void> {
+    const plan=this.vacuumReview;
+    if(!plan||(!automatic&&!this.vacuumReviewAck)||!plan.targets.length||this.vacuumDeleteBusy||this.vacuumScan||this.vacuumSizeScan||this.libraryBatchBusy)return;
+    if(automatic)this.assertAutomaticApproval(plan);
+    if(Date.now()-plan.createdAt>10*60000){this.vacuumReview=null;this.vacuumMessage='Review expired. Check the selection again.';this.render();return;}
+    const controller=new AbortController(),client=this.client,leaseKey='studio-vacuum-cleanup-lock-v1:'+plan.scope;
+    const assertLease=()=>{const lease=JSON.parse(localStorage.getItem(leaseKey)||'null');if(lease?.id!==plan.id)throw new Error('Another Studio tab took the cleanup lock.');localStorage.setItem(leaseKey,JSON.stringify({id:plan.id,expiresAt:Date.now()+120000}));};
+    try {const lease=JSON.parse(localStorage.getItem(leaseKey)||'null');if(lease?.expiresAt>Date.now())throw new Error('Cleanup is already running in another Studio tab.');localStorage.setItem(leaseKey,JSON.stringify({id:plan.id,expiresAt:Date.now()+120000}));}catch(error){this.vacuumMessage=String(error instanceof Error?error.message:error);this.render();if(automatic)throw error;return;}
+    const run:(typeof this.vacuumCleanupRuns)[number]={id:plan.id,scope:plan.scope,serverId:plan.serverId,createdAt:Date.now(),reviewedAt:plan.createdAt,policyKey:plan.policyKey,referenceSnapshotAt:this.vacuumSnapshot?.generatedAt,recycle:plan.recycle,targets:plan.targets.map(target=>({path:target.file.path,assetId:target.assetId,stage:target.stage,origin:target.origin,manual:target.manual,reason:target.reason})),results:[],automatic};
+    this.vacuumDeleteBusy=true;this.vacuumDeleteAbort=controller;this.libraryBatchBusy=true;this.vacuumReviewAck=false;this.changeVacuumStep('results',false);this.render();
+    const timer=setInterval(()=>{try{assertLease();}catch{controller.abort();}},10000);
+    try {
+      this.saveCleanupRun(run);
+      let checkedAncestors:import('./library/vacuum').VacuumFile[]=[];
+      await executeCleanup(plan,{
+        check:async (ancestors,_signal,target)=>{if(automatic)this.assertAutomaticApproval(plan);assertLease();this.vacuumMessage=`Revalidating ${run.results.length+1}/${plan.targets.length} originals…`;this.render();const checked=await this.checkedVacuumState(ancestors,controller.signal,client,target);checkedAncestors=ancestors;if(automatic&&!automaticCandidates([...this.vacuumFiles,...ancestors],this.vacuumContext()).has(target.file.path))throw new CleanupBlocked('Source is no longer eligible for automatic cleanup.');return checked;},
+        remove:async path=>{
+          try {
+            if(automatic)this.assertAutomaticApproval(plan);
+            assertLease();controller.signal.throwIfAborted();
+            if(client!==this.client||this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||JSON.stringify(this.readVacuumPolicy())!==plan.policyKey)throw new Error('Jobs, connection or policy changed before deletion.');
+            const ledger=JSON.parse(localStorage.getItem('studio-vacuum-ledger-v1:'+plan.scope)||'{}');
+            if(ledger.exclusions!==undefined&&(!Array.isArray(ledger.exclusions)||!ledger.exclusions.every((value:unknown)=>typeof value==='string')))throw new Error('Exclusions cannot be verified.');
+            for(const value of ledger.exclusions||[])this.vacuumExclusions.add(value);
+            this.assertCleanupReferences(plan.scope);
+            const context=this.vacuumContext(),files=[...this.vacuumFiles,...checkedAncestors];
+            if(automatic&&!automaticCandidates(files,context).has(path))throw new CleanupBlocked('Automatic retention eligibility changed before deletion.');
+            const row=withManualReview(classifyVacuum(files,context),files,context).find(row=>row.path===path),target=plan.targets.find(target=>target.file.path===path);
+            if(target?.manual?row?.manualAllowed!==true:row?.status!=='candidate')throw new Error(row?.manualBlock||row?.reason||'Eligibility changed immediately before deletion.');
+          }catch(error){throw new CleanupBlocked(error instanceof Error?error.message:String(error));}
+          await cleanupMutation(()=>client.deleteReviewedImage(path,plan));
+        },
+        attempt:target=>{assertLease();run.pendingPath=target.file.path;this.saveCleanupRun(run);},
+        result:result=>{run.results.push(result);run.pendingPath=undefined;this.saveCleanupRun(run);this.vacuumMessage=`${run.results.length}/${plan.targets.length} checked · ${run.results.filter(item=>item.status==='deleted').length} deleted`;this.render();},
+        reconcile:target=>this.reconcileVacuumDeletion(target),
+      },controller.signal);
+      run.finishedAt=Date.now();this.saveCleanupRun(run);
+      this.vacuumMessage=`Cleanup ${controller.signal.aborted?'cancelled':'finished'}: ${run.results.filter(item=>item.status==='deleted').length} confirmed deleted; ${run.results.filter(item=>item.status!=='deleted').length} skipped, cancelled or unconfirmed. Rescan to reconcile any unconfirmed requests.`;
+    }catch(error){this.vacuumMessage=String(error instanceof Error?error.message:error);}
+    finally {
+      clearInterval(timer);try{if(JSON.parse(localStorage.getItem(leaseKey)||'null')?.id===plan.id)localStorage.removeItem(leaseKey);}catch{}
+      if(automatic)try{const success=Boolean(run.finishedAt)&&run.results.length===run.targets.length&&run.results.every(result=>result.status==='deleted'&&result.reason==='Swarm confirmed deletion');this.writeAutomaticSettings({...this.readAutomaticSettings(plan.scope),enabled:success&&this.readAutomaticSettings(plan.scope).enabled,message:success?'Last automatic cleanup confirmed '+run.results.length+' originals deleted.':'Automatic cleanup paused. Check Results before re-enabling.'},plan.scope);this.notify(success?'Automatic cleanup: '+run.results.length+' originals deleted.':'Automatic cleanup paused; review its results.',success?'info':'error');}catch{this.notify('Automatic cleanup stopped; its settings could not be saved.','error');}
+      this.vacuumReview=null;this.vacuumDeleteBusy=false;this.vacuumDeleteAbort=null;this.libraryBatchBusy=false;this.changeVacuumStep('results',false);this.refreshVacuumRows();this.render();this.root.querySelector<HTMLElement>('[data-vacuum-cleanup-results]')?.focus({preventScroll:true});
+    }
+  }
+
+  private captureVacuumPosition():void {
+    this.vacuumPositions ||= {};
+    const dialog=this.root.querySelector<HTMLElement>('[data-vacuum-dialog]');
+    if(!dialog)return;
+    const step=dialog.dataset.vacuumStep||'configure',active=document.activeElement;
+    const attributes=active instanceof HTMLElement&&dialog.contains(active)?Array.from(active.attributes).filter(a=>a.name.startsWith('data-')).map(a=>`[${a.name}="${CSS.escape(a.value)}"]`).join(''):'';
+    const region=active instanceof HTMLElement?active.closest('.vacuum-footer,.vacuum-head,[role="tablist"],[role="tabpanel"]'):null;
+    const prefix=region?.id?`#${CSS.escape(region.id)} `:region?.classList.contains('vacuum-footer')?'.vacuum-footer ':region?.classList.contains('vacuum-head')?'.vacuum-head ':region?.getAttribute('role')==='tablist'?'[role="tablist"] ':'';
+    const input=active instanceof HTMLInputElement||active instanceof HTMLTextAreaElement?active:null;
+    this.vacuumPositions[step]={scroll:dialog.querySelector('.vacuum-body')?.scrollTop||0,focus:attributes?prefix+attributes:'',value:input&&!['checkbox','file','number'].includes(input.type)?input.value:undefined,caret:input?[input.selectionStart,input.selectionEnd]:undefined};
+  }
+
+  private restoreVacuumPosition(dialog:HTMLDialogElement):void {
+    const saved=this.vacuumPositions?.[this.vacuumStep];
+    if(this.vacuumStepFocus||!saved)dialog.querySelector<HTMLElement>(`[role="tab"][data-vacuum-go="${this.vacuumStep}"]`)?.focus({preventScroll:true});
+    else if(saved?.focus){
+      const control=dialog.querySelector<HTMLElement>(saved.focus);
+      if((control instanceof HTMLInputElement||control instanceof HTMLTextAreaElement)&&saved.value!==undefined)control.value=saved.value;
+      control?.focus({preventScroll:true});
+      if((control instanceof HTMLInputElement||control instanceof HTMLTextAreaElement)&&saved.caret?.[0]!=null){try{control.setSelectionRange(saved.caret[0],saved.caret[1]);}catch{/* Number inputs do not support selection ranges. */}}
+    }
+    const body=dialog.querySelector('.vacuum-body');if(body)body.scrollTop=saved?.scroll||0;
+    this.vacuumStepFocus=false;
+  }
+
+  private changeVacuumStep(step:typeof this.vacuumStep,redraw=true):void {
+    if(this.vacuumStep!==step)this.vacuumStepFocus=true;
+    if(step==='select'||step==='configure'){this.vacuumReview=null;this.vacuumReviewAck=false;}
+    this.vacuumStep=step;
+    if(redraw)this.render();
+  }
+
+  private renderVacuumPreservingScroll(): void {
+    if(this.vacuumReview&&JSON.stringify(this.readVacuumPolicy())!==this.vacuumReview.policyKey){this.vacuumReview=null;this.vacuumReviewAck=false;this.vacuumMessage='Policy changed. Review the selection again.';}
+    this.render();
+  }
+
+  private bindVacuumEvents(): void {
+    this.root.querySelector("[data-review-versions]")?.addEventListener("click", () => { this.inspectorVersionsOpen = !this.inspectorVersionsOpen; this.render(); this.root.querySelector<HTMLElement>("[data-review-versions]")?.focus(); });
+    this.root.querySelectorAll<HTMLSelectElement>('[data-branch-choice]').forEach(input=>input.addEventListener('change',()=>this.saveBranchChoice(input.dataset.branchChoice!,input.value)));
+    this.root.querySelectorAll<HTMLInputElement>("[data-keep-final]").forEach(input => input.addEventListener("change", () => this.setKeepFinal(input.checked)));
+    this.root.querySelector("[data-action='open-vacuum']")?.addEventListener("click", () => { this.vacuumOpen = true; this.refreshVacuumRows(); this.render(); });
+    const dialog = this.root.querySelector<HTMLDialogElement>("[data-vacuum-dialog]");
+    if (!dialog) return;
+    dialog.showModal();
+    this.restoreVacuumPosition(dialog);
+    dialog.querySelectorAll<HTMLButtonElement>('[data-vacuum-go]').forEach(button=>button.addEventListener('click',()=>{
+      const step=button.dataset.vacuumGo as typeof this.vacuumStep;
+      if(!this.vacuumDeleteBusy&&(step!=='review'||this.vacuumReview)){this.vacuumMessage='';this.changeVacuumStep(step);}
+    }));
+    dialog.querySelector('[role="tablist"]')?.addEventListener('keydown',event=>{
+      const key=(event as KeyboardEvent).key;if(!['ArrowRight','ArrowLeft','Home','End'].includes(key))return;
+      const tabs=Array.from(dialog.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)'));
+      const index=tabs.indexOf(document.activeElement as HTMLButtonElement);if(index<0)return;
+      event.preventDefault();const next=key==='Home'?0:key==='End'?tabs.length-1:(index+(key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;tabs[next]?.click();
+    });
+    dialog.querySelector('[data-vacuum-delete-cancel]')?.addEventListener('click',()=>{this.vacuumDeleteAbort?.abort();this.vacuumMessage='Stopping after any in-flight request. Further deletions are cancelled.';this.render();});
+    dialog.querySelector('[data-vacuum-review-selected]')?.addEventListener('click',()=>void this.prepareVacuumReview());
+    dialog.querySelector('[data-vacuum-delete-confirm]')?.addEventListener('click',()=>void this.executeVacuumReview());
+    dialog.querySelector<HTMLInputElement>('[data-vacuum-review-ack]')?.addEventListener('change',event=>{this.vacuumReviewAck=(event.target as HTMLInputElement).checked;const button=dialog.querySelector<HTMLButtonElement>('[data-vacuum-delete-confirm]');if(button)button.disabled=!this.vacuumReviewAck||this.vacuumDeleteBusy||!this.vacuumReview?.targets.length;});
+    dialog.querySelector('[data-vacuum-review-back]')?.addEventListener('click',()=>{this.vacuumReview=null;this.vacuumReviewAck=false;this.changeVacuumStep('select');});
+    dialog.querySelector('[data-vacuum-cleanup-export]')?.addEventListener('click',()=>void (async()=>{
+      const report=JSON.stringify({schema:1,scope:this.client.historyScope,runs:this.readCleanupRuns()},null,2);
+      await runtime.saveDataUrl('data:application/json;base64,'+btoa(Array.from(new TextEncoder().encode(report),byte=>String.fromCharCode(byte)).join('')),'studio-vacuum-cleanup-log.json');
+    })().catch(error=>this.notify(String(error),'error')));
+    dialog.querySelectorAll<HTMLInputElement>('[data-vacuum-select]').forEach(input=>input.addEventListener('change',()=>{
+      const row=this.vacuumRows[Number(input.dataset.vacuumSelect)];if(!row||!row.manualAllowed)return;
+      if(input.checked)this.vacuumSelected.add(row.path);else this.vacuumSelected.delete(row.path);this.renderVacuumPreservingScroll();
+    }));
+    dialog.querySelector('[data-vacuum-select-matching]')?.addEventListener('click',()=>{for(const row of vacuumViewRows(this.vacuumRows,this.vacuumFiles,this.vacuumView||defaultVacuumView()))if(row.status==='candidate')this.vacuumSelected.add(row.path);this.renderVacuumPreservingScroll();});
+    dialog.querySelector('[data-vacuum-select-manual]')?.addEventListener('click',()=>{for(const row of vacuumViewRows(this.vacuumRows,this.vacuumFiles,this.vacuumView||defaultVacuumView()))if(row.manualAllowed)this.vacuumSelected.add(row.path);this.renderVacuumPreservingScroll();});
+    dialog.querySelector('[data-vacuum-clear-selection]')?.addEventListener('click',()=>{this.vacuumSelected.clear();this.renderVacuumPreservingScroll();});
+
+    dialog.querySelector<HTMLButtonElement>('[data-vacuum-help]')?.addEventListener('click',event=>{
+      const button=event.currentTarget as HTMLButtonElement,panel=dialog.querySelector<HTMLElement>('#vacuum-help')!;
+      panel.ontoggle=()=>button.setAttribute('aria-expanded',String(panel.matches(':popover-open')));
+      if(panel.matches(':popover-open'))panel.hidePopover();else{panel.showPopover();const rect=button.getBoundingClientRect();panel.style.left=`${Math.max(12,Math.min(rect.left,innerWidth-panel.offsetWidth-12))}px`;panel.style.top=`${Math.max(12,Math.min(rect.bottom+8,innerHeight-panel.offsetHeight-12))}px`;}
+    });
+    dialog.querySelectorAll<HTMLButtonElement>('[data-vacuum-stage-preset]').forEach(button=>button.addEventListener('click',()=>{
+      const p=this.readVacuumPolicy(),key=button.dataset.policyOrigin as 'lumi'|'standalone';
+      const stages=button.dataset.vacuumStagePreset==='all'?['expression_draft','expression_final','inline_illustration','general_generation','quick_create','inpaint_variant','upscale_result','background_removed','inline_inpaint_variant','inline_upscale_result','inline_background_removed']:[];
+      p[key]={...p[key],stages};try{localStorage.setItem('studio-vacuum-policy-v1:'+this.client.historyScope,JSON.stringify(p));}catch{this.vacuumMessage='Policy could not be saved.';}this.refreshVacuumRows();this.renderVacuumPreservingScroll();
+    }));
+    dialog.querySelectorAll<HTMLInputElement>('[data-vacuum-stage]').forEach(input=>input.addEventListener('change',()=>{
+      const p=this.readVacuumPolicy(),key=input.dataset.policyOrigin as 'lumi'|'standalone',o=originVacuumPolicy(p,key==='lumi'?'lumiswarm':'standalone');
+      const stages=new Set(o.stages);if(input.checked)stages.add(input.dataset.vacuumStage!);else stages.delete(input.dataset.vacuumStage!);
+      p[key]={...p[key],stages:[...stages]};try{localStorage.setItem('studio-vacuum-policy-v1:'+this.client.historyScope,JSON.stringify(p));}catch{this.vacuumMessage='Policy could not be saved.';}this.refreshVacuumRows();this.renderVacuumPreservingScroll();
+    }));
+
+    dialog.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-vacuum-policy]').forEach(input=>input.addEventListener('change',()=>{
+      const next=this.readVacuumPolicy(),[key,field]=input.dataset.vacuumPolicy!.split('.');
+      const value=input instanceof HTMLInputElement&&input.type==='checkbox'?input.checked:key==='graceDays'?Number(input.value):input.value;
+      if(field&&(key==='lumi'||key==='standalone'))next[key]={...next[key],[field]:value};
+      else Object.assign(next,{[key!]:value});
+      try { localStorage.setItem('studio-vacuum-policy-v1:'+this.client.historyScope,JSON.stringify(vacuumPolicy(next))); } catch { this.vacuumMessage='Policy could not be saved on this device.'; }
+      this.vacuumPage=0;this.refreshVacuumRows();this.renderVacuumPreservingScroll();
+    }));
+
+    dialog.querySelector<HTMLInputElement>('[data-vacuum-automatic]')?.addEventListener('change',event=>{
+      const enabled=(event.target as HTMLInputElement).checked;
+      if(enabled&&!automaticProof(this.readCleanupRuns(),this.client.historyScope,JSON.stringify(this.readVacuumPolicy())))return;
+      try{this.writeAutomaticSettings({...this.readAutomaticSettings(),enabled,message:enabled?'Enabled for old superseded sources only.':'Automatic cleanup disabled.'});this.render();}catch{this.notify('Automatic cleanup setting could not be saved.','error');}
+    });
+    dialog.querySelector<HTMLSelectElement>('[data-vacuum-automatic-limit]')?.addEventListener('change',event=>{try{this.writeAutomaticSettings({...this.readAutomaticSettings(),maxFiles:Number((event.target as HTMLSelectElement).value)});}catch{this.notify('Could not save batch limit.','error');}});
+    dialog.querySelector('[data-vacuum-connect]')?.addEventListener('click',()=>{this.vacuumLinkOpen=!this.vacuumLinkOpen; this.render(); void this.refreshLumiConnection();});
+    dialog.querySelector('[data-vacuum-audit]')?.addEventListener('click',()=>{this.vacuumAuditOpen=!this.vacuumAuditOpen;this.render();});
+    dialog.querySelector('[data-vacuum-sizes]')?.addEventListener('click',()=>void this.measureVacuumSizes());
+    dialog.querySelector('[data-vacuum-size-cancel]')?.addEventListener('click',()=>this.vacuumSizeScan?.abort());
+    dialog.querySelector('[data-vacuum-link-refresh]')?.addEventListener('click',()=>void this.refreshLumiConnection().then(()=>this.render()));
+    dialog.querySelector<HTMLInputElement>('[data-vacuum-link-origin]')?.addEventListener('input',event=>{this.vacuumLinkOrigin=(event.target as HTMLInputElement).value;});
+    dialog.querySelector('[data-vacuum-pair]')?.addEventListener('click',()=>void (async()=>{
+      this.vacuumLinkOrigin=new URL(dialog.querySelector<HTMLInputElement>('[data-vacuum-link-origin]')?.value.trim()||'').origin;
+      const pairing=await lumiReferenceBridge<LumiPairing>('pair',{scope:this.client.historyScope,origin:this.vacuumLinkOrigin});
+      this.vacuumPairingCode=JSON.stringify(pairing); this.vacuumLiveMode=true; this.vacuumSnapshot=null;
+      this.vacuumLinkMessage='Paste this code into LumiSwarm → Settings → Metadata → Live references. It grants publication to this receiver only.';
+      await this.refreshLumiConnection(false); this.render();
+    })().catch(()=>{this.vacuumLinkMessage='Could not create pairing code. Check Studio address, Swarm connection and receiver availability.';this.render();}));
+    dialog.querySelector('[data-vacuum-copy-pairing]')?.addEventListener('click',()=>void (async()=>{
+      try { await navigator.clipboard.writeText(this.vacuumPairingCode); this.vacuumLinkMessage='Pairing code copied.'; }
+      catch { const field=dialog.querySelector<HTMLTextAreaElement>('[data-vacuum-pairing-code]');field?.focus();field?.select();this.vacuumLinkMessage='Select and copy the pairing code above.'; }
+    })());
+    dialog.querySelector('[data-vacuum-disconnect]')?.addEventListener('click',()=>void lumiReferenceBridge('disconnect').then(()=>{this.vacuumLiveMode=false;this.vacuumLiveState=null;this.vacuumSnapshot=null;this.vacuumPairingCode='';this.vacuumLinkMessage='Connection revoked. Existing credentials can no longer publish.';this.render();}).catch(()=>{this.vacuumLinkMessage='Could not revoke the receiver connection.';this.render();}));
+    const pollReferences = () => setTimeout(() => { if (dialog.isConnected && this.vacuumOpen) void this.refreshLumiConnection().then(() => { if (dialog.isConnected) pollReferences(); }); }, 15000);
+    pollReferences();
+    const updateView = (focus?: string) => {
+      const search = dialog.querySelector<HTMLInputElement>("[data-vacuum-search]");
+      const caret = search?.selectionStart;
+      this.vacuumView = {
+        search: search?.value || "", status: dialog.querySelector<HTMLSelectElement>("[data-vacuum-status]")?.value || "all",
+        origin: dialog.querySelector<HTMLSelectElement>("[data-vacuum-origin]")?.value || "all", sort: dialog.querySelector<HTMLSelectElement>("[data-vacuum-sort]")?.value || "newest",
+      };
+      this.vacuumPage = 0; this.render();
+      if (focus) {
+        const input = this.root.querySelector<HTMLInputElement>(focus); input?.focus({preventScroll:true});
+        if (input?.type === "search" && caret != null) input.setSelectionRange(caret, caret);
+      }
+    };
+    dialog.querySelector("[data-vacuum-filters]")?.addEventListener("submit", event => { event.preventDefault(); updateView("[data-vacuum-search]"); });
+    dialog.querySelector("[data-vacuum-search]")?.addEventListener("input", () => updateView("[data-vacuum-search]"));
+    for (const field of ["status", "origin", "sort"]) dialog.querySelector(`[data-vacuum-${field}]`)?.addEventListener("change", () => updateView(`[data-vacuum-${field}]`));
+    dialog.querySelector("[data-vacuum-reset]")?.addEventListener("click", () => { this.vacuumView = defaultVacuumView(); this.vacuumPage = 0; this.render(); this.root.querySelector<HTMLElement>("[data-vacuum-search]")?.focus(); });
+    dialog.querySelector("[data-vacuum-choose]")?.addEventListener("click", () => dialog.querySelector<HTMLInputElement>("[data-vacuum-import]")?.click());
+    dialog.querySelector("[data-vacuum-history]")?.addEventListener("click", () => {
+      this.vacuumHistoryOpen = !this.vacuumHistoryOpen; this.render();
+      this.root.querySelector<HTMLElement>("[data-vacuum-history]")?.focus();
+    });
+    if(this.vacuumDeleteBusy)dialog.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLButtonElement>('input,select,button').forEach(control=>{if(!control.hasAttribute('data-vacuum-close')&&!control.hasAttribute('data-vacuum-delete-cancel')&&!control.hasAttribute('data-vacuum-help'))control.disabled=true;});
+    const close = () => { if(this.vacuumDeleteBusy){this.vacuumDeleteAbort?.abort();this.vacuumMessage='Stopping cleanup after the current request. Keep this window open for its result.';this.render();return;}this.vacuumReview=null;this.vacuumReviewAck=false;this.vacuumSelected.clear();this.vacuumScan?.abort(); this.vacuumSizeScan?.abort(); this.vacuumPairingCode = ""; this.vacuumOpen = false; this.render(); this.root.querySelector<HTMLElement>("[popovertarget='library-tools-menu']")?.focus(); };
+    dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
+    dialog.querySelectorAll("[data-vacuum-close]").forEach(button=>button.addEventListener("click", close));
+    dialog.querySelector("[data-vacuum-prev]")?.addEventListener("click", () => { this.vacuumPage = Math.max(0, this.vacuumPage - 1); this.render(); });
+    dialog.querySelector("[data-vacuum-next]")?.addEventListener("click", () => { this.vacuumPage++; this.render(); });
+    dialog.querySelectorAll("[data-vacuum-scan]").forEach(button=>button.addEventListener("click", () => void this.scanVacuum()));
+    dialog.querySelector("[data-vacuum-cancel]")?.addEventListener("click", () => this.vacuumScan?.abort());
+    dialog.querySelector<HTMLInputElement>("[data-vacuum-auto]")?.addEventListener("change", event => {
+      try { localStorage.setItem("studio-vacuum-auto-preview-v1", String((event.target as HTMLInputElement).checked)); } catch { this.notify("Could not save automatic preview preference.", "error"); }
+    });
+    dialog.querySelectorAll<HTMLInputElement>("[data-vacuum-exclude]").forEach(input => input.addEventListener("change", () => {
+      const row = this.vacuumRows[Number(input.dataset.vacuumExclude)]; if (!row) return;
+      if (input.checked) this.vacuumExclusions.add(row.path); else this.vacuumExclusions.delete(row.path);
+      this.saveVacuumLedger(); this.refreshVacuumRows(); this.render();
+      this.root.querySelector<HTMLInputElement>(`[data-vacuum-exclude="${input.dataset.vacuumExclude}"]`)?.focus({preventScroll:true});
+    }));
+    dialog.querySelector<HTMLInputElement>("[data-vacuum-import]")?.addEventListener("change", event => void (async () => {
+      const file = (event.target as HTMLInputElement).files?.[0]; if (!file) return;
+      if (file.size > 20 * 1048576) throw new Error("Reference snapshot exceeds 20 MB.");
+      const snapshot = parseLumiSnapshot(JSON.parse(await file.text()));
+      this.vacuumSnapshot = snapshot; this.vacuumLiveMode = false; this.refreshVacuumRows(); this.vacuumMessage = "Imported Lumi references. Preview recalculated; no files deleted."; this.render();
+    })().catch(error => { this.vacuumSnapshot = null; this.refreshVacuumRows(); this.vacuumMessage = String(error); this.render(); }));
+    dialog.querySelector("[data-vacuum-export]")?.addEventListener("click", () => void (async () => {
+      this.refreshVacuumRows();
+      const report = JSON.stringify({ schema: 1, dryRun: true, generatedAt: Date.now(), scope: this.vacuumScope, referenceSnapshotAt: this.vacuumSnapshot?.generatedAt, rows: this.vacuumRows }, null, 2);
+      await runtime.saveDataUrl("data:application/json;base64," + btoa(Array.from(new TextEncoder().encode(report), byte => String.fromCharCode(byte)).join("")), "studio-vacuum-preview.json");
+    })().catch(error => this.notify(String(error), "error")));
+  }
+
+  private async deleteNonFavoriteOutputs(): Promise<void> {
+    this.vacuumOpen = true;
+    this.vacuumMessage = "Bulk deletion requires review. Scan, select eligible candidates and review the exact files before deleting.";
+    this.render();
+    return;
   }
 
   private renderLibrarySelectionRail(): string {
@@ -3458,7 +4130,7 @@ export class StudioApp {
         <div class="library-toolbar-count"><b>${allOutputs.length}</b> matching output${allOutputs.length === 1 ? "" : "s"}<small>${outputs.length < allOutputs.length ? ` · ${outputs.length} mounted` : ""}${selectedCount ? ` · ${selectedCount} selected` : ""}</small></div>
         <div class="library-toolbar-actions library-toolbar-actions--grouped">
           <div class="library-browse-actions"><button type="button" class="secondary-button" data-action="open-library-filters">${filterSvg} Browse</button>${this.libraryImagePicker ? "" : `<button type="button" class="secondary-button library-select-toggle ${this.librarySelectMode ? "is-active" : ""}" data-action="toggle-library-selection" aria-pressed="${this.librarySelectMode}" aria-label="${this.librarySelectMode ? "Exit batch selection" : "Batch select outputs"}">${batchSelectSvg}<span>${this.librarySelectMode ? "Done selecting" : "Select"}</span></button>`}</div>
-          <div class="library-maintenance-actions">${this.libraryImagePicker ? `<button type="button" class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button>` : `${actionMenu("library-tools-menu", "Tools", "Library tools", `<div class="studio-menu-section"><button type="button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}<small>Reconcile the index with files saved in Swarm.</small></button></div><div class="studio-menu-section"><small>CLEAN UP CURRENT RESULTS</small><button type="button" class="danger-soft" aria-labelledby="library-delete-name" aria-describedby="library-delete-help" data-action="delete-nonfavorite-outputs" ${!syncDisabled && allOutputs.some(output => !output.starred) ? "" : "disabled"}><span id="library-delete-name">Delete all non-favorited</span><small id="library-delete-help">Favorites are preserved. Review the count before confirming.</small></button></div>`)}<button type="button" class="primary-button library-generate-action" data-nav="create">Generate</button>`}</div>
+          <div class="library-maintenance-actions">${this.libraryImagePicker ? `<button type="button" class="secondary-button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}</button>` : `${actionMenu("library-tools-menu", "Tools", "Library tools", `<div class="studio-menu-section"><button type="button" data-action="open-vacuum">Vacuum preview<small>Scan, select and review redundant originals before deleting.</small></button></div><div class="studio-menu-section"><button type="button" data-action="sync-swarm-history" ${syncDisabled ? "disabled" : ""}>${escapeHtml(syncLabel)}<small>Reconcile the index with files saved in Swarm.</small></button></div><div class="studio-menu-section"><small>CLEAN UP CURRENT RESULTS</small><button type="button" class="secondary-button" aria-labelledby="library-delete-name" aria-describedby="library-delete-help" data-action="delete-nonfavorite-outputs" ${!syncDisabled && allOutputs.some(output => !output.starred) ? "" : "disabled"}><span id="library-delete-name">Review non-favorited</span><small id="library-delete-help">Select eligible originals and approve exact paths in Vacuum.</small></button></div>`)}<button type="button" class="primary-button library-generate-action" data-nav="create">Generate</button>`}</div>
         </div>
       </div>
       <div class="library-filter-readout"><span>${escapeHtml(this.libraryFilterSummary())}</span>${selecting ? `<b>Selection active · Shift-click for ranges</b>` : ""}</div>
@@ -5272,6 +5944,7 @@ export class StudioApp {
     if (this.view === "create") this.bindCreateEvents();
     if (this.view === "editor") void this.bindImageEditor().catch(error => this.notify(String(error), "error"));
     if (this.view === "expressions") void this.bindExpressionStudio().catch((error) => this.notify(`Could not open Expression Studio: ${String(error)}`, "error"));
+    this.bindVacuumEvents();
     if (this.view === "library") this.bindLibraryEvents();
     if (this.view === "identities") this.bindIdentityEvents();
     if (this.view === "models") this.bindModelEvents();
@@ -5314,13 +5987,15 @@ export class StudioApp {
 
   private async renderToolImage(
     request: SwarmGenerationRequest, loras: ExpressionLora[], progress: (value: number) => void,
-    label: string, stage?: ProcessingStage, onPreview?: (image: string) => void, signal?: AbortSignal,
+    label: string, stage?: ProcessingStage, onPreview?: (image: string) => void, signal?: AbortSignal, queueSource = false,
   ) {
     signal?.throwIfAborted();
     if (!this.connected || this.generating) throw new Error("Swarm is disconnected or another generation is running.");
     const client = this.client;
+    const keepFinal = queueSource && Boolean(stage);
     const submitted = applyExpressionLoras(request, loras);
     const normalized = normalizeGenerationRequest({ ...submitted, model: submitted.model || undefined } as SwarmGenerationRequest, this.params).request;
+    tagStudioRequest(normalized, stage === "background" ? "background_removed" : stage === "refine" ? "upscale_result" : "expression_draft");
     let finalMetadata = "";
     this.addLog(`${label} · ${request.model || "Comfy workflow"} · seed ${request.seed}`, "info", "api");
     let streaming = true;
@@ -5376,11 +6051,13 @@ export class StudioApp {
       request: { ...requestSummary, width: decoded.width, height: decoded.height },
       loras: cloneStack(loras), presets: [],
     });
+    this.queueReplacement(record, true, keepFinal);
     const count = this.root.querySelector("[data-output-count]");
     if (count) count.textContent = `${this.store.state.outputs.length} images`;
     return {
       ...decoded, path, seed, id: record.id, name: path.startsWith("data:") ? `${label}.png` : path.split(/[\\/]/).pop() || `${label}.png`,
       model: record.model, prompt: record.prompt, negativeprompt: record.negativePrompt,
+      studioMetadata: readStudioMetadata(normalized.extra_metadata),
     };
   }
 
@@ -5410,8 +6087,10 @@ export class StudioApp {
     const { ImageEditor } = await import("./expressions/editor");
     this.imageEditor ??= new ImageEditor({
       ...this.imageProcessingHost(),
-      busy: () => this.generating || Boolean(this.expressionStudio?.busy),
+      busy: () => this.vacuumDeleteBusy || this.generating || Boolean(this.expressionStudio?.busy),
       checkpoint: () => this.store.state.draft.model,
+      keepFinal: () => this.keepFinalEnabled(),
+      setKeepFinal: enabled => this.setKeepFinal(enabled),
       browseLibrary: () => this.openLibraryImagePicker("editor", "Choose an image for Editor"),
       inpaintBusy: () => this.inpaintAwaitingResult || this.inpaintApplyingResult,
       load: async id => {
@@ -5421,9 +6100,10 @@ export class StudioApp {
           ...await readProcessingImage(await this.readLibraryImage(output)), id: output.id,
           name: output.swarmPath.split(/[\\/]/).pop() || "Swarm output.png",
           model: output.model, seed: output.seed, prompt: output.prompt, negativeprompt: output.negativePrompt,
+          studioMetadata: readStudioMetadata(output.metadata) || readStudioMetadata(output.request.extra_metadata),
         };
       },
-      generate: (request, progress, stage) => this.renderToolImage(request, [], progress, stage ? processingLabels[stage] : "Editor generation", stage),
+      generate: (request, progress, stage) => this.renderToolImage(request, [], progress, stage ? processingLabels[stage] : "Editor generation", stage, undefined, undefined, this.keepFinalEnabled()),
       generationRequest: prompt => {
         const draft = this.store.state.draft;
         if (!prompt || !draft.model) throw new Error("Enter a prompt and choose a checkpoint in Create.");
@@ -5455,7 +6135,7 @@ export class StudioApp {
     this.expressionStudio ??= new ExpressionStudio({
       models: () => this.models,
       params: () => this.params,
-      busy: () => this.generating || Boolean(this.imageEditor?.busy),
+      busy: () => this.vacuumDeleteBusy || this.generating || Boolean(this.imageEditor?.busy),
       processing: this.imageProcessingHost(),
       connected: () => this.connected,
       notify: (message, error) => { this.addLog(message, error ? "error" : "info", "studio"); this.notify(message, error ? "error" : "info"); },
@@ -5465,6 +6145,10 @@ export class StudioApp {
       openAnimaGuide: runtime.kind === "tauri" ? openNativeAnimaGuide : undefined,
       browseReference: (apply) => this.openLibraryImagePicker("expressions", "Choose an expression reference", output =>
         apply(this.readLibraryImage(output), output.swarmPath.split(/[\\/]/).pop() || "Library portrait")),
+      provenance: path => {
+        const output = this.store.state.outputs.find(output => output.swarmPath === path || output.swarmSourcePath === path);
+        return readStudioMetadata(output?.metadata) || readStudioMetadata(output?.request.extra_metadata);
+      },
       identitySources: () => ({
         identities: this.store.state.identities,
         presets: this.presets.map(preset => {
@@ -7085,7 +7769,7 @@ export class StudioApp {
   }
 
   private async generate(draftOverride?: GenerationDraft, options: { allowPendingApprovals?: boolean; focusNewestApproval?: boolean } = {}): Promise<void> {
-    if (this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) return;
+    if (this.vacuumDeleteBusy || this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) return;
     if (this.pendingGenerationApprovals.length && !options.allowPendingApprovals) {
       this.notify("Save or review the pending result before starting another batch.", "info");
       return;
@@ -7465,12 +8149,14 @@ export class StudioApp {
     const record = this.inpaintPendingResultRecord;
     if (!record || this.inpaintApplyingResult) return;
     this.inpaintApplyingResult = true;
+    const keepFinal = this.keepFinalEnabled();
     this.root.querySelectorAll<HTMLButtonElement>("[data-action='apply-inpaint-result'], [data-action='dismiss-inpaint-result']")
       .forEach(button => { button.disabled = true; });
     try {
       const url = this.outputImageUrl(record);
       const dataUrl = url.startsWith("data:") ? url : await runtime.fetchDataUrl(url, this.client.authToken);
       const processed = await readProcessingImage(dataUrl);
+      this.queueReplacement(record, true, keepFinal);
       this.inpaintSourceId = record.id;
       this.inpaintSourceUrl = url;
       this.inpaintSourceDataUrl = dataUrl;
@@ -7484,7 +8170,7 @@ export class StudioApp {
       this.resetInpaintMaskSession();
       this.clearInpaintReview();
       this.imageEditor?.useInpaintResult({
-        ...processed, id: record.id, name: this.inpaintSourceName,
+        ...processed, id: record.id, name: this.inpaintSourceName, studioMetadata: outputTag(record),
         model: record.model, seed: record.seed, prompt: record.prompt, negativeprompt: record.negativePrompt,
       });
       this.notify("Approved edit loaded as the new inpaint base.", "success");
@@ -8132,7 +8818,7 @@ export class StudioApp {
   }
 
   private async generateInpaint(): Promise<void> {
-    if (this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) return;
+    if (this.vacuumDeleteBusy || this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) return;
     if (!this.inpaintPrompt.trim()) {
       this.notify("Give the masked area a prompt first.", "error");
       return;
@@ -8204,6 +8890,7 @@ export class StudioApp {
       maskcompositeunthresholded: this.inpaintFeather > 0 ? true : undefined,
       forwardswarmdata: true,
     });
+    tagStudioRequest(request, "inpaint_variant", (() => { const source = this.store.state.outputs.find(output => output.id === this.inpaintSourceId); return source ? outputTag(source) : null; })());
     this.clearInpaintReview();
     this.inpaintAwaitingResult = true;
     this.generating = true;
@@ -8497,63 +9184,14 @@ export class StudioApp {
     this.render();
     await this.yieldLibrarySync();
     try {
-      const files: Array<{ src: string; metadata?: string }> = [];
-      const seenFiles = new Set<string>();
-      const starredLeaves = new Set<string>();
-      const queued = [""];
-      const visited = new Set<string>();
-      let foldersRead = 0;
-      let sawStarredFolder = false;
-
-      while (queued.length) {
-        // Swarm's date folders are independent ListImages calls. Read a small BFS batch in parallel
-        // so a multi-year archive does not pay one full round-trip per date while still keeping
-        // pressure on the server modest.
-        const folderBatch: string[] = [];
-        while (queued.length && folderBatch.length < 6) {
-          const candidate = this.swarmMutationPath(queued.shift() ?? "").replace(/\/+$/, "");
-          const key = candidate.toLowerCase();
-          if (visited.has(key)) continue;
-          visited.add(key);
-          folderBatch.push(candidate);
-        }
-        if (!folderBatch.length) continue;
-        const listings = await Promise.all(folderBatch.map(async (folderKey) => ({
-          folderKey,
-          listing: await this.client.listImageDirectory(folderKey, 1),
-        })));
-        for (const { folderKey, listing } of listings) {
-          const isStarredFolder = /^Starred(?:\/|$)/i.test(folderKey);
-          if (isStarredFolder) sawStarredFolder = true;
-          foldersRead += 1;
-          for (const child of listing.folders ?? []) {
-            const childPath = this.joinSwarmHistoryPath(folderKey, child);
-            if (!childPath || visited.has(childPath.toLowerCase())) continue;
-            queued.push(childPath);
-          }
-          for (const file of listing.files ?? []) {
-            const sourcePath = this.joinSwarmHistoryPath(folderKey, file.src);
-            if (!sourcePath) continue;
-            const relativeToFolder = folderKey && sourcePath.toLowerCase().startsWith(`${folderKey.toLowerCase()}/`)
-              ? sourcePath.slice(folderKey.length + 1)
-              : sourcePath;
-            // depth=1 can include direct children from the next folder down. Those children get
-            // their own request, so only consume files physically direct to this folder here.
-            if (relativeToFolder.includes("/")) continue;
-            const leaf = sourcePath.split("/").pop()?.toLowerCase() || "";
-            if (isStarredFolder) {
-              if (leaf) starredLeaves.add(leaf);
-              continue;
-            }
-            const key = sourcePath.toLowerCase();
-            if (seenFiles.has(key)) continue;
-            seenFiles.add(key);
-            files.push({ src: sourcePath, metadata: file.metadata });
-          }
-        }
-        this.updateLibrarySyncProgress(`Reading ${foldersRead} folders · ${files.length} files`, 0, 0);
-        await this.yieldLibrarySync();
-      }
+      const inventory = await scanSwarmHistory(
+        (path, depth) => this.client.listImageDirectory(path, depth), await this.client.imageHistoryLimit(),
+        (parent, child) => this.joinSwarmHistoryPath(parent, child), undefined,
+        async (folders, files) => { this.updateLibrarySyncProgress(`Reading ${folders} folders · ${files} files`, 0, 0); await this.yieldLibrarySync(); },
+      );
+      const files = inventory.files;
+      const starredLeaves = new Set([...inventory.favorites].map(path => path.split('/').pop()!.toLowerCase()));
+      const sawStarredFolder = true;
 
       const outputs = this.store.state.outputs;
       const existingByPath = new Map<string, OutputRecord>();
@@ -8727,7 +9365,7 @@ export class StudioApp {
       this.libraryRenderLimit = 240;
       this.librarySelected.clear();
       this.libraryLastSelectedId = "";
-      this.addLog(`Swarm history sync walked ${foldersRead} folders and found ${files.length} outputs, indexed ${added}, refreshed ${refreshed}, repaired ${repaired} paths, removed ${removed} missing records, and reconciled ${starredSynced} favorite states.`, "info", "api");
+      this.addLog(`Swarm history sync walked ${inventory.foldersRead} folders and found ${files.length} outputs, indexed ${added}, refreshed ${refreshed}, repaired ${repaired} paths, removed ${removed} missing records, and reconciled ${starredSynced} favorite states.`, "info", "api");
       const summary = [
         `${files.length} found`,
         added ? `${added} indexed` : "",
@@ -8750,6 +9388,12 @@ export class StudioApp {
   }
 
   private bindLibraryEvents(): void {
+    const scope = this.client.historyScope;
+    if (this.vacuumAutoEnabled() && scope && scope !== this.vacuumAutoScannedScope && !this.vacuumScan && !this.librarySyncing
+      && !this.generating && !this.expressionStudio?.busy && !this.imageEditor?.busy) {
+      this.vacuumAutoScannedScope = scope;
+      queueMicrotask(() => void this.scanVacuum());
+    }
     const resetMounted = () => { this.libraryRenderLimit = 240; };
     const captureBrowseInputs = () => {
       const search = this.root.querySelector<HTMLInputElement>("#library-search-modal");

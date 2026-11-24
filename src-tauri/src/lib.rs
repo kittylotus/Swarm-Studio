@@ -1,3 +1,4 @@
+mod lumi_bridge;
 mod llm;
 use base64::Engine;
 use futures_util::future::{AbortHandle, Abortable};
@@ -134,6 +135,33 @@ fn emit_log(app: &tauri::AppHandle, level: &str, message: impl Into<String>) {
             message,
         },
     );
+}
+
+#[tauri::command]
+async fn http_head_image_size(url: String, auth_token: Option<String>) -> Result<Option<u64>, String> {
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "Invalid image URL")?;
+    if !["http", "https"].contains(&parsed.scheme()) || !parsed.username().is_empty() || parsed.password().is_some() { return Err("Invalid image URL".into()); }
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(8)).redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "Could not build image header reader")?;
+    let cookie = auth_token.filter(|value| !value.trim().is_empty()).map(|token| format!("swarm_token={}", token.trim()));
+    let mut request = client.head(parsed.clone()).header(reqwest::header::ACCEPT_ENCODING, "identity");
+    if let Some(token) = &cookie { request = request.header(reqwest::header::COOKIE, token); }
+    let mut response = request.send().await.map_err(|_| "Image size read failed")?;
+    if [reqwest::StatusCode::METHOD_NOT_ALLOWED, reqwest::StatusCode::NOT_IMPLEMENTED].contains(&response.status()) {
+        drop(response);
+        let mut ranged = client.get(parsed).header(reqwest::header::RANGE, "bytes=0-0").header(reqwest::header::ACCEPT_ENCODING, "identity");
+        if let Some(token) = &cookie { ranged = ranged.header(reqwest::header::COOKIE, token); }
+        response = ranged.send().await.map_err(|_| "Image range read failed")?;
+    }
+    // Dropping the response after inspecting headers cancels an unconsumed body.
+    let headers = response.headers();
+    if !headers.get("content-type").and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("image/"))
+        || headers.get("content-encoding").and_then(|v| v.to_str().ok()).is_some_and(|v| v != "identity") { return Ok(None); }
+    let length = headers.get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+    let bytes = if response.status() == reqwest::StatusCode::OK { length }
+        else if response.status() == reqwest::StatusCode::PARTIAL_CONTENT && length == Some(1) {
+            headers.get("content-range").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("bytes 0-0/")).and_then(|v| if v.bytes().all(|c| c.is_ascii_digit()) { v.parse::<u64>().ok() } else { None }).filter(|v| *v > 0)
+        } else { None };
+    Ok(bytes.filter(|v| *v <= 9_007_199_254_740_991))
 }
 
 #[tauri::command]
@@ -1222,6 +1250,8 @@ pub fn run() {
             studio_update_check,
             studio_update_apply,
             expression_project_files,
+            lumi_bridge::lumi_reference_bridge,
+            http_head_image_size,
             save_data_url_download
         ])
         .run(tauri::generate_context!())

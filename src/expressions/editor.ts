@@ -1,10 +1,12 @@
 import type { SwarmGenerationRequest } from '../swarm/types';
+import { tagStudioRequest, type StudioMetadata } from '../library/provenance';
 import { bindExpandedFields } from '../ui/expanded-editor';
 import { normalizeRecipe, processingLabels, processingRequest, readProcessingImage, type ProcessingSource, type ProcessingStage } from './processing';
 import { bindProcessingFields, escapeMarkup as esc, resolveProcessing, type ProcessingChoices, type ProcessingHost } from './processing-ui';
 
 export interface EditorImage extends ProcessingSource {
     name: string;
+    studioMetadata?: StudioMetadata | null;
     id?: string;
     model?: string;
     seed?: number;
@@ -15,6 +17,8 @@ export interface EditorImage extends ProcessingSource {
 interface EditorHost extends ProcessingHost {
     busy(): boolean;
     checkpoint(): string;
+    keepFinal?(): boolean;
+    setKeepFinal?(enabled: boolean): void;
     browseLibrary(): void;
     inpaintBusy(): boolean;
     load(id: string): Promise<EditorImage>;
@@ -47,6 +51,7 @@ export class ImageEditor {
 
     constructor(private readonly bridge: EditorHost) { }
     get busy(): boolean { return this.running || this.loading; }
+    get referencedOutputIds(): string[] { return [this.source?.id, this.previous?.id].filter((id): id is string => Boolean(id)); }
 
     mount(host: HTMLElement, inpaintPanel: HTMLElement | null): void {
         this.host = host;
@@ -135,6 +140,7 @@ export class ImageEditor {
                         </div>
                         <input data-editor-upload type="file" accept="image/png,image/jpeg,image/webp" hidden ${lock}/>
                     </section>
+                    <label class="retention-policy"><input type="checkbox" data-editor-keep-final ${this.bridge.keepFinal?.() ? 'checked' : ''} ${lock}/><span>Keep final only<small>Queue replaced sources for Vacuum review. No files deleted.</small></span></label>
                     <section class="expression-section">
                         <div class="expression-section-head"><b>Tool</b></div>
                         <div class="editor-tools" role="group" aria-label="Image tools">
@@ -180,6 +186,7 @@ export class ImageEditor {
         host.querySelector('[data-editor-upload-button]')?.addEventListener('click', () => fileInput?.click());
         fileInput?.addEventListener('change', event => this.upload((event.currentTarget as HTMLInputElement).files?.[0]));
         host.querySelector('[data-editor-browse]')?.addEventListener('click', () => this.bridge.browseLibrary());
+        host.querySelector<HTMLInputElement>('[data-editor-keep-final]')?.addEventListener('change', event => this.bridge.setKeepFinal?.((event.target as HTMLInputElement).checked));
         bindExpandedFields(host);
         host.querySelector<HTMLTextAreaElement>('[data-editor-prompt]')?.addEventListener('input', event => {
             this.prompt = (event.currentTarget as HTMLTextAreaElement).value;
@@ -233,6 +240,7 @@ export class ImageEditor {
                     ...source, model: source.model || this.bridge.checkpoint(),
                 });
             } else return;
+            tagStudioRequest(request, stage === "background" ? "background_removed" : stage === "refine" ? "upscale_result" : "general_generation", stage ? source?.studioMetadata : null);
             this.status = `${tools[tool]} · running…`;
             if (this.host?.isConnected) this.host.querySelector('.editor-status')!.textContent = this.status;
             this.setSource(await this.bridge.generate(request, value => {

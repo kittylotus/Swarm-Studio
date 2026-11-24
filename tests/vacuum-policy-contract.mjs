@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import {classifyVacuum,vacuumPolicy} from '../src/library/vacuum.ts';
+const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+const now=Date.now(),scope='fixture';
+const file=(n,stage,parent=0,pipeline=1)=>({path:`raw/${n}.png`,metadata:{studio_schema:'1',studio_origin:'lumiswarm',studio_asset_id:id(n),studio_pipeline_id:id(pipeline),studio_parent_id:parent?id(parent):'',studio_stage:stage,studio_created_at:String(now-9*86400000+n)}});
+const base={scope,now,complete:true,activeJobs:false,snapshot:null,favorites:new Set(),exclusions:new Set(),localAuditComplete:true};
+const policy=vacuumPolicy({graceDays:0});const review=(files,config={},context={})=>classifyVacuum(files,{...base,...context,policy:vacuumPolicy({...policy,...config})});
+const chain=[file(1,'expression_draft'),file(2,'upscale_result',1),file(3,'background_removed',2)];
+assert.deepEqual(review(chain).map(r=>r.status),['candidate','candidate','protected'],'metadata alone retains the last saved stage');
+assert.equal(review(chain,{expressionUpscale:false})[1].status,'protected');
+const branch=[...chain,file(4,'inpaint_variant',2)];assert.equal(review(branch)[3].status,'protected');assert.equal(review(branch)[2].status,'protected','both branch leaves retained');
+assert.equal(review(chain,{}, {favorites:new Set(['raw/1.png'])})[0].status,'protected');
+assert.equal(review(chain,{}, {localReferences:new Set(['raw/2.png'])})[1].status,'protected');
+assert.equal(review(chain,{}, {localAuditComplete:false})[0].status,'review');
+assert.equal(review(chain,{}, {activeJobs:true})[0].status,'protected');
+const claims=[{assetId:id(1),scope:'different',swarmPath:'raw/1.png',references:['chat'],protected:true}];
+assert.equal(review(chain,{}, {snapshot:{generatedAt:now,complete:false,activeJobs:false,claims}})[0].status,'candidate','bindings to Lumi copies do not imply a Swarm-path dependency');
+assert.equal(review(chain,{lumi:{protectCopyBindings:true}}, {snapshot:{generatedAt:now,complete:false,activeJobs:false,claims}})[0].status,'protected');
+assert.equal(review(chain,{}, {snapshot:{generatedAt:now,complete:false,activeJobs:false,claims:[{...claims[0],references:['swarm-path:chat']}]}})[0].status,'protected');
+
+assert.equal(review(chain,{}, {complete:false})[0].status,'review');
+assert.ok(review([...chain,{...chain[1],path:'raw/duplicate.png'}]).every(r=>r.status!=='candidate'));
+assert.ok(review([file(1,'expression_draft',3),chain[1],chain[2]]).every(r=>r.status!=='candidate'),'cycles never qualify');
+assert.ok(review([file(1,'expression_draft',99),chain[1],chain[2]]).every(r=>r.status!=='candidate'),'missing parent never qualifies');
+const normal=[file(1,'general_generation'),file(2,'upscale_result',1)];
+assert.equal(review(normal)[0].status,'protected');assert.equal(review(normal,{upscaleSources:true})[0].status,'candidate');
+assert.equal(review([normal[0]],{reviewGenerations:true})[0].status,'review','main generations never become candidates merely by being unstarred');
+for(const [stage,key] of [['inpaint_variant','inpaintSources'],['background_removed','backgroundSources']])assert.equal(review([normal[0],file(2,stage,1)],{[key]:true})[0].status,'candidate');
+const recent=chain.map(f=>({...f,metadata:{...f.metadata,studio_created_at:String(now-1000)}}));assert.equal(review(recent,{graceDays:7})[0].status,'protected');
+assert.equal(vacuumPolicy({graceDays:-8}).graceDays,0);assert.equal(vacuumPolicy({graceDays:999}).graceDays,365);
+console.log('Metadata lifecycle, independent stage choices, branch keepsakes, optional relay, references, grace, collisions/cycles and source policies: PASS');
+
+assert.equal(review([file(1,'expression_final'),chain[1],chain[2]])[0].status,'candidate','a stage formerly called final is retained by topology, not forever by its label');
+assert.equal(review([file(1,'general_generation'),file(2,'inpaint_variant',1),file(3,'upscale_result',2)],{inpaintSources:true})[1].status,'candidate','superseded inpaint alternatives follow their stage choice');
+
+const lumiInline=file(7,'inline_illustration',0,7), standaloneInline={...file(8,'inline_illustration',0,8),metadata:{...file(8,'inline_illustration',0,8).metadata,studio_origin:'standalone'}};
+const split={lumi:{mode:'stages',stages:['inline_illustration']}};
+assert.deepEqual(review([lumiInline,standaloneInline],split).map(r=>r.status),['candidate','protected'],'Lumi stage selection never leaks into standalone');
+assert.equal(review([lumiInline],split,{favorites:new Set(['raw/7.png'])})[0].status,'protected');
+assert.equal(review([lumiInline],{lumi:{mode:'stages',stages:[]}})[0].status,'protected');

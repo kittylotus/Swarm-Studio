@@ -23,8 +23,8 @@ function close(actual, expected, message) {
 }
 
 const root = join(fileURLToPath(new URL('..', import.meta.url)));
-const app = readFileSync(join(root, 'src/app.ts'), 'utf8');
-const css = readFileSync(join(root, 'src/styles.css'), 'utf8');
+const app = readFileSync(join(root, 'src/app.ts'), 'utf8').replaceAll('\r\n','\n');
+const css = readFileSync(join(root, 'src/styles.css'), 'utf8').replaceAll('\r\n','\n');
 
 assert(REGION_LAYOUT_PRESETS.length === 5, 'Regional prompting must expose exactly the five preset layouts.');
 assert(REGION_LAYOUT_PRESETS.some((preset) => preset.id === 'left-right'), 'Left / Right region preset is missing.');
