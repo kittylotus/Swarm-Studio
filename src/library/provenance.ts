@@ -1,6 +1,6 @@
 import { createId } from '../id.ts';
 
-export const studioStages = ['expression_draft', 'expression_final', 'upscale_result', 'background_removed', 'inpaint_variant', 'inline_illustration', 'general_generation', 'quick_create', 'inline_upscale_result', 'inline_background_removed', 'inline_inpaint_variant'] as const;
+export const studioStages = ['expression_draft', 'expression_final', 'upscale_result', 'background_removed', 'inpaint_variant', 'inline_illustration', 'general_generation', 'quick_create', 'inline_upscale_result', 'inline_background_removed', 'inline_inpaint_variant', 'refinement_result', 'detailer_result', 'segmentation_result'] as const;
 export function processingStage(stage:string):string {return stage.startsWith('inline_')&&stage!=='inline_illustration'?stage.slice(7):stage;}
 export type StudioStage = typeof studioStages[number];
 export type StudioMetadata = Record<string, string> & {

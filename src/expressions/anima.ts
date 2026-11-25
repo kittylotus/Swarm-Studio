@@ -1,4 +1,4 @@
-import type { SheetProject, ExpressionTile, NodeSchema } from './pipeline';
+import { expressionPrompt, type SheetProject, type ExpressionTile, type NodeSchema } from './pipeline.ts';
 import type { ExpressionLora } from './loras';
 import type { SwarmModel } from '../swarm/types';
 
@@ -94,7 +94,7 @@ export function animaWorkflow(project: SheetProject, tile: ExpressionTile, schem
   const optional = schema.AnimaRefAdapter?.input?.optional ?? {};
   add('5', 'AnimaRefAdapter', { model: modelRef, vae: vaeRef, image: ['4', 0], lora_name: setup.adapter, ref_guidance: project.animaGuidance, correction: 'apg', ...(optional.strength ? { strength: project.animaStrength } : {}), ...(optional.ref_end ? { ref_end: project.animaEnd } : {}), ...(optional.ref_megapixels ? { ref_megapixels: 1 } : {}) });
   const triggers = (loras ?? []).filter(l => l.enabled && l.useTrigger).map(l => l.triggerPhrase.replaceAll(';', ',').trim()).filter(Boolean);
-  const prompt = [...triggers, project.subject, tile.prompt].filter(Boolean).join(', ');
+  const prompt = [...triggers, expressionPrompt(project, tile, model)].filter(Boolean).join(', ');
   add('6', 'CLIPTextEncode', { clip: clipRef, text: prompt });
   add('7', 'CLIPTextEncode', { clip: clipRef, text: project.negative });
   add('8', 'EmptyLatentImage', { width: project.width, height: project.height, batch_size: 1 });

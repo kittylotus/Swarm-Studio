@@ -1,0 +1,101 @@
+TypeScript: passed
+
+RUN tests/advanced-features-contract.mjs
+PASS: common-control deduplication and aliases, unknown public fields, independent slots, legacy migration, enabled defaults, request filtering, disable/re-enable, feature removal.
+RUN tests/anima-ref-contract.mjs
+Anima reference graph and inventory contracts: ok
+RUN tests/atelier-port-contract.mjs
+Atelier port: selections, alpha, despill, warp, count, metadata, expression prompt and Anima graph contracts OK
+RUN tests/capability-hydration-contract.mjs
+Capability hydration contract OK.
+RUN tests/civitai-facet-contract.mjs
+CivitAI facet contract OK
+RUN tests/comfy-runtime-flags-contract.mjs
+Comfy runtime flag contract OK.
+RUN tests/composer-ui-contract.mjs
+Composer UI contract OK.
+RUN tests/expression-pipeline-contract.mjs
+expression pipeline contracts: ok
+RUN tests/generation-notifications-contract.mjs
+generation notification contract OK
+RUN tests/generation-request-contract.mjs
+Generation request contract OK.
+RUN tests/history-metadata-hydration-contract.mjs
+history metadata hydration contract: ok
+RUN tests/host-control-contract.mjs
+Host control contract OK
+RUN tests/inpaint-mask-export-contract.mjs
+Inpaint mask export contract OK.
+RUN tests/keybinds-contract.mjs
+Keybind contract OK.
+RUN tests/library-cleanup-contract.mjs
+library cleanup contracts: ok
+RUN tests/library-session-contract.mjs
+Library session contract OK.
+RUN tests/library-views-contract.mjs
+Library virtual Lumi collection and 4k-row Vacuum search/filter/sort projection: PASS
+RUN tests/lifecycle-contract.mjs
+Version branches/missing/duplicate parents and verified replacement queue safety: PASS
+Version graph sibling lanes, exact edges, two branch ends, missing placeholders, ambiguity and cycle quarantine: PASS
+Cross-Studio reconciliation from every node, pipeline-conflict warnings, global duplicate detection and exact full-ID matching: PASS
+RUN tests/llm-contract.mjs
+LLM provider, streaming and MOSS contracts: ok
+RUN tests/lora-profile-manager-contract.mjs
+LoRA profile manager contract OK.
+RUN tests/lora-request-contract.mjs
+LoRA request contract OK.
+RUN tests/preset-recovery-contract.mjs
+preset recovery contract: ok
+RUN tests/reference-services-contract.mjs
+Authenticated live feed, user/scope binding, stale/replay/revoke, recursive read-only project audit and original-size semantics: PASS
+One-byte range size validation, malformed/encoded/auth/unsafe totals rejected: PASS
+RUN tests/region-preset-contract.mjs
+Region preset contract OK.
+RUN tests/relay-contract.mjs
+Browser relay contract OK.
+RUN tests/resolution-contract.mjs
+Resolution contract OK
+RUN tests/retention-improvements-contract.mjs
+Distinct tokens, branch keep/discard scope and hard protections, manual-only discard, automatic proof/age/leaf/limit/failure gates: PASS
+RUN tests/reviewed-cleanup-contract.mjs
+Reviewed cleanup exact plan, per-file checks, surviving replacements, favorites, identity/policy/server/recycle changes, write-ahead logging, uncertain outcome and cancellation: PASS
+Verification cancel/deadline and mutation uncertain-timeout semantics: PASS
+Manual review accepts recent/copy-bound/untagged/empty-metadata paths while retaining favorites, direct refs, project refs, jobs and complete-scan checks: PASS
+RUN tests/studio-updater-contract.mjs
+Studio updater contract OK.
+RUN tests/swarm-history-path-contract.mjs
+Swarm session image routing contract OK.
+RUN tests/theme-contract.mjs
+Theme contract OK.
+RUN tests/vacuum-contract.mjs
+Vacuum provenance, conservative eligibility, changing references, complete inventory and cancellation: PASS
+RUN tests/vacuum-policy-contract.mjs
+Metadata lifecycle, independent stage choices, branch keepsakes, optional relay, references, grace, collisions/cycles and source policies: PASS
+RUN tests/history-metadata.mjs
+history timing/date and model folder regressions: ok
+RUN tests/standalone-startup.mjs
+Standalone Windows startup fixture: skipped on non-Windows host
+RUN tests/studio-source-updater.mjs
+Studio source updater: Git safeguards, fixed HTTP actions, activity guard, scheduling and duplicate-job protection passed.
+
+Isolated Chromium
+PASS 1440 selection, undo/redo, brush, explicit inpaint + mask, approved result, GPU success/failure, export, despill, viewport
+PASS 390 selection, undo/redo, brush, explicit inpaint + mask, approved result, GPU success/failure, export, despill, viewport
+PASS 320 selection, undo/redo, brush, explicit inpaint + mask, approved result, GPU success/failure, export, despill, viewport
+
+StudioApp Chromium
+App fixture ready 1440
+Inpaint shortcuts passed 1440
+Review layout passed 1440
+{"stage":"background","path":"","error":"","variants":1,"prompt":"ashido mina, cream sweater, bubbly expressions, anime illustration, semirealistic character portrait, natural skin shading, detailed expressive eyes, relaxed face, closed mouth, calm eyes"}
+PASS 1440 selection, pixel undo/redo, brush, inpaint explicit + mask, GPU roundtrip, source ref, viewport
+App fixture ready 390
+Inpaint shortcuts passed 390
+Review layout passed 390
+{"stage":"background","path":"","error":"","variants":1,"prompt":"ashido mina, cream sweater, bubbly expressions, anime illustration, semirealistic character portrait, natural skin shading, detailed expressive eyes, relaxed face, closed mouth, calm eyes"}
+PASS 390 selection, pixel undo/redo, brush, inpaint explicit + mask, GPU roundtrip, source ref, viewport
+App fixture ready 320
+Inpaint shortcuts passed 320
+Review layout passed 320
+{"stage":"background","path":"","error":"","variants":1,"prompt":"ashido mina, cream sweater, bubbly expressions, anime illustration, semirealistic character portrait, natural skin shading, detailed expressive eyes, relaxed face, closed mouth, calm eyes"}
+PASS 320 selection, pixel undo/redo, brush, inpaint explicit + mask, GPU roundtrip, source ref, viewport

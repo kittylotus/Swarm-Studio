@@ -46,7 +46,7 @@ try {
             const trigger = page.locator('[data-expression-settings-open]');
             await trigger.scrollIntoViewIfNeeded();
             await page.evaluate(() => window.scrollBy(0, 48));
-            await openExpressionSettings(page, 'Identity');
+            await openExpressionSettings(page, 'Character');
             const drawer = page.locator('.expression-settings-drawer');
             const lockedTop = await page.evaluate(() => document.body.getBoundingClientRect().top);
             assert.ok(lockedTop < 0, 'test opens the drawer on a scrolled board');
@@ -62,7 +62,7 @@ try {
             await page.waitForFunction(() => !document.body.hasAttribute('data-expression-page-locked'));
             assert.equal(await page.evaluate(() => window.scrollY), -lockedTop);
         }
-        await openExpressionSettings(page, 'Identity');
+        await openExpressionSettings(page, 'Character');
         const subject = page.getByLabel('Character & framing', { exact: true });
         const originalSubject = await subject.inputValue();
         const expandSubject = page.getByRole('button', { name: 'Expand character & framing', exact: true });
@@ -95,7 +95,7 @@ try {
         assert.equal(await page.evaluate(() => studio.project.subject), 'A close-up with side lighting');
         assert.equal(await page.getByRole('button', { name: 'Expand avoid', exact: true }).count(), 1);
         await closeExpressionSettings(page);
-        await openExpressionSettings(page, 'Generate');
+        await openExpressionSettings(page, 'Rendering');
         const sampling = page.locator('details').filter({has:page.locator('summary', {hasText:'Sampling & resolution'})});
         await sampling.locator('summary').click();
         assert.equal(await sampling.locator('summary .expression-settings-icon').count(),1);
@@ -174,7 +174,7 @@ try {
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'no horizontal mobile overflow');
         await page.waitForTimeout(400);
         await page.reload();await page.waitForFunction(()=>window.ready);
-        await openExpressionSettings(page, 'Generate');
+        await openExpressionSettings(page, 'Rendering');
         await sampling.locator('summary').click();
         assert.equal(await page.locator('[data-setting="scheduler"]').inputValue(),'beta57');
         assert.equal(await page.locator('[data-setting="style"]').inputValue(),'realistic');

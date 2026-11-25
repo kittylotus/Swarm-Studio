@@ -1,0 +1,112 @@
+PASS tests/advanced-features-contract.mjs
+PASS: common-control deduplication and aliases, unknown public fields, independent slots, legacy migration, enabled defaults, request filtering, disable/re-enable, feature removal.
+
+PASS tests/anima-ref-contract.mjs
+Anima reference graph and inventory contracts: ok
+
+PASS tests/atelier-port-contract.mjs
+Atelier port: selections, alpha, despill, warp, count, metadata, expression prompt and Anima graph contracts OK
+
+PASS tests/capability-hydration-contract.mjs
+Capability hydration contract OK.
+
+PASS tests/civitai-facet-contract.mjs
+CivitAI facet contract OK
+
+PASS tests/comfy-runtime-flags-contract.mjs
+Comfy runtime flag contract OK.
+
+PASS tests/composer-ui-contract.mjs
+Composer UI contract OK.
+
+PASS tests/expression-pipeline-contract.mjs
+expression pipeline contracts: ok
+
+PASS tests/generation-notifications-contract.mjs
+generation notification contract OK
+
+PASS tests/generation-request-contract.mjs
+Generation request contract OK.
+
+PASS tests/history-metadata-hydration-contract.mjs
+history metadata hydration contract: ok
+
+PASS tests/history-metadata.mjs
+history timing/date and model folder regressions: ok
+
+PASS tests/host-control-contract.mjs
+Host control contract OK
+
+PASS tests/inpaint-mask-export-contract.mjs
+Inpaint mask export contract OK.
+
+PASS tests/keybinds-contract.mjs
+Keybind contract OK.
+
+PASS tests/library-cleanup-contract.mjs
+library cleanup contracts: ok
+
+PASS tests/library-session-contract.mjs
+Library session contract OK.
+
+PASS tests/library-views-contract.mjs
+Library virtual Lumi collection and 4k-row Vacuum search/filter/sort projection: PASS
+
+PASS tests/lifecycle-contract.mjs
+Version branches/missing/duplicate parents and verified replacement queue safety: PASS
+Version graph sibling lanes, exact edges, two branch ends, missing placeholders, ambiguity and cycle quarantine: PASS
+Cross-Studio reconciliation from every node, pipeline-conflict warnings, global duplicate detection and exact full-ID matching: PASS
+
+PASS tests/llm-contract.mjs
+LLM provider, streaming and MOSS contracts: ok
+
+PASS tests/lora-profile-manager-contract.mjs
+LoRA profile manager contract OK.
+
+PASS tests/lora-request-contract.mjs
+LoRA request contract OK.
+
+PASS tests/preset-recovery-contract.mjs
+preset recovery contract: ok
+
+PASS tests/reference-services-contract.mjs
+Authenticated live feed, user/scope binding, stale/replay/revoke, recursive read-only project audit and original-size semantics: PASS
+One-byte range size validation, malformed/encoded/auth/unsafe totals rejected: PASS
+
+PASS tests/region-preset-contract.mjs
+Region preset contract OK.
+
+PASS tests/relay-contract.mjs
+Browser relay contract OK.
+
+PASS tests/resolution-contract.mjs
+Resolution contract OK
+
+PASS tests/retention-improvements-contract.mjs
+Distinct tokens, branch keep/discard scope and hard protections, manual-only discard, automatic proof/age/leaf/limit/failure gates: PASS
+
+PASS tests/reviewed-cleanup-contract.mjs
+Reviewed cleanup exact plan, per-file checks, surviving replacements, favorites, identity/policy/server/recycle changes, write-ahead logging, uncertain outcome and cancellation: PASS
+Verification cancel/deadline and mutation uncertain-timeout semantics: PASS
+Manual review accepts recent/copy-bound/untagged/empty-metadata paths while retaining favorites, direct refs, project refs, jobs and complete-scan checks: PASS
+
+PASS tests/standalone-startup.mjs
+Standalone Windows startup fixture: skipped on non-Windows host
+
+PASS tests/studio-source-updater.mjs
+Studio source updater: Git safeguards, fixed HTTP actions, activity guard, scheduling and duplicate-job protection passed.
+
+PASS tests/studio-updater-contract.mjs
+Studio updater contract OK.
+
+PASS tests/swarm-history-path-contract.mjs
+Swarm session image routing contract OK.
+
+PASS tests/theme-contract.mjs
+Theme contract OK.
+
+PASS tests/vacuum-contract.mjs
+Vacuum provenance, conservative eligibility, changing references, complete inventory and cancellation: PASS
+
+PASS tests/vacuum-policy-contract.mjs
+Metadata lifecycle, independent stage choices, branch keepsakes, optional relay, references, grace, collisions/cycles and source policies: PASS

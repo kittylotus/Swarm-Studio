@@ -166,7 +166,7 @@ function classifyLineage(files: VacuumFile[], c: VacuumContext, p: VacuumPolicy)
             if(!(created>0)||c.now-created<p.graceDays*86400000)return row('Lifecycle grace period or creation time unverified','protected');
             return row('Explicit metadata-stage selection · includes branch ends (preview only)','candidate');
         }
-        const next=(children.get(t.studio_asset_id)||[]).filter(child=>child.tag?.studio_pipeline_id===t.studio_pipeline_id&&child.tag.studio_origin===t.studio_origin);
+        const next=(children.get(t.studio_asset_id)||[]).filter(child=>child.tag?.studio_pipeline_id===t.studio_pipeline_id&&child.tag.studio_origin===t.studio_origin&&child.tag.studio_stage!=='segmentation_result');
         if(!next.length) {
             if(['general_generation','quick_create'].includes(t.studio_stage)&&policy.reviewGenerations)return row('Unfavorited main generation · manual review only');
             return row('Last saved output in this branch · keepsake','protected');

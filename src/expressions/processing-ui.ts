@@ -35,7 +35,7 @@ function options(choices: WorkflowImageInput[], selected: string, placeholder: s
 export function bindProcessingFields(
     root: HTMLElement, host: ProcessingHost, stage: ProcessingStage,
     initial: ProcessingRecipe, onChange: (recipe: ProcessingRecipe) => void,
-    choices: ProcessingChoices, optional: boolean, disabled: boolean,
+    choices: ProcessingChoices, optional: boolean, disabled: boolean, workflowOnly = false,
 ): void {
     let recipe = initial;
     let loading = false;
@@ -94,7 +94,7 @@ export function bindProcessingFields(
         const lock = disabled ? 'disabled' : '';
         const methodChoices = [
             ...(optional ? [['off', 'Skip this stage']] : []),
-            ['builtin', stage === 'refine' ? 'Upscale model' : 'Built-in · BiRefNet'],
+            ...(workflowOnly ? [] : [['builtin', stage === 'refine' ? 'Upscale model' : 'Built-in · BiRefNet']]),
             ['saved', 'Saved Swarm workflow'], ['json', 'ComfyUI API JSON'],
         ];
         let fields = '';
@@ -109,15 +109,15 @@ export function bindProcessingFields(
         if (mode === 'saved') {
             fields = `<label class="field"><span>Saved workflow</span><select aria-label="Saved workflow" data-recipe="workflow" ${lock}>${options((choices.workflows ?? []).map(id => ({ id, name: id })), recipe.workflow, 'Choose a workflow')}</select></label>
                 <label class="field"><span>Source image input</span><select aria-label="Source image input" data-recipe="imageInput" ${lock}>${options(workflowInputs ?? [], recipe.imageInput || (workflowInputs?.length === 1 ? workflowInputs[0]!.id : ''), 'Choose an image input')}</select></label>
-                <p class="helper-copy">${recipe.workflow && !loading && workflowInputs?.length === 0 ? 'This workflow must expose an image parameter in Swarm. ' : ''}Use a workflow with a single image output.${stage === 'background' ? ' The output must include an alpha channel for transparency.' : ''}</p>`;
+                <p class="helper-copy">${recipe.workflow && !loading && workflowInputs?.length === 0 ? 'This workflow must expose an image parameter in Swarm. ' : ''}Use a workflow with a single image output.${stage === 'background' && !workflowOnly ? ' The output must include an alpha channel for transparency.' : ''}</p>`;
         }
         if (mode === 'json') {
             fields = `<button type="button" class="secondary-button processing-file" data-recipe-upload ${lock}>Load workflow JSON</button>
                 <input type="file" accept="application/json,.json" data-recipe-file hidden ${lock}/>
                 <label class="field"><span>API workflow JSON</span><textarea data-recipe="graph" rows="5" spellcheck="false" maxlength="${MAX_WORKFLOW_LENGTH}" ${lock}>${escapeMarkup(recipe.graph)}</textarea></label>
-                <p class="helper-copy" data-graph-status>${escapeMarkup(graphStatus())}</p>${stage === 'background' ? '<p class="helper-copy">Connect an output with an alpha channel to keep transparency.</p>' : ''}`;
+                <p class="helper-copy" data-graph-status>${escapeMarkup(graphStatus())}</p>${stage === 'background' && !workflowOnly ? '<p class="helper-copy">Connect an output with an alpha channel to keep transparency.</p>' : ''}`;
         }
-        root.innerHTML = `<label class="field"><span>${processingLabels[stage]} method</span><select aria-label="${processingLabels[stage]} method" data-recipe="mode" ${lock}>${methodChoices.map(([value, label]) => `<option value="${value}" ${mode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>${fields}
+        root.innerHTML = `<label class="field"><span>${workflowOnly ? "Workflow method" : processingLabels[stage] + " method"}</span><select aria-label="${workflowOnly ? "Workflow method" : processingLabels[stage] + " method"}" data-recipe="mode" ${lock}>${methodChoices.map(([value, label]) => `<option value="${value}" ${mode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>${fields}
             ${mode === 'builtin' || mode === 'saved' ? `<button type="button" class="ghost-button processing-refresh" data-recipe-refresh ${disabled || loading ? 'disabled' : ''}>${loading ? 'Loading…' : 'Refresh backend options'}</button>` : ''}
             ${error ? `<p class="expression-error" role="status">${escapeMarkup(error)}</p>` : ''}`;
         root.querySelectorAll<HTMLSelectElement>('select[data-recipe]').forEach(select => select.addEventListener('change', () => {

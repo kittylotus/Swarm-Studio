@@ -1,4 +1,4 @@
-export type StudioView = "create" | "expressions" | "editor" | "library" | "identities" | "models" | "civitai" | "logs" | "settings";
+export type StudioView = "create" | "expressions" | "editor" | "finalize" | "library" | "identities" | "models" | "civitai" | "logs" | "settings";
 
 export interface ConnectionSettings {
   mode: "local" | "remote";

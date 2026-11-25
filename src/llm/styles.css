@@ -235,3 +235,6 @@
 @keyframes llm-model-refresh { to { transform:rotate(360deg); } }
 @media(prefers-reduced-motion:reduce) { .llm-model-refresh.is-loading svg { animation:none; } }
 @media(max-width:760px) { .mobile-context-tabs--6 { grid-template-columns:repeat(6,minmax(0,1fr)); } }
+
+.enhancer-count { display:grid; grid-template-columns:minmax(0,1fr) minmax(80px,110px); gap:10px; }
+.enhancer-count[hidden] { display:none; }

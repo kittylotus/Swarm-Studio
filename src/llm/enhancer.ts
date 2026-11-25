@@ -1,8 +1,9 @@
 import { bindExpandedField, openExpandedDialog, openExpandedEditor } from '../ui/expanded-editor';
 import type { SwarmModel } from '../swarm/types';
 import { buildLlmRequest } from './contracts';
-import { compileMossLayout, defaultEnhancementTemplate, detectPromptMode, enhancementInstructions, enhancementMacroValues, promptModeHint, promptModes, type PromptMode } from './prompts';
+import { compileMossLayout, defaultEnhancementTemplate, detectPromptMode, resolvePromptMode, enhancementInstructions, enhancementMacroValues, promptModeHint, promptModes, type PromptMode } from './prompts';
 import { loadLlmSettings } from './settings';
+import { escapeIdentityQualifiers, parseVisibleCount, reinforceVisibleCount, stripAestheticScores } from './tag-prompt';
 import { streamEnhancement } from './transport';
 import { loadPromptMemory, savePromptMemory, openPromptStash } from './prompt-memory';
 import './styles.css';
@@ -35,6 +36,7 @@ export function openPromptEnhancer(host: EnhancerHost): void {
         <button type="button" class="ghost-button enhancer-system" data-system aria-haspopup="dialog">System prompt<span data-system-edited hidden>Edited</span></button>
       </div>
       <div class="field"><span id="enhancer-input-label">Your prompt or instruction</span><textarea data-input aria-labelledby="enhancer-input-label" rows="3"></textarea></div>
+      <div class="enhancer-count" data-count-controls hidden><label class="field"><span>Visible count (optional)</span><input data-count placeholder="2boys, 1girl" maxlength="80" /></label><label class="field"><span>Strength</span><select data-count-strength><option value="0">Off</option><option value="1">Unweighted</option><option value="1.15">1.15×</option><option value="1.25">1.25×</option><option value="1.5" selected>1.5×</option><option value="1.75">1.75×</option><option value="2">2×</option></select></label></div>
       <section class="enhancer-thought-card" data-thought-card data-phase="idle">
         <button type="button" class="enhancer-thought-toggle" data-thought-toggle aria-expanded="false" aria-controls="enhancer-thought-body">
           <span class="enhancer-thought-charm" aria-hidden="true">✧</span>
@@ -73,6 +75,9 @@ export function openPromptEnhancer(host: EnhancerHost): void {
   const systemEdited = dialog.querySelector<HTMLElement>('[data-system-edited]')!;
   const run = dialog.querySelector<HTMLButtonElement>('[data-run]')!;
   const apply = dialog.querySelector<HTMLButtonElement>('[data-apply]')!;
+  const countInput = dialog.querySelector<HTMLInputElement>('[data-count]')!;
+  const countStrength = dialog.querySelector<HTMLSelectElement>('[data-count-strength]')!;
+  const countControls = dialog.querySelector<HTMLElement>('[data-count-controls]')!;
   const settings = loadLlmSettings();
   const memory = loadPromptMemory();
   const systemEdits = new Map<PromptMode, string>(Object.entries(memory.edits) as [PromptMode, string][]);
@@ -93,6 +98,9 @@ export function openPromptEnhancer(host: EnhancerHost): void {
   const defaultSystemPrompt = () => defaultEnhancementTemplate;
   const syncControls = () => {
     const streaming = controller !== null;
+    const resolved = resolvePromptMode(mode, host.model);
+    countControls.hidden = !['anima', 'anima-aesthetic', 'illustrious'].includes(resolved);
+    countInput.disabled = countStrength.disabled = streaming;
     run.textContent = streaming ? 'Stop' : hasResult ? 'Enhance again' : 'Enhance';
     run.className = streaming ? 'danger-soft' : resultIsCurrent ? 'secondary-button' : 'primary-button';
     run.disabled = !streaming && !input.value.trim();
@@ -114,6 +122,8 @@ export function openPromptEnhancer(host: EnhancerHost): void {
   };
 
   input.addEventListener('input', invalidateResult);
+  countInput.addEventListener('input', invalidateResult);
+  countStrength.addEventListener('change', invalidateResult);
   output.addEventListener('input', syncControls);
   modeSelect.addEventListener('change', () => {
     mode = modeSelect.value as PromptMode;
@@ -228,7 +238,17 @@ export function openPromptEnhancer(host: EnhancerHost): void {
     if (!resultIsCurrent || controller) return;
     try {
       const layout = mode === 'moss-layout';
-      const prompt = layout ? compileMossLayout(output.value.trim(), host.width, host.height) : output.value.trim();
+      let prompt = layout ? compileMossLayout(output.value.trim(), host.width, host.height) : output.value.trim();
+      if (!countControls.hidden) {
+        prompt = escapeIdentityQualifiers(prompt);
+        if (resolvePromptMode(mode, host.model) === "anima-aesthetic") prompt = stripAestheticScores(prompt);
+        const result = reinforceVisibleCount(prompt, countInput.value, Number(countStrength.value));
+        if (result.diagnostic && result.prompt === prompt && !result.diagnostic.startsWith('Explicit count:') && countInput.value.trim()) {
+          // Existing weights are intentional. Conflicts and invalid counts are shown for review.
+          if (!result.diagnostic.startsWith('Existing deliberate')) throw new Error(result.diagnostic);
+        }
+        prompt = result.prompt;
+      }
       if (!prompt) throw new Error('The enhanced prompt is empty.');
       if (!host.apply(prompt, layout)) throw new Error('The prompt or canvas changed while enhancing. Close and enhance again to preserve those edits.');
       dialog.close();
@@ -255,7 +275,10 @@ export function openPromptEnhancer(host: EnhancerHost): void {
     syncControls();
 
     try {
-      const request = buildLlmRequest(settings, enhancementInstructions(mode, host.model, host.width, host.height, settings.customInstructions, systemEdits.get(mode) ?? defaultSystemPrompt()), input.value);
+      const count = !countControls.hidden && Number(countStrength.value) && countInput.value.trim() ? parseVisibleCount(countInput.value) : null;
+      if (!countControls.hidden && Number(countStrength.value) && countInput.value.trim() && !count) throw new Error('Enter exact unweighted count tags such as 2boys, 1girl.');
+      const system = enhancementInstructions(mode, host.model, host.width, host.height, settings.customInstructions, systemEdits.get(mode) ?? defaultSystemPrompt());
+      const request = buildLlmRequest(settings, system, count ? `${input.value}\n\nExplicit visible count: ${count.tags}. Keep all these characters visible and omit off-screen identities. Studio applies the count weight separately.` : input.value);
       await streamEnhancement(request, active.signal, delta => {
         if (!dialog.open || active.signal.aborted) return;
         const reasoning = delta.kind === 'thinking';

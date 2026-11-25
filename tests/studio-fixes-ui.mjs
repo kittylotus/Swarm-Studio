@@ -120,7 +120,7 @@ try {
     const chooseIdentity=page.getByRole('button',{name:'Choose saved identity',exact:true});
     const identityPicker=page.getByRole('dialog',{name:'Choose saved identity'});
     const subject=page.getByLabel('Character & framing');
-    await openExpressionSettings(page, 'Identity');
+    await openExpressionSettings(page, 'Character');
     await chooseIdentity.click();
     await identityPicker.screenshot({path:`test-results/studio-fixes/expression-identity-${viewport.width}.png`});
     await identityPicker.getByRole('button',{name:/^Subject 0 LoRAs · Identity LoRA × 0.65$/}).click();
@@ -142,7 +142,7 @@ try {
     assert.equal(await page.getByRole('img',{name:'Character reference'}).count(),0);
     assert.equal(await chooseIdentity.evaluate(button=>document.activeElement===button),true);
     assert.deepEqual(await page.evaluate(()=>app.store.state.draft.loras),[]);
-    await openExpressionSettings(page, 'Generate');
+    await openExpressionSettings(page, 'Rendering');
     await page.locator('[data-setting="engine"]').selectOption('text');
     await closeExpressionSettings(page);
     await page.evaluate(()=>{
@@ -160,7 +160,7 @@ try {
       [['anime/one-lora.safetensors',1],['root-lora.safetensors',.45]]);
     await page.evaluate(()=>{app.expressionStudio=null;app.render();});
     await page.waitForSelector('[data-setting="engine"]',{state:'attached'});
-    await openExpressionSettings(page, 'Identity');
+    await openExpressionSettings(page, 'Character');
     await chooseIdentity.waitFor();
     assert.equal(await subject.inputValue(),'preset subject');
     assert.ok(await page.getByRole('checkbox',{name:'Use LoRAs from saved identity'}).isChecked());

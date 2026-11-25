@@ -24,7 +24,7 @@ try{
  for(const viewport of [{width:1440,height:1000},{width:782,height:893},{width:390,height:844},{width:320,height:640}]){
   const context=await browser.newContext({viewport}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/__inspect`);await page.waitForFunction(()=>window.ready);
-  assert.equal(await page.locator('.inspector-actions').evaluate(node=>getComputedStyle(node).display),'grid');
+  assert.equal(await page.locator('.inspector-actions').evaluate(node=>getComputedStyle(node).display),'flex');
   await page.getByRole('button',{name:'Review versions',exact:true}).click();
   assert.equal(await page.locator('.inspector-versions li').count(),4);
   assert.equal(await page.locator('.version-connectors path').count(),3);
@@ -66,5 +66,5 @@ try{
   await page.reload();await page.waitForFunction(()=>window.ready);assert.equal(await page.locator('[data-keep-final]').isChecked(),true);
   assert.equal(await page.evaluate(()=>app.retentionQueue().length),1);assert.deepEqual(errors,[]);await context.close();
  }
- console.log('Inspector action grid, parent/branch navigation, opt-in persistent review queue, failed decode, mobile overflow: PASS');
+ console.log('Inspector action rail, parent/branch navigation, opt-in persistent review queue, failed decode, mobile overflow: PASS');
 }finally{await browser?.close();await server.close();}

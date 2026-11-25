@@ -1,5 +1,7 @@
 import type { SwarmGenerationRequest, SwarmModel, SwarmParamDefinition } from '../swarm/types';
 import { createId } from '../id.ts';
+import { detectPromptMode } from '../llm/prompts.ts';
+import { escapeIdentityQualifiers, stripAestheticScores } from '../llm/tag-prompt.ts';
 import { cloneLoraStack } from '../lora/stack.ts';
 import type { LoraStackItem } from '../types';
 import { normalizeRecipe, type PipelineStage, type ProcessingRecipe } from './processing.ts';
@@ -43,6 +45,12 @@ export interface SheetProject {
     engine: SheetEngine;
     model: string;
     subject: string;
+    outfit: string;
+    temperament: string;
+    renderingPrompt: string;
+    useStylePreset: boolean;
+    despill: boolean;
+    despillColor: 'green' | 'blue';
     negative: string;
     reference: string;
     referenceName: string;
@@ -100,17 +108,22 @@ const expressions: Array<[
     ['Excited', 'excited expression, eager smile, wide eyes', { smile: 1, eyebrow: 8, aaa: 15 }], ['Tender', 'tender affectionate expression, gentle eyes, small smile', { smile: .4 }],
 ];
 export function expressionTiles(count = 12): ExpressionTile[] { return (count === 6 ? [0, 1, 4, 6, 8, 10].map(index => expressions[index]!) : expressions.slice(0, count)).map(([name, prompt, motion]) => ({ id: createId(), name, prompt, enabled: true, locked: false, seedOffset: 0, motion: { ...emptyMotion(), ...motion }, image: '', path: '', seed: -1, error: '' })); }
-export function defaultSheet(): SheetProject { return { version: 2, autoDeleteDrafts: false, name: 'Character expressions', style: 'semireal', engine: 'ipadapter', model: '', subject: 'one character, head and shoulders portrait, facing camera, consistent hairstyle and outfit, soft studio lighting, plain background', negative: 'different person, multiple people, duplicate face, text, watermark, cropped head, deformed face, blurry', reference: '', referenceName: '', width: 768, height: 768, steps: 24, cfg: 5.5, seed: 123456, sampler: 'euler', scheduler: 'normal', adapter: 'PLUS (high strength)', animaEmbedded: false, animaClip: 'qwen_3_06b_base.safetensors', animaVae: 'qwen_image_vae.safetensors', animaAdapter: 'anima_ref_adapter_v2_r64.safetensors', animaGuidance: 4.5, animaStrength: 1, animaEnd: 1, weight: .65, start: 0, end: .8, denoise: .55, useLoras: false, columns: 4, gutter: 24, labels: true, background: '#f4f0eb', tiles: expressionTiles(), refine: normalizeRecipe({ mode: 'builtin' }), backgroundRemoval: normalizeRecipe({ mode: 'builtin' }) }; }
+export function defaultSheet(): SheetProject { return { version: 2, autoDeleteDrafts: false, name: 'Character expressions', style: 'semireal', engine: 'ipadapter', model: '', outfit: '', temperament: '', renderingPrompt: '', useStylePreset: true, despill: false, despillColor: 'green', subject: 'one character, head and shoulders portrait, facing camera, consistent hairstyle and outfit, soft studio lighting, plain background', negative: 'different person, multiple people, duplicate face, text, watermark, cropped head, deformed face, blurry', reference: '', referenceName: '', width: 768, height: 768, steps: 24, cfg: 5.5, seed: 123456, sampler: 'euler', scheduler: 'normal', adapter: 'PLUS (high strength)', animaEmbedded: false, animaClip: 'qwen_3_06b_base.safetensors', animaVae: 'qwen_image_vae.safetensors', animaAdapter: 'anima_ref_adapter_v2_r64.safetensors', animaGuidance: 4.5, animaStrength: 1, animaEnd: 1, weight: .65, start: 0, end: .8, denoise: .55, useLoras: false, columns: 4, gutter: 24, labels: true, background: '#f4f0eb', tiles: expressionTiles(), refine: normalizeRecipe({ mode: 'builtin' }), backgroundRemoval: normalizeRecipe({ mode: 'builtin' }) }; }
 export function isAdapterModel(model: SwarmModel): boolean { return /stable-diffusion-xl|sdxl|stable-diffusion-v1|sd1|sd15/i.test([model.architecture, model.compat_class].join(' ')); }
 export function advertisedValues(params: SwarmParamDefinition[], id: string): string[] { return (params.find(p => p.id === id)?.values ?? []).map(v => typeof v === 'string' ? v : String(v.value ?? v.name ?? '')).filter(Boolean); }
-export function expressionPrompt(project: SheetProject, tile: ExpressionTile): string {
+export function expressionPrompt(project: SheetProject, tile: ExpressionTile, model?: SwarmModel): string {
     const styles = { semireal: 'semirealistic character portrait, natural skin shading, detailed expressive eyes', realistic: 'photorealistic portrait, natural skin texture, subtle realistic facial muscles', illustrated: 'illustrated character portrait, expressive face, clean detailed rendering' };
-    if (project.engine === 'anima') return [project.subject, tile.prompt].filter(Boolean).join(', ');
-    return [project.subject, styles[project.style], tile.prompt].filter(Boolean).join(', ');
+    const family = detectPromptMode(model ?? {name:project.model});
+    const anima = project.engine === 'anima' || family === 'anima' || family === 'anima-aesthetic';
+    const tagModel = anima || family === 'illustrious';
+    const style = anima || project.useStylePreset === false ? '' : styles[project.style];
+    const prompt = [project.subject, project.outfit, project.temperament, project.renderingPrompt, style, tile.prompt].map(v => v?.trim()).filter(Boolean).join(', ');
+    const normalized = tagModel ? escapeIdentityQualifiers(prompt) : prompt;
+    return family === "anima-aesthetic" ? stripAestheticScores(normalized) : normalized;
 }
-export function expressionRequest(project: SheetProject, tile: ExpressionTile, params: SwarmParamDefinition[]): SwarmGenerationRequest {
+export function expressionRequest(project: SheetProject, tile: ExpressionTile, params: SwarmParamDefinition[], model?: SwarmModel): SwarmGenerationRequest {
     const seed = (Math.trunc(project.seed) + tile.seedOffset) % 2147483647;
-    const request: SwarmGenerationRequest = { model: project.model, prompt: expressionPrompt(project, tile), negativeprompt: project.negative, width: project.width, height: project.height, steps: project.steps, cfgscale: project.cfg, seed, sampler: project.sampler, scheduler: project.scheduler, images: 1, batchsize: 1, imageformat: 'PNG' };
+    const request: SwarmGenerationRequest = { model: project.model, prompt: expressionPrompt(project, tile, model), negativeprompt: project.negative, width: project.width, height: project.height, steps: project.steps, cfgscale: project.cfg, seed, sampler: project.sampler, scheduler: project.scheduler, images: 1, batchsize: 1, imageformat: 'PNG' };
     if (!project.model && project.engine !== 'liveportrait')
         throw new Error('Choose a checkpoint.');
     if (project.engine === 'ipadapter' || project.engine === 'hybrid') {
@@ -280,5 +293,5 @@ export function normalizeSheet(raw: unknown): SheetProject {
         if (width && height && width / height >= 1 / 6 && width / height <= 6)
             d.linkedRatio = r.linkedRatio;
     }
-    return { ...d, autoDeleteDrafts: r.autoDeleteDrafts === true, refine: recipe('refine'), backgroundRemoval: recipe('backgroundRemoval'), name: str('name').slice(0, 120), subject: str('subject').slice(0, 20000), negative: str('negative').slice(0, 20000), model: str('model'), reference, referenceName: str('referenceName'), style: ['semireal', 'realistic', 'illustrated'].includes(str('style')) ? str('style') as SheetStyle : d.style, engine: ['ipadapter', 'anima', 'liveportrait', 'hybrid', 'img2img', 'text'].includes(str('engine')) ? str('engine') as SheetEngine : d.engine, adapter: str('adapter'), animaEmbedded: r.animaEmbedded === true, animaClip: str('animaClip'), animaVae: str('animaVae'), animaAdapter: str('animaAdapter'), animaGuidance: num('animaGuidance', 0, 20), animaStrength: num('animaStrength', 0, 2), animaEnd: num('animaEnd', 0, 1), sampler: str('sampler'), scheduler: str('scheduler'), width: Math.round(num('width', 256, 1536) / 64) * 64, height: Math.round(num('height', 256, 1536) / 64) * 64, steps: Math.round(num('steps', 1, 100)), cfg: num('cfg', 1, 20), seed: Math.round(num('seed', 0, 2147483646)), weight: num('weight', 0, 2), start: num('start', 0, 1), end: num('end', 0, 1), denoise: num('denoise', 0, 1), columns: Math.round(num('columns', 1, 8)), gutter: Math.round(num('gutter', 0, 100)), background: /^#[0-9a-f]{6}$/i.test(str('background')) ? str('background') : d.background, labels: r.labels !== false, useLoras: r.useLoras === true, tiles: Array.isArray(r.tiles) ? r.tiles.slice(0, 48).map(normalizeTile) : d.tiles };
+    return { ...d, outfit: str('outfit').slice(0, 4000), temperament: str('temperament').slice(0, 2000), renderingPrompt: str('renderingPrompt').slice(0, 4000), useStylePreset: r.useStylePreset !== false, despill: r.despill === true, despillColor: r.despillColor === 'blue' ? 'blue' : 'green', autoDeleteDrafts: r.autoDeleteDrafts === true, refine: recipe('refine'), backgroundRemoval: recipe('backgroundRemoval'), name: str('name').slice(0, 120), subject: str('subject').slice(0, 20000), negative: str('negative').slice(0, 20000), model: str('model'), reference, referenceName: str('referenceName'), style: ['semireal', 'realistic', 'illustrated'].includes(str('style')) ? str('style') as SheetStyle : d.style, engine: ['ipadapter', 'anima', 'liveportrait', 'hybrid', 'img2img', 'text'].includes(str('engine')) ? str('engine') as SheetEngine : d.engine, adapter: str('adapter'), animaEmbedded: r.animaEmbedded === true, animaClip: str('animaClip'), animaVae: str('animaVae'), animaAdapter: str('animaAdapter'), animaGuidance: num('animaGuidance', 0, 20), animaStrength: num('animaStrength', 0, 2), animaEnd: num('animaEnd', 0, 1), sampler: str('sampler'), scheduler: str('scheduler'), width: Math.round(num('width', 256, 1536) / 64) * 64, height: Math.round(num('height', 256, 1536) / 64) * 64, steps: Math.round(num('steps', 1, 100)), cfg: num('cfg', 1, 20), seed: Math.round(num('seed', 0, 2147483646)), weight: num('weight', 0, 2), start: num('start', 0, 1), end: num('end', 0, 1), denoise: num('denoise', 0, 1), columns: Math.round(num('columns', 1, 8)), gutter: Math.round(num('gutter', 0, 100)), background: /^#[0-9a-f]{6}$/i.test(str('background')) ? str('background') : d.background, labels: r.labels !== false, useLoras: r.useLoras === true, tiles: Array.isArray(r.tiles) ? r.tiles.slice(0, 48).map(normalizeTile) : d.tiles };
 }

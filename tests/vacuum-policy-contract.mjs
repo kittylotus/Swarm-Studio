@@ -38,3 +38,5 @@ const split={lumi:{mode:'stages',stages:['inline_illustration']}};
 assert.deepEqual(review([lumiInline,standaloneInline],split).map(r=>r.status),['candidate','protected'],'Lumi stage selection never leaks into standalone');
 assert.equal(review([lumiInline],split,{favorites:new Set(['raw/7.png'])})[0].status,'protected');
 assert.equal(review([lumiInline],{lumi:{mode:'stages',stages:[]}})[0].status,'protected');
+assert.equal(review([file(1,'upscale_result'),file(2,'segmentation_result',1)],{upscaleSources:true})[0].status,'protected','a selection mask does not supersede its source');
+assert.equal(review([file(1,'expression_draft'),file(2,'segmentation_result',1)])[0].status,'protected','expression source is not replaced by segmentation');

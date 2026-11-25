@@ -22,6 +22,8 @@ export interface SavedProcessingWorkflow {
 export interface ProcessingBackend {
     upscaleModels: string[];
     backgroundReady: boolean;
+    textSegmentationReady?: boolean;
+    yoloSegmentationReady?: boolean;
 }
 export interface ProcessingSource {
     image: string;

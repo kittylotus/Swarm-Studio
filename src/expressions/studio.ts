@@ -15,6 +15,7 @@ import { circleHelpIcon, openExpressionHelp } from './help';
 import { expressionFailure } from './errors';
 import { defaultSheet, normalizeSheet, expressionTiles, emptyMotion, motionLimits, expressionRequest, livePortraitWorkflow, ipAdapterWorkflow, advertisedValues, isAdapterModel, imageForStage, recordStageImage, type SheetProject, type ExpressionTile, type NodeSchema, type ExpressionMotion } from './pipeline';
 import { pendingStages, processingLabels, processingRequest, readProcessingImage, type PipelineStage, type ProcessingStage } from './processing';
+import { despillImage } from '../editor/despill';
 import { bindProcessingFields, resolveProcessing, type ProcessingChoices, type ProcessingHost } from './processing-ui';
 import type { ExpressionLora } from './loras';
 import type { SwarmGenerationRequest, SwarmModel, SwarmParamDefinition } from '../swarm/types';
@@ -44,7 +45,7 @@ export interface ExpressionHost {
 }
 const stageLabels = { generate: 'Generate', ...processingLabels };
 const stageActions = { generate: 'Render missing', refine: 'Refine selected', background: 'Remove backgrounds' };
-const settingsTabs = { identity: 'Identity', generate: 'Generate', layout: 'Layout' } as const;
+const settingsTabs = { identity: 'Character', generate: 'Rendering', layout: 'Layout' } as const;
 type SettingsTab = keyof typeof settingsTabs;
 const animaAssets = [
     ['Text encoder', 'animaClip', 'CLIPLoader', 'clip_name'],
@@ -243,16 +244,21 @@ export class ExpressionStudio {
    <div class="expression-layout" id="expression-stage-panel" role="tabpanel" aria-labelledby="expression-tab-${stage}">
    <aside class="expression-controls" aria-label="Expression settings">
     ${generatingScreen ? `<div class="expression-settings-tabs" role="tablist" aria-label="Expression settings tabs">${Object.entries(settingsTabs).map(([key, label]) => `<button type="button" class="secondary-button" role="tab" id="expression-settings-tab-${key}" aria-controls="expression-settings-${key}" data-settings-tab="${key}">${label}</button>`).join('')}</div>
-    <section class="expression-section" id="expression-settings-identity" data-settings-group="identity"><div class="expression-section-head"><b>Identity</b>${this.bridge.identitySources ? `<button type="button" class="secondary-button" data-command="pick-identity" aria-haspopup="dialog" ${disabled}>Choose saved identity</button>` : ''}</div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
+    <section class="expression-section" id="expression-settings-identity" data-settings-group="identity"><div class="expression-section-head"><b>Character</b>${this.bridge.identitySources ? `<button type="button" class="secondary-button" data-command="pick-identity" aria-haspopup="dialog" ${disabled}>Choose saved identity</button>` : ''}</div><label class="field"><span>Project name</span><input data-setting="name" value="${esc(p.name)}" maxlength="120" ${disabled}/></label>
     <div class="expression-reference">${p.reference ? `<img src="${esc(p.reference)}" alt="Character reference"/><span>${esc(p.referenceName)}</span>` : `<div class="expression-reference-empty"><b>＋</b><span>Add a face reference</span><small>Front-facing, neutral expression, clear eyes</small></div>`}</div>
     <div class="expression-button-row"><button type="button" data-command="upload-reference" class="secondary-button" ${disabled}>Upload portrait</button>${this.bridge.browseReference ? `<button type="button" data-command="browse-reference" class="secondary-button" ${disabled}>Browse Library</button>` : ''}<button type="button" data-command="clear-reference" class="ghost-button" ${disabled}>Clear</button><input data-reference type="file" accept="image/png,image/jpeg,image/webp" hidden ${disabled}/></div><p class="helper-copy">Reference is resized to at most 1024 px and stored with this project. IPAdapter uses it to guide identity; LivePortrait edits the face directly.</p>
     <div class="field"><span><label for="expression-identity-subject">Character & framing</label></span><textarea id="expression-identity-subject" rows="4" data-setting="subject" data-expand-editor ${disabled}>${esc(p.subject)}</textarea></div>
+    <div class="field"><span><label for="expression-outfit">Outfit</label></span><textarea id="expression-outfit" rows="3" data-setting="outfit" data-expand-editor ${disabled}>${esc(p.outfit)}</textarea></div>
+    <div class="field"><span><label for="expression-temperament">Expressive temperament</label></span><textarea id="expression-temperament" rows="2" data-setting="temperament" placeholder="e.g. restrained expressions, composed body language; or bubbly expressions, expressive posing" data-expand-editor ${disabled}>${esc(p.temperament)}</textarea></div>
+    <p class="helper-copy">Specify stable appearance, one coherent outfit and the range of body language here. Leave fixed emotions and gestures to the individual expression cards. A reference is optional in Prompt only mode.</p>
     <div class="field"><span><label for="expression-identity-negative">Avoid</label></span><textarea id="expression-identity-negative" rows="3" data-setting="negative" data-expand-editor ${disabled}>${esc(p.negative)}</textarea></div>
     <label class="check-row"><input data-setting="useLoras" type="checkbox" ${p.useLoras ? 'checked' : ''} ${disabled}/>${p.savedIdentityLoras ? 'Use LoRAs from saved identity' : 'Use enabled LoRAs from the composer'}</label></section>
     <section class="expression-section" id="expression-settings-generate" data-settings-group="generate">
+    <div class="field"><span><label for="expression-rendering-prompt">Rendering & style prompt</label></span><textarea id="expression-rendering-prompt" rows="3" data-setting="renderingPrompt" data-expand-editor ${disabled}>${esc(p.renderingPrompt)}</textarea></div>
     <details class="expression-disclosure expression-reference-settings" data-generate-disclosure="reference" ${this.generateDisclosures.has('reference') ? 'open' : ''}><summary>${referenceIcon}Reference${disclosureChevronSvg}</summary><div class="expression-reference-fields">
     <label class="field"><span id="expression-engine-label">Render method</span><select data-setting="engine" aria-labelledby="expression-engine-label" ${disabled}>${[['ipadapter', 'IPAdapter · reference-guided'], ['anima', 'Anima Ref Adapter · reference-guided'], ['liveportrait', 'LivePortrait · facial edit'], ['hybrid', 'IPAdapter → LivePortrait · two passes'], ['img2img', 'Image-to-image · redraw'], ['text', 'Prompt only · baseline']].map(([v, label]) => `<option value="${v}" ${p.engine === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
-    <label class="field" data-pipeline-part="style" ${p.engine === 'anima' ? 'hidden' : ''}><span id="expression-style-label">Style preset</span><select data-setting="style" aria-labelledby="expression-style-label" ${disabled}>${[['semireal', 'Semirealism'], ['realistic', 'Realistic portrait'], ['illustrated', 'Illustrated / anime']].map(([v, label]) => `<option value="${v}" ${p.style === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+    <label class="check-row" data-pipeline-part="style-toggle" ${p.engine === 'anima' || isAnimaModel(models.find(m=>m.name===p.model) ?? {name:p.model}) ? 'hidden' : ''}><input data-setting="useStylePreset" type="checkbox" ${p.useStylePreset ? 'checked' : ''} ${disabled}/>Append built-in style preset</label>
+    <label class="field" data-pipeline-part="style" ${p.engine === 'anima' || isAnimaModel(models.find(m=>m.name===p.model) ?? {name:p.model}) ? 'hidden' : ''}><span id="expression-style-label">Style preset</span><select data-setting="style" aria-labelledby="expression-style-label" ${disabled}>${[['semireal', 'Semirealism'], ['realistic', 'Realistic portrait'], ['illustrated', 'Illustrated / anime']].map(([v, label]) => `<option value="${v}" ${p.style === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
     <div data-pipeline-part="checkpoint" ${p.engine === 'liveportrait' ? 'hidden' : ''}><label class="field"><span>${['ipadapter', 'hybrid'].includes(p.engine) ? 'SDXL / SD1.5 checkpoint' : p.engine === 'anima' ? 'Anima model' : 'Checkpoint'}</span><select data-setting="model" ${disabled}>${models.map(m => `<option value="${esc(m.name)}" ${m.name === p.model ? 'selected' : ''}>${esc(m.title || m.name)}</option>`).join('') || '<option value="">No compatible checkpoint loaded</option>'}</select></label></div><p data-pipeline-part="portrait" class="helper-copy" ${p.engine !== 'liveportrait' ? 'hidden' : ''}>Works best on detectable portrait faces. Uses the ExpressionEditor sliders in each card; character prompts and LoRAs are not used.</p>
     <div data-pipeline-part="adapter" ${['ipadapter', 'hybrid'].includes(p.engine) ? '' : 'hidden'}><label class="field"><span>Adapter</span><select data-setting="adapter" ${disabled}>${options(adapters, p.adapter)}</select></label><div class="expression-fields">${field('Identity strength', 'weight', 0, 2, .05)}${field('Start', 'start', 0, 1, .05)}${field('End', 'end', 0, 1, .05)}</div><p class="helper-copy">Start at 0.65 strength / 0.8 end. Lower strength or end if the reference expression is overpowering the requested emotion. Anima is not compatible with these SDXL adapters.</p></div>
     <div class="anima-controls" data-pipeline-part="anima" ${p.engine === 'anima' ? '' : 'hidden'}>
@@ -283,6 +289,7 @@ export class ExpressionStudio {
     ` : `<section class="expression-section" data-processing-stage="${stage}">
         <div class="expression-section-head"><b>${stageLabels[stage]} settings</b></div>
         <div class="processing-fields" data-processing-fields></div>
+        ${stage === 'background' ? `<div class="expression-despill"><label class="check-row"><input data-setting="despill" type="checkbox" ${p.despill ? 'checked' : ''} ${disabled}/>Despill after background removal</label><label class="field"><span>Spill color</span><select data-setting="despillColor" ${disabled}><option value="green" ${p.despillColor === 'green' ? 'selected' : ''}>Green screen</option><option value="blue" ${p.despillColor === 'blue' ? 'selected' : ''}>Blue screen</option></select></label><p class="helper-copy">Local 70% edge cleanup. Preserves alpha; the cleaned image is stored with this expression project, not written over the Swarm original.</p></div>` : ''}
     </section>`}
    </aside>
    <section class="expression-board" aria-labelledby="expression-stage-heading">
@@ -547,10 +554,11 @@ export class ExpressionStudio {
         if (!root) return;
         const p = this.project;
         const adapter = ['ipadapter', 'hybrid'].includes(p.engine);
-        const visible: Record<string, boolean> = { checkpoint: p.engine !== 'liveportrait', portrait: p.engine === 'liveportrait', adapter, style: p.engine !== 'anima', anima: p.engine === 'anima', img2img: p.engine === 'img2img', motion: ['liveportrait', 'hybrid'].includes(p.engine) };
-        root.querySelectorAll<HTMLElement>('[data-pipeline-part]').forEach(part => { part.hidden = !visible[part.dataset.pipelinePart!]; });
         const models = this.modelsForEngine(p.engine);
         if (!models.some(model => model.name === p.model)) p.model = models[0]?.name ?? '';
+        const usesAnima = p.engine === 'anima' || isAnimaModel(models.find(m=>m.name===p.model) ?? {name:p.model});
+        const visible: Record<string, boolean> = { checkpoint: p.engine !== 'liveportrait', portrait: p.engine === 'liveportrait', adapter, style: !usesAnima, 'style-toggle': !usesAnima, anima: p.engine === 'anima', img2img: p.engine === 'img2img', motion: ['liveportrait', 'hybrid'].includes(p.engine) };
+        root.querySelectorAll<HTMLElement>('[data-pipeline-part]').forEach(part => { part.hidden = !visible[part.dataset.pipelinePart!]; });
         const select = root.querySelector<HTMLSelectElement>('[data-setting="model"]');
         if (select) {
             select.innerHTML = models.map(model => `<option value="${esc(model.name)}" ${model.name === p.model ? 'selected' : ''}>${esc(model.title || model.name)}</option>`).join('') || '<option value="">No compatible checkpoint loaded</option>';
@@ -667,7 +675,7 @@ export class ExpressionStudio {
             this.project = normalizeSheet({ ...previous, [key]: value }); // Normalize numeric bounds without changing existing card identities.
             this.project.tiles = previous.tiles;
             this.persist();
-            if (key === 'engine') this.syncPipelineControls();
+            if (key === 'engine' || key === 'model') this.syncPipelineControls();
             if (key === 'engine' || key === 'model' || key.startsWith('anima')) this.syncSetupFeedback();
             if (key === 'columns')
                 this.host?.querySelector<HTMLElement>('.expression-grid')?.style.setProperty('--expression-columns', String(Math.min(this.project.columns, 4)));
@@ -1019,6 +1027,7 @@ export class ExpressionStudio {
                 this.referenceRequest++;
                 Object.assign(project, {
                     subject: (identity.positivePrompt.trim() || defaults.subject).slice(0, 20000),
+                    outfit: '', temperament: '',
                     negative: (identity.negativePrompt.trim() || defaults.negative).slice(0, 20000),
                     model: checkpoint?.name ?? project.model,
                     reference,
@@ -1169,7 +1178,7 @@ export class ExpressionStudio {
         return animaWorkflow(project, tile, this.schema, loras, this.bridge.models().find(model => model.name === project.model));
     }
     private async generateTile(snapshot: SheetProject, tile: ExpressionTile, loras: ExpressionLora[], transient: boolean, signal: AbortSignal) {
-        const request = expressionRequest(snapshot, tile, this.bridge.params());
+        const request = expressionRequest(snapshot, tile, this.bridge.params(), this.bridge.models().find(model => model.name === snapshot.model));
         const hasProcessing = pendingStages('completed', 'generate', snapshot.refine, snapshot.backgroundRemoval).some(next => this.availableStages().includes(next));
         tagStudioRequest(request, hasProcessing || snapshot.engine === 'hybrid' ? 'expression_draft' : 'expression_final', this.bridge.provenance?.(tile.path));
         if (snapshot.engine === 'anima')
@@ -1289,6 +1298,22 @@ export class ExpressionStudio {
                         signal.throwIfAborted();
                         recordStageImage(tile, stage, output);
                         this.persist();
+                        if (stage === 'background' && snapshot.despill) {
+                            try {
+                                this.status = `${index + 1} / ${queue.length} · ${tile.name} · Despill`;
+                                this.draw();
+                                const cleaned = await despillImage(output.image, snapshot.despillColor, .7, signal);
+                                signal.throwIfAborted();
+                                if (cleaned !== output.image) {
+                                    tile.variants = [...(tile.variants ?? []), { ...output, stage: 'background' as const }].slice(-8);
+                                    recordStageImage(tile, 'background', { image: cleaned, seed: output.seed, path: '' });
+                                }
+                                this.persist();
+                            } catch (error) {
+                                // Keep the cutout usable, including when local cleanup is interrupted.
+                                throw new Error(`Cutout retained; despill failed: ${error instanceof Error ? error.message : String(error)}`);
+                            }
+                        }
                     }
                     if (snapshot.autoDeleteDrafts && !this.nextStages(tile, snapshot).length) {
                         tile.variants = [];

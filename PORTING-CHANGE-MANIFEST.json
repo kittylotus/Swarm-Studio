@@ -1,0 +1,132 @@
+{
+  "baseline": "Standalone-Studio-0.63.21-Inspect-UI3-CUMULATIVE.zip",
+  "release": "Finalize / Smart Selection",
+  "changes": [
+    {
+      "path": "docs/finalize-workspace.md",
+      "status": "added",
+      "before_sha256": null,
+      "after_sha256": "79db06bf637e7d07fd07dc2aa3ac2fc96b35856e150138c19121cb5487167ae9"
+    },
+    {
+      "path": "package.json",
+      "status": "modified",
+      "before_sha256": "2a8f0acf9916508ca971bc5650d3b73828323ce1f56143f21ffc432309332edb",
+      "after_sha256": "c1c86e60446c3293b6fb3be367bd5e1a46d720f38efcd74db4360e6310a94b77"
+    },
+    {
+      "path": "src/app.ts",
+      "status": "modified",
+      "before_sha256": "fc03d2b09f457b9696ecd71390af3a9095b3dc32fd53a95ae9f48b3a3e28170a",
+      "after_sha256": "a3b7cbcb37388ad19be73d40694339cd5b9523fbb4cbfc151e5c2178cc94e6e8"
+    },
+    {
+      "path": "src/editor/icons.ts",
+      "status": "modified",
+      "before_sha256": "935e98aba52dab5463cf74423b9e882990b1603136751b754f492a946fa9b0e1",
+      "after_sha256": "8bc6e6708a5011a894d4e6a1ed9e67fbc22fe6b6bc10ac1e7a5719ae57cda49d"
+    },
+    {
+      "path": "src/editor/segmentation.ts",
+      "status": "added",
+      "before_sha256": null,
+      "after_sha256": "c0109b63def9c7c46334fadc4197a72668a0d5415b28b9586369478b7c774522"
+    },
+    {
+      "path": "src/expressions/editor.ts",
+      "status": "modified",
+      "before_sha256": "b92cdcf8f1588a8b527d06a5c683a3aaf1defc0d4b459e73c0e6b6cfe7bfcc71",
+      "after_sha256": "86439ab9e371ec02ce22a444c53664332a0efb8d7d3fc17954241a442c5d8a55"
+    },
+    {
+      "path": "src/expressions/processing-ui.ts",
+      "status": "modified",
+      "before_sha256": "dcf0d757f7ca68d851511bf82b08a278b254c3c96a20c96563f1c51893f24980",
+      "after_sha256": "f0d2689a3fc58c758da5945a31d415ec52c8f6c1aff20f2ddd78e0ebb961116d"
+    },
+    {
+      "path": "src/expressions/processing.ts",
+      "status": "modified",
+      "before_sha256": "8462ea511fbb62cf43db6e9ca1680aa13e2b766bc1ab5706df32971006dbac16",
+      "after_sha256": "875b7b6898b9d6a4fc3951bed4d9f352225cf898c15799f19d16cc4df97d8210"
+    },
+    {
+      "path": "src/finalize/pipeline.ts",
+      "status": "added",
+      "before_sha256": null,
+      "after_sha256": "2476835337562c9e8be7a3fccf1fca0af79d1bc54bd8c8c13e1b40ca6d995dad"
+    },
+    {
+      "path": "src/finalize/styles.css",
+      "status": "added",
+      "before_sha256": null,
+      "after_sha256": "cc6d8e9de2af7c0cbf9798c1220a5fb3f53614915ac98952efe835ce1075885c"
+    },
+    {
+      "path": "src/finalize/workspace.ts",
+      "status": "added",
+      "before_sha256": null,
+      "after_sha256": "bebb7a5934d318609e7a0a064605438e17f29b4777bd971ea222ac006e923b1d"
+    },
+    {
+      "path": "src/library/provenance.ts",
+      "status": "modified",
+      "before_sha256": "8a71b9977b41cf50772004513e8515f936d39f41cbe8d3b42f65c7fc198efef2",
+      "after_sha256": "341d1ae58200af55467ae646c7fb07a617b0e3a701a931ed1e9ae83442acf773"
+    },
+    {
+      "path": "src/library/store.ts",
+      "status": "modified",
+      "before_sha256": "8cd6d0ded1b2d30d23e2ed605fb61a238869bb449e60b6b07e3f92c4e153537c",
+      "after_sha256": "b9785c3d0ced4df806435a5002214ed40c678c2213380529c515645615606be2"
+    },
+    {
+      "path": "src/library/vacuum.ts",
+      "status": "modified",
+      "before_sha256": "de069296f03a6d6a05fc89cf7766fef54a33c373a728507e9d2d622f5990d07f",
+      "after_sha256": "1bb8b829fbfdc558f9c347ed4e4d82a0b543e34e895e5329d8927aac377ffcc2"
+    },
+    {
+      "path": "src/styles.css",
+      "status": "modified",
+      "before_sha256": "4c495c3ef7b2e8487f34228eab92f93ca34cd46c8e00235cd3c3f395c97da86c",
+      "after_sha256": "0e563aa282c1359d11e5edf6e488cfff852b987839cb7fc90f7d228e2bc41a40"
+    },
+    {
+      "path": "src/types.ts",
+      "status": "modified",
+      "before_sha256": "50b0ffa63f6963b77498fd6fa6ad2dd723e5463485fea54629166fdf253895b8",
+      "after_sha256": "197eb1ef1f97197ac220f74ce65b76965730ed80dad9aa66c1937c053e837e18"
+    },
+    {
+      "path": "tests/finalize-contract.mjs",
+      "status": "added",
+      "before_sha256": null,
+      "after_sha256": "6ea6fba0193796bb1cf53777ee52a257262731d3d24bf557dcd368002c196a21"
+    },
+    {
+      "path": "tests/finalize-offline-app.py",
+      "status": "added",
+      "before_sha256": null,
+      "after_sha256": "1b2e48e9c313fc3635b584ff741a1a7006dc80e11f9022bfa3327156c11f136e"
+    },
+    {
+      "path": "tests/vacuum-policy-contract.mjs",
+      "status": "modified",
+      "before_sha256": "f6a27a298ef69653dfe22e56e43173888593c6b3c7a54af58ff51da094c4b936",
+      "after_sha256": "cdf6ba6f9172474cc6ada9ba072374e4dcfc63969b26fde39fdc17d0ac4dda58"
+    }
+  ],
+  "deleted": [],
+  "validation": {
+    "typecheck": "pass",
+    "contracts": "34/34 pass",
+    "mocked_app_browser": [
+      1440,
+      390,
+      320
+    ],
+    "production_build": "blocked: vite not installed",
+    "live_swarm": "not tested"
+  }
+}

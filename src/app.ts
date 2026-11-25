@@ -24,7 +24,7 @@ import { assetVersions, versionGraph, outputTag, retentionEntry, type RetentionE
 import { LUMI_LIBRARY_VIEW, isLumiSwarmOutput, defaultVacuumView, vacuumViewRows } from "./library/views";
 import { scanSwarmHistory } from "./library/inventory";
 import { classifyVacuum, withManualReview, vacuumPolicy, originVacuumPolicy, parseLumiSnapshot, type LumiSnapshot, type VacuumRow, type VacuumContext } from "./library/vacuum";
-import { tagStudioRequest, readStudioMetadata } from "./library/provenance";
+import { tagStudioRequest, readStudioMetadata, type StudioMetadata } from "./library/provenance";
 import "./library/vacuum.css";
 import { normalizeLibraryFolderSelection, shouldAutoSyncLibraryHistory } from "./library/session";
 import { loraCompatibility, modelFamily, serverModelKey } from "./lora/compat";
@@ -72,6 +72,9 @@ import { imageMetadata } from "./swarm/image-metadata";
 import { generationTiming, historyCreatedAt, compareOutputDates } from "./swarm/history-metadata";
 import { recoverPresetParameters } from "./swarm/preset-recovery";
 import type { EditorImage, ImageEditor } from "./expressions/editor";
+import { FinalizeWorkspace } from "./finalize/workspace";
+import type { FinalizeImage } from "./finalize/pipeline";
+import { editIcon, editTransferIcon } from "./editor/icons";
 import { nodeChoices } from "./expressions/anima";
 import { BIREFNET_MODEL, processingLabels, readProcessingImage, type ProcessingStage } from "./expressions/processing";
 import type { ProcessingHost } from "./expressions/processing-ui";
@@ -156,19 +159,19 @@ const swapSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true">
 const batchSelectSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m7.5 12 3 3 6-7"/></svg>`;
 const folderTreeSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2h10v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10h18"/></svg>`;
 const externalLinkSvg = `<svg class="external-link-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M10 14 20 4"/><path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"/></svg>`;
-const inpaintBrushSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 4.5 5 5"/><path d="M12 7 4.8 14.2c-.8.8-1.3 1.9-1.3 3V20h2.8c1.1 0 2.2-.5 3-1.3L16.5 11"/><path d="M6 18c1.2 0 2 .8 2 2"/></svg>`;
-const inpaintEraseSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 21-4-4L15.5 4.5a2.1 2.1 0 0 1 3 0l1 1a2.1 2.1 0 0 1 0 3L7 21Z"/><path d="m11 9 5 5"/><path d="M7 21h13"/></svg>`;
-const inpaintRectSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="1.5"/><path d="M8 5v14M16 5v14" opacity=".45"/></svg>`;
-const inpaintLassoSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 8c0-3-3-5-7-5S5 5 5 8s3 5 7 5c3.5 0 6.5-1.5 7-4"/><path d="M12 13c0 4-1 7-4 7-2 0-3-1-3-2.5S6.2 15 8 15c2.5 0 4 2 4 4"/></svg>`;
-const inpaintPanSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 11V6a2 2 0 0 1 4 0v4-6a2 2 0 0 1 4 0v6-4a2 2 0 0 1 4 0v7c0 5-3 8-8 8h-1c-2.5 0-4.5-1.3-6-3.2L2.8 15a2 2 0 0 1 3-2.6L8 14"/></svg>`;
-const inpaintUndoSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 8-5 4 5 4"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg>`;
-const inpaintRedoSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 8 5 4-5 4"/><path d="M19 12h-8a6 6 0 0 0-6 6"/></svg>`;
-const inpaintInvertSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16Z"/></svg>`;
+const inpaintBrushSvg = editIcon("brush", true);
+const inpaintEraseSvg = editIcon("erase", true);
+const inpaintRectSvg = editIcon("rectangle", true);
+const inpaintLassoSvg = editIcon("lasso", true);
+const inpaintPanSvg = editIcon("hand", true);
+const inpaintUndoSvg = editIcon("undo", true);
+const inpaintRedoSvg = editIcon("redo", true);
+const inpaintInvertSvg = editIcon("invert", true);
 const inpaintClearSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m7 7 1 13h8l1-13"/></svg>`;
-const inpaintImportSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`;
-const inpaintExportSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>`;
+const inpaintImportSvg = editTransferIcon("upload", true);
+const inpaintExportSvg = editTransferIcon("download", true);
 const inpaintSettingsSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10"/><path d="M18 7h2"/><circle cx="16" cy="7" r="2"/><path d="M4 17h2"/><path d="M10 17h10"/><circle cx="8" cy="17" r="2"/><path d="M4 12h4"/><path d="M12 12h8"/><circle cx="10" cy="12" r="2"/></svg>`;
-const inpaintHelpSvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.7 2c-1 .7-1.5 1.1-1.5 2"/><path d="M12 17h.01"/></svg>`;
+const inpaintHelpSvg = editIcon("help", true);
 function prettyName(path: unknown): string {
   const safe = String(path ?? "");
   const leaf = safe.split(/[\\/]/).pop() ?? safe;
@@ -388,7 +391,8 @@ interface PendingGenerationApproval {
 export class StudioApp {
   private expressionStudio: ExpressionStudio | null = null;
   private imageEditor: ImageEditor | null = null;
-  private libraryImagePicker: { view: "editor" | "identities" | "expressions"; title: string; apply?: (output: OutputRecord) => void | Promise<void> } | null = null;
+  private finalizeWorkspace: FinalizeWorkspace | null = null;
+  private libraryImagePicker: { view: "editor" | "identities" | "expressions" | "finalize"; title: string; apply?: (output: OutputRecord) => void | Promise<void> } | null = null;
   private pendingEditorImage: { id: string; inpaint: boolean } | null = null;
 
   private readonly root: HTMLElement;
@@ -421,6 +425,7 @@ export class StudioApp {
   private libraryRenderLimit = 240;
   private libraryBatchBusy = false;
   private inspectorVersionsOpen = false;
+  private inspectorDetailsOpen = false;
   private vacuumLiveState: LumiLinkState | null = null;
   private vacuumLiveMode = false;
   private vacuumLiveFresh = false;
@@ -622,7 +627,9 @@ export class StudioApp {
   private externalImageDragActive = false;
   private externalImageDragDepth = 0;
   private inpaintOpen = false;
+  private inpaintInspector: "mask" | "prompt" = "mask";
   private inpaintSourceId = "";
+  private inpaintParentMetadata: StudioMetadata | null = null;
   private inpaintApplyingResult = false;
   private inpaintSourceUrl = "";
   private inpaintSourceDataUrl = "";
@@ -693,8 +700,8 @@ export class StudioApp {
       this.loraFolderDepth = folderDepth(localStorage.getItem("swarm-studio-lora-folder-depth"), 0);
       this.checkpointFolderDepth = folderDepth(localStorage.getItem("swarm-studio-checkpoint-folder-depth"), 20);
       this.libraryFiltersDocked = localStorage.getItem("swarm-studio-library-browse-docked") === "true";
-      const miniX = Number(localStorage.getItem("swarm-studio-generation-mini-x"));
-      const miniY = Number(localStorage.getItem("swarm-studio-generation-mini-y"));
+      const miniX = Number(localStorage.getItem("swarm-studio-generation-mini-x") ?? NaN);
+      const miniY = Number(localStorage.getItem("swarm-studio-generation-mini-y") ?? NaN);
       this.generationMiniX = Number.isFinite(miniX) && miniX >= 0 ? miniX : null;
       this.generationMiniY = Number.isFinite(miniY) && miniY >= 0 ? miniY : null;
       const blockedAuthors = JSON.parse(localStorage.getItem("swarm-studio-civitai-blocked-authors") || "[]");
@@ -825,12 +832,49 @@ export class StudioApp {
     if (shouldLoadCivitai) void this.searchCivitai(true);
   }
 
+  private setInpaintTool(tool: typeof this.inpaintTool): void {
+    this.inpaintTool=tool;
+    this.root.querySelectorAll<HTMLButtonElement>("[data-inpaint-tool]").forEach(button=>{
+      const active=button.dataset.inpaintTool===tool;button.classList.toggle("is-active",active);button.setAttribute("aria-pressed",String(active));
+    });
+    this.root.querySelector(".inpaint-canvas-shell")?.classList.toggle("is-pan",tool==="pan");
+    const hint=this.root.querySelector<HTMLElement>("[data-inpaint-tool-hint]");
+    if(hint)hint.textContent=({paint:"Paint the area to edit",erase:"Erase parts of the mask",rect:"Drag a rectangle over the edit area",lasso:"Trace a freeform region",pan:"Drag to move · wheel or pinch to zoom"})[tool];
+    this.drawInpaintCanvas();
+  }
+
+  private handleInpaintKeybind(event: KeyboardEvent): boolean {
+    if(this.inpaintAwaitingResult||this.inpaintApplyingResult||this.inpaintResultReviewOpen||this.inpaintSettingsOpen||this.inpaintHelpOpen||this.inpaintPreviewStroke)return false;
+    const key=event.key.toLowerCase(),mod=event.ctrlKey||event.metaKey;
+    const click=(selector:string)=>this.root.querySelector<HTMLButtonElement>(selector)?.click();
+    let action:(()=>void)|undefined;
+    if(mod&&!event.altKey&&(key==="z"||key==="y"))action=()=>click(`[data-action="inpaint-${key==="y"||event.shiftKey?"redo":"undo"}"]`);
+    else if(mod&&!event.altKey&&key==="enter")action=()=>click('[data-action="generate-inpaint"]');
+    else if(!mod&&!event.altKey){
+      const tool=({b:"paint",e:"erase",r:"rect",l:"lasso",h:"pan"} as const)[key as "b"|"e"|"r"|"l"|"h"];
+      if(tool&&!event.shiftKey)action=()=>this.setInpaintTool(tool);
+      else if(key==="0")action=()=>click('[data-action="reset-inpaint-view"]');
+      else if(key==="?")action=()=>click('[data-action="open-inpaint-help"]');
+      else if(key==="escape")action=()=>click('[data-edit="close-inpaint"]');
+      else if(key==="["||key==="]")action=()=>{
+        const slider=this.root.querySelector<HTMLInputElement>("#inpaint-brush-size");if(slider){slider.value=String(clamp(this.inpaintBrushSize+(key==="]"?6:-6),4,256));slider.dispatchEvent(new Event("input",{bubbles:true}));}
+      };
+    }
+    if(!action)return false;
+    event.preventDefault();event.stopPropagation();if(!event.repeat||key==="["||key==="]")action();return true;
+  }
+
   private handleStudioKeybind(event: KeyboardEvent): void {
-    if (!this.keybindsEnabled || event.defaultPrevented || event.repeat) return;
+    if (event.defaultPrevented || event.isComposing) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     const editing = Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
     const blockingDialog = Boolean(document.querySelector("dialog[open]")) || Boolean(this.root.querySelector("[role='dialog'][aria-modal='true'], .modal-backdrop:not([hidden]), .download-backdrop:not([hidden]), .quicknav-overlay.is-open"));
     if (blockingDialog) return;
+    // Editor shortcuts are local editing controls, independent of optional navigation bindings.
+    if (this.view === "editor" && !editing && (!target || target === document.body || target === document.documentElement || target.closest(".editor-workspace"))) {
+      if (this.inpaintOpen ? this.handleInpaintKeybind(event) : this.imageEditor?.handleKeydown(event)) return;
+    }
+    if (!this.keybindsEnabled || event.repeat) return;
     for (const definition of STUDIO_KEYBIND_ACTIONS) {
       if (!keybindMatches(this.keybinds[definition.id], event)) continue;
       if (editing && !definition.allowWhenEditing) return;
@@ -1223,7 +1267,7 @@ export class StudioApp {
   }
 
   private studioUpdateHasPendingWork(): boolean {
-    return this.generating || Boolean(this.expressionStudio?.busy) || Boolean(this.imageEditor?.busy) || this.inpaintAwaitingResult || this.pendingGenerationApprovals.length > 0 || Boolean(this.inpaintPendingResultRecord);
+    return this.generating || Boolean(this.expressionStudio?.busy) || Boolean(this.imageEditor?.busy || this.finalizeWorkspace?.busy) || this.inpaintAwaitingResult || this.pendingGenerationApprovals.length > 0 || Boolean(this.inpaintPendingResultRecord);
   }
 
   private renderStudioUpdatePopup(): string {
@@ -1775,6 +1819,15 @@ export class StudioApp {
   }
 
   private render(): void {
+    const previousInspector = this.root.querySelector<HTMLElement>("[data-inspector-panel]");
+    const inspectorScroll = previousInspector ? {
+      id: previousInspector.dataset.outputId,
+      pane: previousInspector.dataset.pane,
+      top: previousInspector.querySelector(".inspector-grid")?.scrollTop ?? 0,
+      content: previousInspector.querySelector(".inspector-content")?.scrollTop ?? 0,
+      graphTop: previousInspector.querySelector(".version-map-viewport")?.scrollTop ?? 0,
+      graphLeft: previousInspector.querySelector(".version-map-viewport")?.scrollLeft ?? 0,
+    } : null;
     const previousProfileManager = this.root.querySelector<HTMLElement>("[data-lora-profile-manager-dialog]");
     const focusedProfileControl = previousProfileManager?.contains(document.activeElement) ? document.activeElement : null;
     const profileFocusAttribute = focusedProfileControl?.getAttributeNames().find(name => name === "id")
@@ -1799,7 +1852,7 @@ export class StudioApp {
     const dateFoldersScrollTop = this.root.querySelector(".library-date-folders")?.scrollTop;
     this.applyTheme();
     this.nativeImageObserver?.disconnect();
-    const compactHeader = ["create", "expressions", "editor"].includes(this.view) ? "" : `
+    const compactHeader = ["create", "expressions", "editor", "finalize"].includes(this.view) ? "" : `
       <header class="section-header">
         <div><p class="eyebrow">${this.viewLabel()}</p><h1>${this.viewTitle()}</h1></div>
       </header>`;
@@ -1813,7 +1866,8 @@ export class StudioApp {
           <nav class="utility-nav utility-nav--desktop" aria-label="Studio sections">
             ${this.navButton("create", "Create", tabCreateSvg)}
             ${this.navButton("expressions", "Expressions", tabExpressionsSvg)}
-            ${this.navButton("editor", "Editor", inpaintBrushSvg)}
+            ${this.navButton("editor", "Editing", inpaintBrushSvg)}
+            ${this.navButton("finalize", "Finalize", editIcon("wand").replace("<svg ",'<svg class="tab-svg" '))}
             ${this.navButton("library", "Library", tabLibrarySvg)}
             ${this.navButton("identities", "Identities", tabIdentitiesSvg)}
             ${this.navButton("models", "Models", tabModelsSvg)}
@@ -1886,6 +1940,15 @@ export class StudioApp {
     }
     this.bindGlobalEvents();
     this.bindViewEvents();
+    const inspector = this.root.querySelector<HTMLElement>("[data-inspector-panel]");
+    if (inspector && inspectorScroll && (inspector.dataset.outputId === inspectorScroll.id || (inspector.dataset.pane === "versions" && inspectorScroll.pane === "versions"))) {
+      const grid = inspector.querySelector<HTMLElement>(".inspector-grid");
+      const content = inspector.querySelector<HTMLElement>(".inspector-content");
+      const graph = inspector.querySelector<HTMLElement>(".version-map-viewport");
+      if (grid) grid.scrollTop = inspectorScroll.top;
+      if (content && inspector.dataset.pane === inspectorScroll.pane) content.scrollTop = inspectorScroll.content;
+      if (graph) { graph.scrollTop = inspectorScroll.graphTop; graph.scrollLeft = inspectorScroll.graphLeft; }
+    }
     const profileManager = this.root.querySelector<HTMLElement>("[data-lora-profile-manager-dialog]");
     if (profileManager) {
       const sameProfile = profileManagerState?.selectedId === this.loraProfileManagerSelectedId;
@@ -1927,7 +1990,7 @@ export class StudioApp {
 
   private mobileSection(): "create" | "visuals" | "library" | "settings" {
     if (this.view === "create") return "create";
-    if (this.view === "expressions" || this.view === "editor" || this.view === "identities" || this.view === "models" || this.view === "civitai") return "visuals";
+    if (this.view === "expressions" || this.view === "editor" || this.view === "finalize" || this.view === "identities" || this.view === "models" || this.view === "civitai") return "visuals";
     if (this.view === "library") return "library";
     return "settings";
   }
@@ -1947,10 +2010,11 @@ export class StudioApp {
         <button class="${pane === "output" ? "is-active" : ""}" data-mobile-pane="output"><span>${tabOutputSvg}</span>Output</button>
         <button class="${pane === "tune" ? "is-active" : ""}" data-mobile-pane="tune"><span>${tabTuneSvg}</span>Tune</button>`;
     } else if (section === "visuals") {
-      count = 5;
+      count = 6;
       tabs = `<button class="${this.view === "identities" ? "is-active" : ""}" data-nav="identities"><span>${tabIdentitiesSvg}</span>Identities</button>
         <button class="${this.view === "expressions" ? "is-active" : ""}" data-nav="expressions"><span>${tabExpressionsSvg}</span>Expressions</button>
-        <button class="${this.view === "editor" ? "is-active" : ""}" data-nav="editor"><span>${inpaintBrushSvg}</span>Editor</button>
+        <button class="${this.view === "editor" ? "is-active" : ""}" data-nav="editor"><span>${inpaintBrushSvg}</span>Editing</button>
+        <button class="${this.view === "finalize" ? "is-active" : ""}" data-nav="finalize"><span>${editIcon("wand").replace("<svg ",'<svg class="tab-svg" ')}</span>Finalize</button>
         <button class="${this.view === "models" ? "is-active" : ""}" data-nav="models"><span>${tabModelsSvg}</span>Models</button>
         <button class="${this.view === "civitai" ? "is-active" : ""}" data-nav="civitai"><span>${tabSearchSvg}</span>CivitAI</button>`;
     } else if (section === "library") {
@@ -1973,7 +2037,7 @@ export class StudioApp {
     const current = this.mobileSection();
     const items: Array<{ id: "create" | "visuals" | "library" | "settings"; label: string; icon: string; hint: string }> = [
       { id: "create", label: "Create", icon: tabCreateSvg, hint: "Generation · Output · Tune" },
-      { id: "visuals", label: "Visuals", icon: tabVisualsSvg, hint: "Identities · Expressions · Editor · Models · CivitAI" },
+      { id: "visuals", label: "Visuals", icon: tabVisualsSvg, hint: "Identities · Expressions · Editing · Finalize · Models · CivitAI" },
       { id: "library", label: "Library", icon: tabLibrarySvg, hint: "Outputs and folders" },
       { id: "settings", label: "Settings", icon: tabSettingsSvg, hint: "Logs · Connection · Backends · Appearance · Keybinds" },
     ];
@@ -2036,7 +2100,7 @@ export class StudioApp {
       return;
     }
     if (section === "visuals") {
-      const options: StudioView[] = ["identities", "expressions", "editor", "models", "civitai"];
+      const options: StudioView[] = ["identities", "expressions", "editor", "finalize", "models", "civitai"];
       const current = Math.max(0, options.indexOf(this.view));
       this.view = options[(current + direction + options.length) % options.length]!;
       this.lastNonSettingsView = this.view;
@@ -2071,7 +2135,8 @@ export class StudioApp {
     return ({
       create: "Prompt workspace",
       expressions: "Reference-guided character expression sheets",
-      editor: "Image generation and editing",
+      editor: "Image editing",
+      finalize: "Processing workspace",
       library: "Your Swarm assets",
       identities: "Reusable visual profiles",
       models: "Server inventory",
@@ -2085,7 +2150,8 @@ export class StudioApp {
     return ({
       create: "Create",
       expressions: "Expression studio",
-      editor: "Image editor",
+      editor: "Editing",
+      finalize: "Finalize",
       library: "Library",
       identities: "Identity library",
       models: "Models and LoRAs",
@@ -2309,36 +2375,46 @@ export class StudioApp {
     const variationStrength = this.metadataValue(params, "variationseedstrength", "variation seed strength");
     const timing = this.outputTiming(output);
     const loras = output.loras.filter((item) => item.enabled).map((item) => `${prettyName(item.title || item.name)} · ${item.weight}`).join("\n") || "No LoRAs recorded.";
+    const outputId = escapeHtml(output.id);
+    const pane = this.inspectorVersionsOpen ? "versions" : this.inspectorDetailsOpen ? "details" : "prompt";
+    const copySvg = `<svg class="action-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>`;
+    const size = output.width > 0 && output.height > 0 ? `${output.width} × ${output.height}` : "Dimensions not recorded";
     return `
       <div class="inspector-backdrop" data-action="close-inspector">
-        <section class="inspector" role="dialog" aria-modal="true" aria-label="Output inspector" data-inspector-panel>
-          <header><div><span class="panel-kicker">INSPECT</span><h2>${escapeHtml(prettyName(output.model) || "Swarm output")}</h2></div><div class="inspector-header-actions"><button class="primary-button" data-edit-output="${escapeHtml(output.id)}">Open in Editor</button><button class="icon-button" data-action="close-inspector" aria-label="Close inspector">×</button></div></header>
+        <section class="inspector" role="dialog" aria-modal="true" aria-label="Output inspector" data-inspector-panel data-output-id="${outputId}" data-pane="${pane}">
+          <header class="inspector-heading"><div><span class="panel-kicker">INSPECT</span><h2>${escapeHtml(prettyName(output.model) || "Swarm output")}</h2><small>${escapeHtml(size)}</small></div><div class="inspector-header-actions"><button type="button" class="icon-button" data-finalize-output="${outputId}" aria-label="Open in Finalize" title="Open in Finalize">${editIcon("wand",true)}</button><button type="button" class="primary-button inspector-edit" data-edit-output="${outputId}" aria-label="Open in Editing" title="Open in Editing">${editIcon("inpaint", true)}<span>Editing</span></button><button type="button" class="icon-button" data-action="close-inspector" aria-label="Close inspector">×</button></div></header>
           <div class="inspector-grid">
-            <div class="inspector-media"><img ${this.swarmImageAttributes(this.outputImageUrl(output))} alt="Swarm output" /></div>
+            <div class="inspector-visual">
+              <div class="inspector-media"><img ${this.swarmImageAttributes(this.outputImageUrl(output))} alt="Swarm output" /></div>
+              <div class="inspector-actions" role="group" aria-label="Image actions">
+                <button type="button" data-reuse-output="${outputId}" title="Reuse all settings" aria-label="Reuse all">${reuseSvg}<span>Reuse</span></button>
+                <button type="button" data-init-output="${outputId}" title="Use as init image" aria-label="Use as init">${initImageSvg}<span>As init</span></button>
+                <button type="button" data-inpaint-output="${outputId}" title="Open Inpaint in Editing" aria-label="Inpaint">${inpaintBrushSvg}<span>Inpaint</span></button>
+                <button type="button" data-nav="library" title="Open library" aria-label="Open library">${folderSvg}<span>Library</span></button>
+              </div>
+            </div>
             <div class="inspector-copy">
-              <div class="inspector-actions">
-                <button class="primary-button" data-reuse-output="${output.id}">Reuse all</button>
-                <button class="secondary-button" data-init-output="${output.id}">Use as init</button>
-                <button class="secondary-button" data-inpaint-output="${output.id}">Inpaint</button>
-                <button class="secondary-button" data-copy-resolved-prompt="${output.id}">Copy prompt</button>
-                <button class="secondary-button" data-nav="library">Open library</button>
-                <button class="secondary-button" data-review-versions aria-expanded="${this.inspectorVersionsOpen}" aria-controls="inspector-versions">Review versions</button>
+              <nav class="inspector-tabs" aria-label="Inspector sections">
+                <button type="button" data-inspector-section="prompt" aria-pressed="${pane === "prompt"}">Prompt</button>
+                <button type="button" data-inspector-section="details" aria-pressed="${pane === "details"}">Details</button>
+                <button type="button" data-review-versions aria-pressed="${pane === "versions"}" aria-expanded="${this.inspectorVersionsOpen}" ${this.inspectorVersionsOpen ? 'aria-controls="inspector-versions"' : ''} aria-label="Review versions">Versions</button>
+              </nav>
+              <div class="inspector-content" data-inspector-content>
+                ${pane === "prompt" ? `<section class="inspector-field"><header><h3>Resolved prompt</h3><button type="button" class="inspector-inline-action" data-copy-resolved-prompt="${outputId}" aria-label="Copy prompt" title="Copy resolved prompt">${copySvg}<span>Copy</span></button></header><pre class="inspector-prompt-text">${escapeHtml(resolvedPrompt || "No resolved prompt recorded.")}</pre></section>
+                <section class="inspector-field"><h3>Resolved negative</h3><pre class="inspector-prompt-text">${escapeHtml(resolvedNegative || "No negative prompt recorded.")}</pre></section>
+                <section class="inspector-field"><h3>LoRA stack</h3><pre class="inspector-prompt-text">${escapeHtml(loras)}</pre></section>` : pane === "details" ? `
+                <section class="inspector-field"><h3>Generation</h3><div class="metadata-facts metadata-facts--timing">
+                  <span><b>Total time</b><em>${this.formatDuration(timing.totalTimeMs)}</em></span>
+                  <span><b>Prepping</b><em>${this.formatDuration(timing.prepTimeMs)}</em></span>
+                  <span><b>Generating</b><em>${this.formatDuration(timing.generationTimeMs)}</em></span>
+                  <span><b>Seed</b><em>${Number.isFinite(resolvedSeed) ? resolvedSeed : "—"}</em></span>
+                  <span><b>Variation seed</b><em>${escapeHtml(String(variationSeed ?? "—"))}</em></span>
+                  <span><b>Variation strength</b><em>${escapeHtml(String(variationStrength ?? "—"))}</em></span>
+                </div></section>
+                <section class="inspector-field"><h3>Source request</h3><pre>${escapeHtml(JSON.stringify(output.request ?? {}, null, 2))}</pre></section>
+                <section class="inspector-field"><h3>Swarm metadata</h3><pre>${escapeHtml(metadata)}</pre></section>` : this.renderVersionReview(output)}
               </div>
-              ${this.renderVersionReview(output)}
-              ${this.renderRetentionPolicy()}
-              <div class="metadata-facts metadata-facts--timing">
-                <span><b>Total time</b><em>${this.formatDuration(timing.totalTimeMs)}</em></span>
-                <span><b>Prepping</b><em>${this.formatDuration(timing.prepTimeMs)}</em></span>
-                <span><b>Generating</b><em>${this.formatDuration(timing.generationTimeMs)}</em></span>
-                <span><b>Seed</b><em>${Number.isFinite(resolvedSeed) ? resolvedSeed : "—"}</em></span>
-                <span><b>Variation seed</b><em>${variationSeed ?? "—"}</em></span>
-                <span><b>Variation strength</b><em>${variationStrength ?? "—"}</em></span>
-              </div>
-              <section><span>Resolved prompt</span><pre>${escapeHtml(resolvedPrompt)}</pre></section>
-              <section><span>Resolved negative</span><pre>${escapeHtml(resolvedNegative)}</pre></section>
-              <section><span>LoRA stack</span><pre>${escapeHtml(loras)}</pre></section>
-              <section><span>Source request</span><pre>${escapeHtml(JSON.stringify(output.request ?? {}, null, 2))}</pre></section>
-              <section><span>Swarm metadata</span><pre>${escapeHtml(metadata)}</pre></section>
+              <footer class="inspector-retention">${this.renderRetentionPolicy()}</footer>
             </div>
           </div>
         </section>
@@ -2359,18 +2435,17 @@ export class StudioApp {
     const modelName = prettyName(this.inpaintSourceOutputContext?.model || this.store.state.draft.model) || "Source checkpoint";
     const stackCount = (this.inpaintSourceOutputContext?.loras ?? this.store.state.draft.loras).filter((item) => item.enabled).length;
     return `<section class="inpaint-editor" aria-label="Inpaint editor" data-inpaint-panel tabindex="-1">
-        <header class="inpaint-header">
-          <h2>Inpaint</h2>
+        <header class="inpaint-header" ${this.inpaintResultReviewOpen?"inert":""}>
+          <div class="inpaint-heading"><h2>Inpaint</h2><span>Paint a mask, then describe the change.</span></div>
           <div class="inpaint-header-actions">
             <div class="inpaint-source-actions" data-inpaint-source-actions></div>
             <button class="inpaint-round-action" data-action="open-inpaint-help" title="Inpaint help" aria-label="Inpaint help">${inpaintHelpSvg}</button>
             <button class="inpaint-round-action" data-action="open-inpaint-settings" title="Generation settings" aria-label="Generation settings">${inpaintSettingsSvg}</button>
-            <button class="ghost-button inpaint-reset-view" data-action="reset-inpaint-view">Reset view</button>
-            <button class="primary-button" data-action="generate-inpaint" ${this.generating || !loaded || !hasMask ? "disabled" : ""}>${this.generating && this.inpaintAwaitingResult ? "Generating…" : "Generate edit"}<b>✦</b></button>
+
           </div>
         </header>
         <div class="inpaint-layout" data-no-swipe>
-          <section class="inpaint-stage-shell panel">
+          <section class="inpaint-stage-shell panel" ${this.inpaintResultReviewOpen?"inert":""}>
             <div class="inpaint-stage-toolbar">
               <div class="inpaint-tools" role="toolbar" aria-label="Mask tools">
                 <button class="inpaint-tool-button ${this.inpaintTool === "paint" ? "is-active" : ""}" data-inpaint-tool="paint" title="Brush (B)" aria-label="Brush">${inpaintBrushSvg}</button>
@@ -2379,6 +2454,7 @@ export class StudioApp {
                 <button class="inpaint-tool-button ${this.inpaintTool === "lasso" ? "is-active" : ""}" data-inpaint-tool="lasso" title="Lasso (L)" aria-label="Lasso selection">${inpaintLassoSvg}</button>
                 <button class="inpaint-tool-button ${this.inpaintTool === "pan" ? "is-active" : ""}" data-inpaint-tool="pan" title="Pan (H)" aria-label="Pan">${inpaintPanSvg}</button>
               </div>
+              <div class="inpaint-view-controls"><button class="ghost-button inpaint-reset-view" data-action="reset-inpaint-view" title="Fit view (0)">Fit</button></div>
             </div>
             <div class="inpaint-canvas-shell ${this.inpaintTool === "pan" ? "is-pan" : ""}">
               <canvas id="inpaint-canvas"></canvas>
@@ -2388,10 +2464,10 @@ export class StudioApp {
                 <div class="inpaint-generation-status"><b data-inpaint-generation-label>${escapeHtml(this.generationMessage || "Preparing edit")}</b><span><i data-inpaint-generation-meter style="width:${Math.round(this.generationPercent * 100)}%"></i></span><small data-inpaint-generation-step>${this.generationStep ? `Step ${this.generationStep} / ${Math.max(1, this.inpaintConfigSteps)}` : "Waiting for sampler"}</small></div>
               </div>
             </div>
-            <div class="inpaint-stage-footer"><span>${escapeHtml(toolHints[this.inpaintTool])}</span><b>${this.inpaintShowMask ? "Mask visible" : "Mask hidden"} · zoom ${this.inpaintZoom.toFixed(2)}×</b></div>
+            <div class="inpaint-stage-footer"><span data-inpaint-tool-hint>${escapeHtml(toolHints[this.inpaintTool])}</span><b data-inpaint-view-state>${this.inpaintShowMask ? "Mask visible" : "Mask hidden"} · zoom ${this.inpaintZoom.toFixed(2)}×</b></div>
             <div class="inpaint-post-actions" role="toolbar" aria-label="Mask actions">
-              <button class="inpaint-action-icon" data-action="inpaint-undo" ${this.inpaintStrokes.length ? "" : "disabled"} title="Undo" aria-label="Undo">${inpaintUndoSvg}</button>
-              <button class="inpaint-action-icon" data-action="inpaint-redo" ${this.inpaintRedo.length ? "" : "disabled"} title="Redo" aria-label="Redo">${inpaintRedoSvg}</button>
+              <button class="inpaint-action-icon" data-action="inpaint-undo" ${this.inpaintStrokes.length ? "" : "disabled"} title="Undo mask (Ctrl/Cmd+Z)" aria-label="Undo mask">${inpaintUndoSvg}</button>
+              <button class="inpaint-action-icon" data-action="inpaint-redo" ${this.inpaintRedo.length ? "" : "disabled"} title="Redo mask (Ctrl/Cmd+Shift+Z)" aria-label="Redo mask">${inpaintRedoSvg}</button>
               <button class="inpaint-action-icon ${this.inpaintInvert ? "is-active" : ""}" data-action="inpaint-invert" title="${this.inpaintInvert ? "Remove inversion" : "Invert mask"}" aria-label="${this.inpaintInvert ? "Remove inversion" : "Invert mask"}">${inpaintInvertSvg}</button>
               <button class="inpaint-action-icon" data-action="inpaint-clear" ${hasMask ? "" : "disabled"} title="Clear mask" aria-label="Clear mask">${inpaintClearSvg}</button>
               <span class="inpaint-action-spacer"></span>
@@ -2399,9 +2475,12 @@ export class StudioApp {
               <button class="inpaint-action-icon" data-action="export-inpaint-mask" ${hasMask && loaded ? "" : "disabled"} title="Export mask" aria-label="Export mask">${inpaintExportSvg}</button>
             </div>
           </section>
-          <aside class="inpaint-sidebar panel">
-            <section class="inpaint-control-group"><div class="section-minihead"><b>Mask</b><span data-inpaint-mask-count>${this.inpaintImportedMaskDataUrl ? "Imported + drawn" : `${this.inpaintStrokes.length} action${this.inpaintStrokes.length === 1 ? "" : "s"}`}</span></div>
-              <div class="field-grid field-grid--2 compact-fields">
+          <aside class="inpaint-sidebar panel" ${this.inpaintResultReviewOpen?"inert":""}>
+            <div class="inpaint-inspector-tabs" role="group" aria-label="Inpaint properties">${(["mask","prompt"] as const).map(tab=>`<button type="button" data-inpaint-inspector="${tab}" aria-pressed="${this.inpaintInspector===tab}">${tab==="mask"?"Mask":"Prompt"}</button>`).join("")}</div>
+            <div class="inpaint-inspector-scroll">
+            <section class="inpaint-control-group" data-inpaint-properties="mask" ${this.inpaintInspector!=="mask"?"hidden":""}><div class="section-minihead"><b>Mask properties</b><span data-inpaint-mask-count>${this.inpaintImportedMaskDataUrl ? "Imported + drawn" : `${this.inpaintStrokes.length} action${this.inpaintStrokes.length === 1 ? "" : "s"}`}</span></div>
+              <p class="inpaint-inspector-note">White regions are edited. Unmasked pixels remain the source for the rest of the image.</p>
+              <div class="field-grid field-grid--2 compact-fields inpaint-mask-fields">
                 <label class="range-field"><span>Brush size <b id="inpaint-brush-size-value">${Math.round(this.inpaintBrushSize)} px</b></span><input id="inpaint-brush-size" type="range" min="4" max="256" step="1" value="${this.inpaintBrushSize}" /></label>
                 <label class="range-field"><span>Mask opacity <b id="inpaint-mask-opacity-value">${Math.round(this.inpaintMaskOpacity * 100)}%</b></span><input id="inpaint-mask-opacity" type="range" min="0.08" max="0.8" step="0.01" value="${this.inpaintMaskOpacity}" /></label>
                 <label class="range-field"><span>Feather <b id="inpaint-feather-value">${Math.round(this.inpaintFeather)} px</b></span><input id="inpaint-feather" type="range" min="0" max="64" step="1" value="${this.inpaintFeather}" /></label>
@@ -2409,15 +2488,16 @@ export class StudioApp {
               </div>
               <div class="inpaint-toggle-row"><label class="tiny-toggle"><input id="inpaint-show-mask" type="checkbox" ${this.inpaintShowMask ? "checked" : ""}/><span>Show mask overlay</span></label><button class="ghost-button" data-action="reset-inpaint-mask-shaping" ${(this.inpaintFeather || this.inpaintExpand) ? "" : "disabled"}>Reset shaping</button></div>
             </section>
-            <section class="inpaint-control-group inpaint-prompt-group"><div class="section-minihead"><b>Prompt</b><button class="ghost-button compact-generation-settings" data-action="open-inpaint-settings">${inpaintSettingsSvg}<span>${this.inpaintConfigWidth}×${this.inpaintConfigHeight} · ${this.inpaintConfigSteps} steps</span></button></div>
-              <div class="metadata-facts inpaint-facts"><span><b>Checkpoint</b><em>${escapeHtml(modelName)}</em></span><span><b>LoRAs</b><em>${stackCount}</em></span><span><b>Creativity</b><em>${this.inpaintCreativity.toFixed(2)}</em></span></div>
+            <section class="inpaint-control-group inpaint-prompt-group" data-inpaint-properties="prompt" ${this.inpaintInspector!=="prompt"?"hidden":""}><div class="section-minihead"><b>Edit instructions</b><button class="ghost-button compact-generation-settings" data-action="open-inpaint-settings">${inpaintSettingsSvg}<span>${this.inpaintConfigWidth}×${this.inpaintConfigHeight} · ${this.inpaintConfigSteps} steps</span></button></div>
+              <div class="inpaint-source-summary"><span>Source checkpoint</span><strong title="${escapeHtml(modelName)}">${escapeHtml(modelName)}</strong><small>${stackCount} LoRAs · Creativity ${this.inpaintCreativity.toFixed(2)}</small></div>
               <label class="field"><span>Inpaint prompt</span><textarea id="inpaint-prompt" rows="8" placeholder="Describe only what should change…">${escapeHtml(this.inpaintPrompt)}</textarea></label>
-              <label class="field"><span>Negative prompt</span><textarea id="inpaint-negative" rows="5" placeholder="Things to avoid in the masked area…">${escapeHtml(this.inpaintNegativePrompt)}</textarea></label>
-            </section>
-            <div class="form-actions inpaint-form-actions"><button class="ghost-button" data-action="use-inpaint-result-as-init" ${this.store.state.outputs[0] ? "" : "disabled"}>Use latest as init</button><button class="primary-button" data-action="generate-inpaint" ${this.generating || !loaded || !hasMask ? "disabled" : ""}>${this.generating && this.inpaintAwaitingResult ? "Generating…" : "Generate edit"}</button></div>
+              <label class="field"><span>Negative prompt</span><textarea id="inpaint-negative" rows="4" placeholder="Things to avoid in the masked area…">${escapeHtml(this.inpaintNegativePrompt)}</textarea></label>
+              <button class="ghost-button inpaint-quiet-action" data-action="use-inpaint-result-as-init" ${this.store.state.outputs[0] ? "" : "disabled"}>Use latest as init</button>
+            </section></div>
+            <div class="inpaint-form-actions"><small data-inpaint-ready>${hasMask?"Mask ready":"Draw or import a mask"}</small><button class="primary-button" data-action="generate-inpaint" ${this.generating || !loaded || !hasMask || this.inpaintResultReviewOpen ? "disabled" : ""}>${this.generating && this.inpaintAwaitingResult ? "Generating…" : "Generate edit"}${inpaintBrushSvg}</button></div>
           </aside>
+          ${this.renderInpaintResultReview()}
         </div>
-        ${this.renderInpaintResultReview()}
         ${this.renderInpaintSettingsModal()}
         ${this.renderInpaintHelpModal()}
       </section>`;
@@ -2426,7 +2506,12 @@ export class StudioApp {
   private renderInpaintResultReview(): string {
     if (!this.inpaintResultReviewOpen || !this.inpaintPendingResultRecord) return "";
     const previewUrl = this.outputImageUrl(this.inpaintPendingResultRecord);
-    return `<div class="inpaint-result-review" role="status" aria-live="polite"><div class="inpaint-result-review-copy"><span class="panel-kicker">COMPLETE</span><b>Apply this edit?</b><small>Reject keeps the current base image and current mask so you can try again. Accept switches the editor to the new result and clears the old mask.</small></div><div class="inpaint-result-review-preview"><img ${this.swarmImageAttributes(previewUrl)} alt="Latest inpaint result preview" loading="eager" /></div><div class="inpaint-result-review-actions"><button class="ghost-button" data-action="dismiss-inpaint-result" title="Keep the current base image">× Keep current</button><button class="primary-button" data-action="apply-inpaint-result" title="Use this edit as the new base">✓ Use edit</button></div></div>`;
+    const beforeUrl = this.inpaintSourceDataUrl || this.inpaintSourceUrl;
+    return `<section class="inpaint-result-review" role="region" aria-label="Review inpaint result" data-review-view="after">
+      <header class="inpaint-review-header"><div><span class="panel-kicker">EDIT COMPLETE</span><h3>Review your edit</h3></div><span class="inpaint-review-note">Compare the working image with the new result.</span><div class="inpaint-review-switch" role="group" aria-label="Compare images"><button type="button" data-inpaint-review-view="before" aria-pressed="false">Before</button><button type="button" data-inpaint-review-view="after" aria-pressed="true">After</button></div></header>
+      <div class="inpaint-review-images"><figure data-review-image="before"><figcaption>Before <small>Working image</small></figcaption><div class="inpaint-result-review-preview"><img ${this.swarmImageAttributes(beforeUrl)} alt="Working image before Inpaint" loading="eager" /></div></figure><figure data-review-image="after"><figcaption>After <small>Generated edit</small></figcaption><div class="inpaint-result-review-preview"><img ${this.swarmImageAttributes(previewUrl)} alt="Latest inpaint result preview" loading="eager" /></div></figure></div>
+      <footer class="inpaint-review-footer"><p>Discard keeps your working image and mask. Use edit returns the result to Editing.</p><div class="inpaint-result-review-actions"><button class="ghost-button" data-action="dismiss-inpaint-result" ${this.inpaintApplyingResult?"disabled":""} title="Keep the current base image">Discard edit</button><button class="primary-button" data-action="apply-inpaint-result" ${this.inpaintApplyingResult?"disabled":""} title="Use this edit as the new base">${this.inpaintApplyingResult?"Applying…":"Use edit"}</button></div></footer>
+    </section>`;
   }
 
   private renderInpaintSettingsModal(): string {
@@ -2464,7 +2549,7 @@ export class StudioApp {
     if (!this.inpaintHelpOpen) return "";
     return `<div class="inpaint-submodal-backdrop" data-action="close-inpaint-help"><section class="inpaint-submodal inpaint-help-modal" data-inpaint-help-panel role="dialog" aria-modal="true" aria-label="Inpaint help">
       <header><div><span class="panel-kicker">INPAINT</span><h3>Quick help</h3></div><button class="icon-button" data-action="close-inpaint-help">×</button></header>
-      <div class="inpaint-help-grid"><section><b>Desktop</b><p>Ctrl/Cmd+Z undo · Shift+Ctrl/Cmd+Z redo · B brush · E erase · R rectangle · L lasso · H pan · [ and ] resize brush.</p></section><section><b>Mobile</b><p>One finger uses the active tool on the image. Two fingers always pan and zoom. Scroll the editor from any non-canvas surface.</p></section><section><b>Iteration</b><p>After a successful edit, Studio loads the newest result back into the editor and clears the old mask so you can keep refining.</p></section><section><b>Generation</b><p>The checkpoint, LoRAs, sampler defaults, and advanced values come from the source output. Open Generation settings to override size, steps, CFG, seed, sampler, scheduler, creativity, or mask engine for this edit session.</p></section></div>
+      <div class="inpaint-help-grid"><section><b>Desktop</b><p>Ctrl/Cmd+Z undo · Shift+Ctrl/Cmd+Z redo · B brush · E erase · R rectangle · L lasso · H pan · [ and ] resize brush · 0 fit · Ctrl/Cmd+Enter generate · Esc return to Editing.</p></section><section><b>Mobile</b><p>One finger uses the active tool on the image. Two fingers always pan and zoom. Scroll the editor from any non-canvas surface.</p></section><section><b>Iteration</b><p>Compare Before and After. Discard preserves the mask and prompt; Use edit returns the result to Editing.</p></section><section><b>Generation</b><p>The checkpoint, LoRAs, sampler defaults, and advanced values come from the source output. Open Generation settings to override size, steps, CFG, seed, sampler, scheduler, creativity, or mask engine for this edit session.</p></section></div>
       <footer><button class="primary-button" data-action="close-inpaint-help">Got it</button></footer>
     </section></div>`;
   }
@@ -2479,6 +2564,7 @@ export class StudioApp {
   private renderView(): string {
     switch (this.view) {
       case "create": return this.renderCreate();
+      case "finalize": return `<div id="finalize-host"></div>`;
       case "editor": return `<div class="editor-workspace"><div id="image-editor-host"></div>${this.renderInpaintEditor()}</div>`;
       case "expressions": return '<div id="expression-studio-host"></div>';
       case "library": return this.renderLibrary();
@@ -3555,7 +3641,7 @@ export class StudioApp {
   }
   private async maybeAutomaticCleanup():Promise<void> {
     const scope=this.client.historyScope,settings=this.readAutomaticSettings(scope),now=Date.now(),policyKey=JSON.stringify(this.readVacuumPolicy());
-    if(!settings.enabled||this.vacuumAutomaticBusy||this.vacuumOpen||!this.connected||this.vacuumDeleteBusy||this.vacuumScan||this.vacuumSizeScan||this.libraryBatchBusy||this.librarySyncing||this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||document.visibilityState!=='visible'||now-this.vacuumLastInteraction<60000||now-settings.lastAttemptAt<30*60000||!automaticProof(this.readCleanupRuns(),this.client.historyScope,policyKey))return;
+    if(!settings.enabled||this.vacuumAutomaticBusy||this.vacuumOpen||!this.connected||this.vacuumDeleteBusy||this.vacuumScan||this.vacuumSizeScan||this.libraryBatchBusy||this.librarySyncing||this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||this.finalizeWorkspace?.busy||document.visibilityState!=='visible'||now-this.vacuumLastInteraction<60000||now-settings.lastAttemptAt<30*60000||!automaticProof(this.readCleanupRuns(),this.client.historyScope,policyKey))return;
     const controller=new AbortController();this.vacuumAutomaticBusy=true;this.vacuumDeleteBusy=true;this.vacuumDeleteAbort=controller;this.libraryBatchBusy=true;
     try {
       this.writeAutomaticSettings({...settings,lastAttemptAt:now,message:'Checking old superseded sources…'},scope);
@@ -3581,14 +3667,14 @@ export class StudioApp {
     try {
       const [server, user, appendUser] = JSON.parse(current || "[]");
       const active = referencesFromStudioState(this.store.state, this.expressionStudio?.referenceState);
-      for (const id of [...(this.imageEditor?.referencedOutputIds || []), this.inpaintSourceId, this.inpaintPendingResultRecord?.id]) {
+      for (const id of [...(this.imageEditor?.referencedOutputIds || []), ...(this.finalizeWorkspace?.referencedOutputIds || []), this.inpaintSourceId, this.inpaintPendingResultRecord?.id]) {
         const output = this.store.state.outputs.find(output => output.id === id); if (output?.swarmSourcePath) refs.add(output.swarmSourcePath);
       }
       for (const raw of active) { const path = matchReferencePath(raw, server, user, { appendUser, studioOrigin: window.location.origin }); if (path) refs.add(path); }
     } catch { referencesComplete=false; }
     return {
       scope: current === this.vacuumScope ? current : "", now: Date.now(), complete: Boolean(this.vacuumScope) && current === this.vacuumScope,
-      activeJobs: this.generating || Boolean(this.expressionStudio?.busy || this.imageEditor?.busy),
+      activeJobs: this.generating || Boolean(this.expressionStudio?.busy || this.imageEditor?.busy || this.finalizeWorkspace?.busy),
       policy: this.readVacuumPolicy(),
       snapshot: this.vacuumSnapshot, favorites: this.vacuumFavorites, exclusions: this.vacuumExclusions, localReferences: refs, localAuditComplete: referencesComplete && this.branchChoicesReadable() && Boolean(this.vacuumLocalAudit?.complete),
     };
@@ -3638,7 +3724,7 @@ export class StudioApp {
       const key=origin==='lumiswarm'?'lumi':'standalone',o=originVacuumPolicy(p,origin);
       const check=(field:keyof typeof o,label:string)=>`<label class="vacuum-policy-choice"><input type="checkbox" data-vacuum-policy="${key}.${field}" ${o[field]?'checked':''} /><span>${label}</span></label>`;
       const stage=(value:string,label:string)=>`<label class="vacuum-policy-choice"><input type="checkbox" data-vacuum-stage="${value}" data-policy-origin="${key}" ${o.stages.includes(value)?'checked':''} /><span>${label}<small>${value}</small></span></label>`;
-      return `<section class="vacuum-origin-policy" aria-label="${origin==='lumiswarm'?'LumiSwarm':'Standalone'} lifecycle"><header><div><span class="vacuum-policy-kicker">${origin==='lumiswarm'?'LUMIVERSE COPIES':'STUDIO OUTPUTS'}</span><h4>${origin==='lumiswarm'?'LumiSwarm':'Standalone'}</h4></div><span>${o.mode==='chains'?'Keep branch ends':'Choose stages'}</span></header><label class="vacuum-policy-mode">Selection method<select data-vacuum-policy="${key}.mode"><option value="chains" ${o.mode==='chains'?'selected':''}>Superseded chains</option><option value="stages" ${o.mode==='stages'?'selected':''}>Metadata stages · include last outputs</option></select></label>${o.mode==='chains'?`<fieldset><legend>Expression repeats</legend>${check('expressionDraft','Base renders')}${check('expressionUpscale','Upscaled versions')}${check('expressionBackground','Background-removed versions')}</fieldset><fieldset><legend>Other processing sources</legend>${check('upscaleSources','Upscale drafts')}${check('inpaintSources','Inpaint alternatives')}${check('backgroundSources','Background-removal drafts')}</fieldset>${check('reviewGenerations','Review unfavorited main generations')}`:`<p class="vacuum-policy-notice">Selected stages may include branch ends. Favorites and direct references remain protected.</p><div class="vacuum-stage-actions"><button type="button" class="ghost-button" data-vacuum-stage-preset="all" data-policy-origin="${key}">Select all stages</button><button type="button" class="ghost-button" data-vacuum-stage-preset="none" data-policy-origin="${key}">Clear stages</button></div><fieldset><legend>Match saved metadata</legend>${stage('expression_draft','Expression drafts')}${stage('expression_final','Expression final renders')}${stage('inline_illustration','Inline illustrations')}${stage('general_generation','Main Studio renders')}${stage('quick_create','Quick Create renders')}${stage('inpaint_variant','Inpaint alternatives')}${stage('upscale_result','Upscales & enhancements')}${stage('background_removed','Background removal')}${stage('inline_inpaint_variant','Inline inpaint alternatives')}${stage('inline_upscale_result','Inline enhancements')}${stage('inline_background_removed','Inline background removal')}</fieldset><p>New jobs distinguish these surfaces. Older shared tags remain unchanged.</p>`}${check('protectCopyBindings','Protect bindings to Lumi’s stored copies')}<p>Direct Swarm-path references and favorites always protect originals. Copy bindings refer to separately stored Lumi images.</p></section>`;
+      return `<section class="vacuum-origin-policy" aria-label="${origin==='lumiswarm'?'LumiSwarm':'Standalone'} lifecycle"><header><div><span class="vacuum-policy-kicker">${origin==='lumiswarm'?'LUMIVERSE COPIES':'STUDIO OUTPUTS'}</span><h4>${origin==='lumiswarm'?'LumiSwarm':'Standalone'}</h4></div><span>${o.mode==='chains'?'Keep branch ends':'Choose stages'}</span></header><label class="vacuum-policy-mode">Selection method<select data-vacuum-policy="${key}.mode"><option value="chains" ${o.mode==='chains'?'selected':''}>Superseded chains</option><option value="stages" ${o.mode==='stages'?'selected':''}>Metadata stages · include last outputs</option></select></label>${o.mode==='chains'?`<fieldset><legend>Expression repeats</legend>${check('expressionDraft','Base renders')}${check('expressionUpscale','Upscaled versions')}${check('expressionBackground','Background-removed versions')}</fieldset><fieldset><legend>Other processing sources</legend>${check('upscaleSources','Upscale drafts')}${check('inpaintSources','Inpaint alternatives')}${check('backgroundSources','Background-removal drafts')}</fieldset>${check('reviewGenerations','Review unfavorited main generations')}`:`<p class="vacuum-policy-notice">Selected stages may include branch ends. Favorites and direct references remain protected.</p><div class="vacuum-stage-actions"><button type="button" class="ghost-button" data-vacuum-stage-preset="all" data-policy-origin="${key}">Select all stages</button><button type="button" class="ghost-button" data-vacuum-stage-preset="none" data-policy-origin="${key}">Clear stages</button></div><fieldset><legend>Match saved metadata</legend>${stage('expression_draft','Expression drafts')}${stage('expression_final','Expression final renders')}${stage('inline_illustration','Inline illustrations')}${stage('general_generation','Main Studio renders')}${stage('quick_create','Quick Create renders')}${stage('inpaint_variant','Inpaint alternatives')}${stage('upscale_result','Upscales & enhancements')}${stage('background_removed','Background removal')}${stage('inline_inpaint_variant','Inline inpaint alternatives')}${stage('inline_upscale_result','Inline enhancements')}${stage('inline_background_removed','Inline background removal')}${stage('refinement_result','Img2img refinements')}${stage('detailer_result','Detailer results')}${stage('segmentation_result','Segmentation artifacts')}</fieldset><p>New jobs distinguish these surfaces. Older shared tags remain unchanged.</p>`}${check('protectCopyBindings','Protect bindings to Lumi’s stored copies')}<p>Direct Swarm-path references and favorites always protect originals. Copy bindings refer to separately stored Lumi images.</p></section>`;
     };
     return `<section class="vacuum-policy" aria-label="Lifecycle policy"><header class="vacuum-policy-head"><div class="vacuum-policy-title"><span class="vacuum-policy-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7h16v13H4zM3 3h18v4H3zM9 11h6m-5 4 2 2 4-4"/></svg></span><div><h3>What to keep</h3><p>Two Studios. Independent choices.</p></div></div></header><div class="vacuum-policy-options"><div class="vacuum-policy-controls"><label>Evidence<select data-vacuum-policy="basis"><option value="lineage" ${p.basis==='lineage'?'selected':''}>Metadata & parent chains</option><option value="references" ${p.basis==='references'?'selected':''}>Require complete Lumi coverage</option></select></label><label>Grace period (days)<input type="number" min="0" max="365" data-vacuum-policy="graceDays" value="${p.graceDays}" /></label></div><div class="vacuum-origin-grid">${renderOrigin('lumiswarm')}${renderOrigin('standalone')}</div><p>Selections are scoped to this Swarm connection. Untagged images stay review-only. Complete-coverage mode uses the legacy reference checks and a seven-day minimum.</p></div>${this.renderAutomaticCleanup()}<section class="vacuum-policy-references" aria-label="Optional Lumi relay"><span class="vacuum-policy-kicker">EXTRA REFERENCE EVIDENCE</span>${connection}</section></section>`;
   }
@@ -3723,7 +3809,7 @@ export class StudioApp {
 
   private async scanVacuum(): Promise<void> {
     if (this.vacuumDeleteBusy || this.vacuumScan || this.librarySyncing || this.libraryBatchBusy || !this.connected) return;
-    if (this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) { this.vacuumMessage = "Wait until generation and processing jobs are idle."; this.render(); return; }
+    if (this.generating || this.expressionStudio?.busy || this.imageEditor?.busy || this.finalizeWorkspace?.busy) { this.vacuumMessage = "Wait until generation and processing jobs are idle."; this.render(); return; }
     const client = this.client, controller = new AbortController();
     this.vacuumSelected=new Set();this.vacuumReview=null;this.vacuumReviewAck=false;
     this.vacuumScan = controller;
@@ -3773,7 +3859,7 @@ export class StudioApp {
 
   private async checkedVacuumState(ancestors:import('./library/vacuum').VacuumFile[],signal:AbortSignal,client=this.client,target?:CleanupTarget):Promise<CleanupState> {
     signal.throwIfAborted();
-    if(client!==this.client||!this.connected||this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||this.librarySyncing)throw new Error('Connection or active Studio jobs changed.');
+    if(client!==this.client||!this.connected||this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||this.finalizeWorkspace?.busy||this.librarySyncing)throw new Error('Connection or active Studio jobs changed.');
     const read=<T>(task:()=>Promise<T>)=>cleanupRead(task,signal);
     const identity=await read(()=>client.reviewedDeletionState());signal.throwIfAborted();
     if(client!==this.client||identity.scope!==this.vacuumScope)throw new Error('Swarm user/output routing changed. Scan and review again.');
@@ -3821,7 +3907,7 @@ export class StudioApp {
     // Check global activity/server identity again after the potentially long folder walk.
     const finalIdentity=await read(()=>client.reviewedDeletionState());signal.throwIfAborted();
     if(client!==this.client||identity.scope!==finalIdentity.scope||identity.serverId!==finalIdentity.serverId||identity.recycle!==finalIdentity.recycle)throw new Error('Swarm identity or recycle setting changed during verification.');
-    if(this.generating||this.expressionStudio?.busy||this.imageEditor?.busy)throw new Error('Studio jobs became active.');
+    if(this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||this.finalizeWorkspace?.busy)throw new Error('Studio jobs became active.');
     this.assertCleanupReferences(identity.scope);
     return {...identity,files:this.vacuumFiles,rows,policyKey:JSON.stringify(this.readVacuumPolicy())};
   }
@@ -3887,7 +3973,7 @@ export class StudioApp {
           try {
             if(automatic)this.assertAutomaticApproval(plan);
             assertLease();controller.signal.throwIfAborted();
-            if(client!==this.client||this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||JSON.stringify(this.readVacuumPolicy())!==plan.policyKey)throw new Error('Jobs, connection or policy changed before deletion.');
+            if(client!==this.client||this.generating||this.expressionStudio?.busy||this.imageEditor?.busy||this.finalizeWorkspace?.busy||JSON.stringify(this.readVacuumPolicy())!==plan.policyKey)throw new Error('Jobs, connection or policy changed before deletion.');
             const ledger=JSON.parse(localStorage.getItem('studio-vacuum-ledger-v1:'+plan.scope)||'{}');
             if(ledger.exclusions!==undefined&&(!Array.isArray(ledger.exclusions)||!ledger.exclusions.every((value:unknown)=>typeof value==='string')))throw new Error('Exclusions cannot be verified.');
             for(const value of ledger.exclusions||[])this.vacuumExclusions.add(value);
@@ -3951,7 +4037,25 @@ export class StudioApp {
   }
 
   private bindVacuumEvents(): void {
-    this.root.querySelector("[data-review-versions]")?.addEventListener("click", () => { this.inspectorVersionsOpen = !this.inspectorVersionsOpen; this.render(); this.root.querySelector<HTMLElement>("[data-review-versions]")?.focus(); });
+    this.root.querySelectorAll<HTMLButtonElement>("[data-inspector-section], [data-review-versions]").forEach(button => button.addEventListener("click", () => {
+      const section = button.dataset.inspectorSection;
+      const versions = button.hasAttribute("data-review-versions");
+      if (versions === this.inspectorVersionsOpen && (versions || this.inspectorDetailsOpen === (section === "details"))) return;
+      const grid = this.root.querySelector<HTMLElement>(".inspector-grid");
+      const tabsWereScrolled = Boolean(grid && grid.scrollTop > 0);
+      this.inspectorVersionsOpen = versions;
+      this.inspectorDetailsOpen = section === "details";
+      this.render();
+      const selector = versions ? "[data-review-versions]" : `[data-inspector-section="${section}"]`;
+      const active = this.root.querySelector<HTMLElement>(selector);
+      const nextGrid = this.root.querySelector<HTMLElement>(".inspector-grid");
+      const tabs = active?.closest<HTMLElement>(".inspector-tabs");
+      if (tabsWereScrolled && nextGrid && tabs && nextGrid.scrollHeight > nextGrid.clientHeight) {
+        const visual = nextGrid.querySelector<HTMLElement>(".inspector-visual");
+        if (visual) nextGrid.scrollTop = Math.min(visual.offsetHeight, nextGrid.scrollHeight - nextGrid.clientHeight);
+      }
+      active?.focus({ preventScroll: true });
+    }));
     this.root.querySelectorAll<HTMLSelectElement>('[data-branch-choice]').forEach(input=>input.addEventListener('change',()=>this.saveBranchChoice(input.dataset.branchChoice!,input.value)));
     this.root.querySelectorAll<HTMLInputElement>("[data-keep-final]").forEach(input => input.addEventListener("change", () => this.setKeepFinal(input.checked)));
     this.root.querySelector("[data-action='open-vacuum']")?.addEventListener("click", () => { this.vacuumOpen = true; this.refreshVacuumRows(); this.render(); });
@@ -3993,7 +4097,7 @@ export class StudioApp {
     });
     dialog.querySelectorAll<HTMLButtonElement>('[data-vacuum-stage-preset]').forEach(button=>button.addEventListener('click',()=>{
       const p=this.readVacuumPolicy(),key=button.dataset.policyOrigin as 'lumi'|'standalone';
-      const stages=button.dataset.vacuumStagePreset==='all'?['expression_draft','expression_final','inline_illustration','general_generation','quick_create','inpaint_variant','upscale_result','background_removed','inline_inpaint_variant','inline_upscale_result','inline_background_removed']:[];
+      const stages=button.dataset.vacuumStagePreset==='all'?['expression_draft','expression_final','inline_illustration','general_generation','quick_create','inpaint_variant','upscale_result','background_removed','inline_inpaint_variant','inline_upscale_result','inline_background_removed','refinement_result','detailer_result','segmentation_result']:[];
       p[key]={...p[key],stages};try{localStorage.setItem('studio-vacuum-policy-v1:'+this.client.historyScope,JSON.stringify(p));}catch{this.vacuumMessage='Policy could not be saved.';}this.refreshVacuumRows();this.renderVacuumPreservingScroll();
     }));
     dialog.querySelectorAll<HTMLInputElement>('[data-vacuum-stage]').forEach(input=>input.addEventListener('change',()=>{
@@ -5417,14 +5521,18 @@ export class StudioApp {
     this.root.querySelector<HTMLElement>("[data-action='hide-generation-mini']")?.addEventListener("click", () => { this.generationMiniEnabled = false; try { localStorage.setItem("swarm-studio-generation-mini", "false"); } catch {} this.root.querySelector<HTMLElement>("[data-generation-mini]")?.remove(); });
     const mini = this.root.querySelector<HTMLElement>("[data-generation-mini]");
     const drag = this.root.querySelector<HTMLElement>("[data-generation-mini-drag]");
+    if (mini && this.generationMiniX !== null && this.generationMiniY !== null) {
+      mini.style.left = `${clamp(this.generationMiniX, 8, Math.max(8, window.innerWidth - mini.offsetWidth - 8))}px`;
+      mini.style.top = `${clamp(this.generationMiniY, 8, Math.max(8, window.innerHeight - mini.offsetHeight - 8))}px`;
+    }
     drag?.addEventListener("pointerdown", (event) => {
       if ((event.target as HTMLElement).closest("button")) return;
       event.preventDefault(); drag.setPointerCapture(event.pointerId);
       const rect = mini?.getBoundingClientRect(); if (!mini || !rect) return;
       const ox = event.clientX - rect.left, oy = event.clientY - rect.top;
       const move = (moveEvent: PointerEvent) => { this.generationMiniX = clamp(moveEvent.clientX - ox, 8, Math.max(8, window.innerWidth - mini.offsetWidth - 8)); this.generationMiniY = clamp(moveEvent.clientY - oy, 8, Math.max(8, window.innerHeight - mini.offsetHeight - 8)); mini.style.left = `${this.generationMiniX}px`; mini.style.top = `${this.generationMiniY}px`; mini.style.right = "auto"; mini.style.bottom = "auto"; };
-      const up = () => { drag.removeEventListener("pointermove", move); drag.removeEventListener("pointerup", up); try { localStorage.setItem("swarm-studio-generation-mini-x", String(this.generationMiniX ?? 0)); localStorage.setItem("swarm-studio-generation-mini-y", String(this.generationMiniY ?? 0)); } catch {} };
-      drag.addEventListener("pointermove", move); drag.addEventListener("pointerup", up);
+      const up = () => { drag.removeEventListener("pointermove", move); drag.removeEventListener("pointerup", up); drag.removeEventListener("pointercancel", up); try { localStorage.setItem("swarm-studio-generation-mini-x", String(this.generationMiniX ?? 0)); localStorage.setItem("swarm-studio-generation-mini-y", String(this.generationMiniY ?? 0)); } catch {} };
+      drag.addEventListener("pointermove", move); drag.addEventListener("pointerup", up); drag.addEventListener("pointercancel", up);
     });
     this.root.querySelectorAll<HTMLElement>("[data-nav]").forEach((button) => {
       button.addEventListener("click", (event) => {
@@ -5600,6 +5708,8 @@ export class StudioApp {
     this.root.querySelectorAll<HTMLElement>("[data-action='close-inspector']").forEach((element) => element.addEventListener("click", (event) => {
       if (event.currentTarget !== event.target && (event.target as HTMLElement).closest("[data-inspector-panel]")) return;
       if (this.droppedInspectorOutput?.id === this.store.state.ui.selectedOutputId) this.droppedInspectorOutput = null;
+      this.inspectorVersionsOpen = false;
+      this.inspectorDetailsOpen = false;
       this.store.updateUi({ selectedOutputId: "" });
       this.render();
     }));
@@ -5608,6 +5718,10 @@ export class StudioApp {
       event.stopPropagation();
       const id = button.dataset.inspectOutput;
       if (!id) return;
+      if (!button.closest(".inspector-versions")) {
+        this.inspectorVersionsOpen = false;
+        this.inspectorDetailsOpen = false;
+      }
       this.store.updateUi({ selectedOutputId: id });
       this.render();
       const output = this.outputById(id);
@@ -5628,6 +5742,7 @@ export class StudioApp {
       event.stopPropagation();
       void this.useOutputAsInit(button.dataset.initOutput ?? "");
     }));
+    this.root.querySelectorAll<HTMLElement>("[data-finalize-output]").forEach(button=>button.addEventListener("click",()=>this.openOutputInFinalize(button.dataset.finalizeOutput??"")));
     this.root.querySelectorAll<HTMLElement>("[data-edit-output]").forEach(button => button.addEventListener("click", () => {
       this.openOutputInEditor(button.dataset.editOutput ?? "");
     }));
@@ -5743,7 +5858,14 @@ export class StudioApp {
       event.preventDefault();
       void this.savePresetFromEditor(event.currentTarget as HTMLFormElement);
     });
-    const inpaintPanel = this.root.querySelector<HTMLElement>("[data-inpaint-panel]");
+    this.root.querySelectorAll<HTMLButtonElement>("[data-inpaint-inspector]").forEach(button=>button.addEventListener("click",()=>{
+      const tab=button.dataset.inpaintInspector;
+      if(tab!=="mask"&&tab!=="prompt")return;
+      this.inpaintInspector=tab;
+      this.root.querySelectorAll<HTMLButtonElement>("[data-inpaint-inspector]").forEach(b=>b.setAttribute("aria-pressed",String(b===button)));
+      this.root.querySelectorAll<HTMLElement>("[data-inpaint-properties]").forEach(section=>section.hidden=section.dataset.inpaintProperties!==tab);
+      const scroll=this.root.querySelector<HTMLElement>(".inpaint-inspector-scroll");if(scroll)scroll.scrollTop=0;
+    }));
     this.root.querySelector<HTMLElement>("[data-action='open-inpaint-settings']")?.addEventListener("click", () => {
       this.inpaintSettingsOpen = true;
       this.inpaintHelpOpen = false;
@@ -5777,8 +5899,7 @@ export class StudioApp {
     this.root.querySelectorAll<HTMLElement>("[data-inpaint-tool]").forEach((button) => button.addEventListener("click", () => {
       const tool = button.dataset.inpaintTool;
       if (tool === "paint" || tool === "erase" || tool === "rect" || tool === "lasso" || tool === "pan") {
-        this.inpaintTool = tool;
-        this.render();
+        this.setInpaintTool(tool);
       }
     }));
     this.root.querySelector<HTMLElement>("[data-action='inpaint-undo']")?.addEventListener("click", () => {
@@ -5787,7 +5908,8 @@ export class StudioApp {
       this.inpaintRedo.push(stroke);
       this.inpaintMaskDirty = true;
       this.inpaintProcessedMaskDirty = true;
-      this.render();
+      this.drawInpaintCanvas();
+      this.refreshInpaintActionState();
     });
     this.root.querySelector<HTMLElement>("[data-action='inpaint-redo']")?.addEventListener("click", () => {
       const stroke = this.inpaintRedo.pop();
@@ -5795,7 +5917,8 @@ export class StudioApp {
       this.inpaintStrokes.push(stroke);
       this.inpaintMaskDirty = true;
       this.inpaintProcessedMaskDirty = true;
-      this.render();
+      this.drawInpaintCanvas();
+      this.refreshInpaintActionState();
     });
     this.root.querySelector<HTMLElement>("[data-action='inpaint-clear']")?.addEventListener("click", () => {
       this.inpaintStrokes = [];
@@ -5806,7 +5929,8 @@ export class StudioApp {
       this.inpaintInvert = false;
       this.inpaintMaskDirty = true;
       this.inpaintProcessedMaskDirty = true;
-      this.render();
+      this.drawInpaintCanvas();
+      this.refreshInpaintActionState();
     });
     this.root.querySelector<HTMLElement>("[data-action='inpaint-invert']")?.addEventListener("click", () => {
       this.inpaintInvert = !this.inpaintInvert;
@@ -5894,6 +6018,11 @@ export class StudioApp {
       const latest = this.store.state.outputs[0];
       if (latest) void this.useOutputAsInit(latest.id);
     });
+    const review = this.root.querySelector<HTMLElement>(".inpaint-result-review");
+    review?.querySelectorAll<HTMLButtonElement>("[data-inpaint-review-view]").forEach(button=>button.addEventListener("click",()=>{
+      review.dataset.reviewView=button.dataset.inpaintReviewView;
+      review.querySelectorAll<HTMLButtonElement>("[data-inpaint-review-view]").forEach(item=>item.setAttribute("aria-pressed",String(item===button)));
+    }));
     this.root.querySelector<HTMLElement>("[data-action='dismiss-inpaint-result']")?.addEventListener("click", () => {
       this.inpaintResultReviewOpen = false;
       this.inpaintPendingResultRecord = null;
@@ -5902,39 +6031,6 @@ export class StudioApp {
     this.root.querySelector<HTMLElement>("[data-action='apply-inpaint-result']")?.addEventListener("click", () => {
       void this.applyApprovedInpaintResult();
     });
-    inpaintPanel?.addEventListener("keydown", (event) => {
-      const target = event.target as HTMLElement;
-      const editingText = Boolean(target.closest("textarea,input,select"));
-      if (editingText) return;
-      const modifier = event.ctrlKey || event.metaKey;
-      if (modifier && event.key.toLowerCase() === "z") {
-        event.preventDefault();
-        if (event.shiftKey) {
-          const stroke = this.inpaintRedo.pop();
-          if (stroke) this.inpaintStrokes.push(stroke);
-        } else {
-          const stroke = this.inpaintStrokes.pop();
-          if (stroke) this.inpaintRedo.push(stroke);
-        }
-        this.inpaintMaskDirty = true;
-        this.inpaintProcessedMaskDirty = true;
-        this.render();
-        return;
-      }
-      const key = event.key.toLowerCase();
-      const tool = key === "b" ? "paint" : key === "e" ? "erase" : key === "r" ? "rect" : key === "l" ? "lasso" : key === "h" ? "pan" : "";
-      if (tool) {
-        event.preventDefault();
-        this.inpaintTool = tool as typeof this.inpaintTool;
-        this.render();
-        return;
-      }
-      if (event.key === "[" || event.key === "]") {
-        event.preventDefault();
-        this.inpaintBrushSize = clamp(this.inpaintBrushSize + (event.key === "]" ? 6 : -6), 4, 256);
-        this.render();
-      }
-    });
     this.bindInpaintEditor();
     this.bindGenerationApprovalActions(this.root);
     this.root.querySelector<HTMLElement>("[data-action='delete-preset']")?.addEventListener("click", () => void this.deletePresetFromEditor());
@@ -5942,6 +6038,7 @@ export class StudioApp {
 
   private bindViewEvents(): void {
     if (this.view === "create") this.bindCreateEvents();
+    if (this.view === "finalize") this.getFinalizeWorkspace().mount(this.root.querySelector<HTMLElement>("#finalize-host")!);
     if (this.view === "editor") void this.bindImageEditor().catch(error => this.notify(String(error), "error"));
     if (this.view === "expressions") void this.bindExpressionStudio().catch((error) => this.notify(`Could not open Expression Studio: ${String(error)}`, "error"));
     this.bindVacuumEvents();
@@ -5976,6 +6073,8 @@ export class StudioApp {
         const schema = await this.probeComfyNodes();
         return {
           upscaleModels: nodeChoices(schema, "UpscaleModelLoader", "model_name"),
+          textSegmentationReady: ["SwarmClipSeg","MaskToImage","SwarmLoadImageB64","SwarmSaveImageWS"].every(node=>Boolean(schema[node])),
+          yoloSegmentationReady: Boolean(schema.SwarmYoloDetection),
           backgroundReady: ["RemoveBackground", "InvertMask", "JoinImageWithAlpha"].every(node => Boolean(schema[node]))
             && nodeChoices(schema, "LoadBackgroundRemovalModel", "bg_removal_name").includes(BIREFNET_MODEL),
         };
@@ -6026,6 +6125,8 @@ export class StudioApp {
       if (metadata) finalMetadata = metadata;
     }, signal, error => this.notify(`Could not interrupt Swarm: ${String(error)}`, "error")).finally(() => { streaming = false; });
     signal?.throwIfAborted();
+    const tagged=readStudioMetadata(normalized.extra_metadata);
+    if ((tagged?.studio_surface==='finalize'||tagged?.studio_stage==='segmentation_result')&&images.length!==1) throw new Error(`Expected exactly one output for ${label.toLowerCase()}; Swarm returned ${images.length}. Check intermediate/mask outputs and the workflow.`);
     const result = images[0];
     if (!result?.image) throw new Error(`Swarm returned no image for ${label.toLowerCase()}.`);
     const path = result.image;
@@ -6040,6 +6141,9 @@ export class StudioApp {
       ...decoded, path: "", seed, id: "", name: `${label}.png`,
       model: request.model, prompt: request.prompt, negativeprompt: request.negativeprompt,
     };
+    const nativeNames=Array.isArray(normalized.loras)?normalized.loras:typeof normalized.loras==='string'?normalized.loras.split(',').filter(Boolean):[];
+    const nativeWeights=Array.isArray(normalized.loraweights)?normalized.loraweights:typeof normalized.loraweights==='string'?normalized.loraweights.split(','):[];
+    const actualLoras=loras.length?cloneStack(loras):nativeNames.map((name,i)=>({id:createId(),name,title:name,weight:Number.isFinite(Number(nativeWeights[i]))?Number(nativeWeights[i]):1,enabled:true,useTrigger:false,sourceUrl:''}));
     const requestSummary = Object.fromEntries(Object.entries(normalized).filter(([key, value]) =>
       key !== "comfyworkflowraw" && key !== "comfyworkflowparammetadata" && !(typeof value === "string" && value.startsWith("data:image/"))));
     const record = this.store.addOutput({
@@ -6049,7 +6153,7 @@ export class StudioApp {
       model: request.model, width: decoded.width, height: decoded.height, seed, metadata,
       processingStage: stage,
       request: { ...requestSummary, width: decoded.width, height: decoded.height },
-      loras: cloneStack(loras), presets: [],
+      loras: actualLoras, presets: [],
     });
     this.queueReplacement(record, true, keepFinal);
     const count = this.root.querySelector("[data-output-count]");
@@ -6058,10 +6162,11 @@ export class StudioApp {
       ...decoded, path, seed, id: record.id, name: path.startsWith("data:") ? `${label}.png` : path.split(/[\\/]/).pop() || `${label}.png`,
       model: record.model, prompt: record.prompt, negativeprompt: record.negativePrompt,
       studioMetadata: readStudioMetadata(normalized.extra_metadata),
+      loras: normalized.loras, loraweights: normalized.loraweights, sampler: normalized.sampler, scheduler: normalized.scheduler,
     };
   }
 
-  private openLibraryImagePicker(view: "editor" | "identities" | "expressions", title: string, apply?: (output: OutputRecord) => void | Promise<void>): void {
+  private openLibraryImagePicker(view: "editor" | "identities" | "expressions" | "finalize", title: string, apply?: (output: OutputRecord) => void | Promise<void>): void {
     this.libraryImagePicker = { view, title, apply };
     this.libraryFiltersOpen = false;
     this.navigateToView("library");
@@ -6075,7 +6180,7 @@ export class StudioApp {
 
   private openOutputInEditor(id: string, inpaint = false): void {
     if (!this.outputById(id)) return;
-    if (this.imageEditor?.busy || this.inpaintApplyingResult || this.inpaintAwaitingResult) {
+    if (this.imageEditor?.busy || this.inpaintApplyingResult || this.inpaintAwaitingResult || this.inpaintResultReviewOpen) {
       this.notify("Wait for the current edit to finish.", "info");
       return;
     }
@@ -6083,37 +6188,37 @@ export class StudioApp {
     this.navigateToView("editor");
   }
 
+  private async loadFinalizeImage(id:string):Promise<FinalizeImage> {
+    const output=this.outputById(id);if(!output)throw new Error("This Library image is unavailable.");
+    return {...await readProcessingImage(await this.readLibraryImage(output)),id:output.id,name:output.swarmPath.split(/[\\/]/).pop()||"Swarm output.png",model:output.model,seed:output.seed,prompt:output.sentPrompt||output.prompt,negativeprompt:output.negativePrompt,studioMetadata:outputTag(output),
+      loras:(output.request.loras??output.loras.filter(l=>l.enabled).map(l=>l.name)) as string[]|string,loraweights:(output.request.loraweights??output.loras.filter(l=>l.enabled).map(l=>String(l.weight))) as string[]|string,sampler:typeof output.request.sampler==='string'?output.request.sampler:undefined,scheduler:typeof output.request.scheduler==='string'?output.request.scheduler:undefined};
+  }
+  private getFinalizeWorkspace():FinalizeWorkspace {
+    return this.finalizeWorkspace??=new FinalizeWorkspace({...this.imageProcessingHost(),
+      busy:()=>this.vacuumDeleteBusy||this.generating||Boolean(this.imageEditor?.busy||this.expressionStudio?.busy)||this.inpaintApplyingResult||this.inpaintAwaitingResult||this.inpaintResultReviewOpen||this.pendingGenerationApprovals.length>0,
+      checkpoint:()=>this.store.state.draft.model,checkpoints:()=>this.models.map(m=>m.name),scope:()=>this.client.historyScope||this.client,
+      browse:()=>this.openLibraryImagePicker("finalize","Choose an image for Finalize",output=>this.getFinalizeWorkspace().loadOutput(output.id)),load:id=>this.loadFinalizeImage(id),
+      generate:(request,progress,preview,signal)=>this.renderToolImage(request,[],progress,"Finalize pass",undefined,preview,signal,false),
+      save:async(image,name)=>{await runtime.saveDataUrl(image,name.replace(/\.[^.]+$/,'')+'-finalize.'+(image.startsWith('data:image/jpeg')?'jpg':image.startsWith('data:image/webp')?'webp':'png'))},edit:id=>this.openOutputInEditor(id),
+    });
+  }
+  private openOutputInFinalize(id:string):void {if(!this.outputById(id))return;const workspace=this.getFinalizeWorkspace();if(workspace.busy){this.notify("Wait for the active Finalize run.","info");return;}this.navigateToView("finalize");void workspace.loadOutput(id);}
+
   private async bindImageEditor(): Promise<void> {
     const { ImageEditor } = await import("./expressions/editor");
     this.imageEditor ??= new ImageEditor({
       ...this.imageProcessingHost(),
-      busy: () => this.vacuumDeleteBusy || this.generating || Boolean(this.expressionStudio?.busy),
+      busy: () => this.vacuumDeleteBusy || this.generating || Boolean(this.expressionStudio?.busy || this.finalizeWorkspace?.busy) || this.inpaintAwaitingResult || this.pendingGenerationApprovals.length>0,
       checkpoint: () => this.store.state.draft.model,
       keepFinal: () => this.keepFinalEnabled(),
       setKeepFinal: enabled => this.setKeepFinal(enabled),
-      browseLibrary: () => this.openLibraryImagePicker("editor", "Choose an image for Editor"),
-      inpaintBusy: () => this.inpaintAwaitingResult || this.inpaintApplyingResult,
-      load: async id => {
-        const output = this.outputById(id);
-        if (!output) throw new Error("This Library image is unavailable.");
-        return {
-          ...await readProcessingImage(await this.readLibraryImage(output)), id: output.id,
-          name: output.swarmPath.split(/[\\/]/).pop() || "Swarm output.png",
-          model: output.model, seed: output.seed, prompt: output.prompt, negativeprompt: output.negativePrompt,
-          studioMetadata: readStudioMetadata(output.metadata) || readStudioMetadata(output.request.extra_metadata),
-        };
-      },
+      browseLibrary: () => this.openLibraryImagePicker("editor", "Choose an image for Editing"),
+      inpaintBusy: () => this.inpaintAwaitingResult || this.inpaintApplyingResult || this.inpaintResultReviewOpen,
+      load: id => this.loadFinalizeImage(id),
       generate: (request, progress, stage) => this.renderToolImage(request, [], progress, stage ? processingLabels[stage] : "Editor generation", stage, undefined, undefined, this.keepFinalEnabled()),
-      generationRequest: prompt => {
-        const draft = this.store.state.draft;
-        if (!prompt || !draft.model) throw new Error("Enter a prompt and choose a checkpoint in Create.");
-        return {
-          prompt, negativeprompt: draft.negativePrompt, model: draft.model,
-          width: draft.width, height: draft.height, steps: draft.steps, cfgscale: draft.cfgScale, seed: draft.seed,
-          sampler: draft.sampler || undefined, scheduler: draft.scheduler || undefined, images: 1, batchsize: 1, imageformat: "PNG",
-        };
-      },
-      inpaint: source => this.setEditorInpaintSource(source),
+      segment: (request,progress,signal)=>this.renderToolImage(request,[],progress,"Segmentation",undefined,undefined,signal,false),
+      finalize: image=>{const workspace=this.getFinalizeWorkspace();if(workspace.busy){this.notify("Wait for the active Finalize run.","info");return;}workspace.setSource(image);this.navigateToView("finalize");},
+      inpaint: (source, selection) => this.setEditorInpaintSource(source, selection),
       save: async (image, name) => {
         const ext = /^data:image\/(jpeg|webp);/i.exec(image)?.[1] ?? "png";
         await runtime.saveDataUrl(image, `${name.replace(/\.[^.]+$/, "")}.${ext === "jpeg" ? "jpg" : ext}`);
@@ -6135,7 +6240,7 @@ export class StudioApp {
     this.expressionStudio ??= new ExpressionStudio({
       models: () => this.models,
       params: () => this.params,
-      busy: () => this.vacuumDeleteBusy || this.generating || Boolean(this.imageEditor?.busy),
+      busy: () => this.vacuumDeleteBusy || this.generating || Boolean(this.imageEditor?.busy || this.finalizeWorkspace?.busy),
       processing: this.imageProcessingHost(),
       connected: () => this.connected,
       notify: (message, error) => { this.addLog(message, error ? "error" : "info", "studio"); this.notify(message, error ? "error" : "info"); },
@@ -7769,7 +7874,7 @@ export class StudioApp {
   }
 
   private async generate(draftOverride?: GenerationDraft, options: { allowPendingApprovals?: boolean; focusNewestApproval?: boolean } = {}): Promise<void> {
-    if (this.vacuumDeleteBusy || this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) return;
+    if (this.vacuumDeleteBusy || this.generating || this.expressionStudio?.busy || this.imageEditor?.busy || this.finalizeWorkspace?.busy) return;
     if (this.pendingGenerationApprovals.length && !options.allowPendingApprovals) {
       this.notify("Save or review the pending result before starting another batch.", "info");
       return;
@@ -8156,24 +8261,13 @@ export class StudioApp {
       const url = this.outputImageUrl(record);
       const dataUrl = url.startsWith("data:") ? url : await runtime.fetchDataUrl(url, this.client.authToken);
       const processed = await readProcessingImage(dataUrl);
-      this.queueReplacement(record, true, keepFinal);
-      this.inpaintSourceId = record.id;
-      this.inpaintSourceUrl = url;
-      this.inpaintSourceDataUrl = dataUrl;
-      this.inpaintSourceName = prettyName(record.swarmPath) || this.inpaintSourceName;
-      this.inpaintSourceOutputContext = this.buildInpaintSourceContext(record);
-      this.inpaintPrompt = record.prompt || this.inpaintPrompt;
-      this.inpaintNegativePrompt = record.negativePrompt || this.inpaintNegativePrompt;
-      this.inpaintImageElement = null;
-      this.inpaintMaskCanvas = null;
-      this.inpaintProcessedMaskCanvas = null;
-      this.resetInpaintMaskSession();
-      this.clearInpaintReview();
-      this.imageEditor?.useInpaintResult({
-        ...processed, id: record.id, name: this.inpaintSourceName, studioMetadata: outputTag(record),
+      if (!this.imageEditor) throw new Error("Open the working document before accepting this result.");
+      await this.imageEditor.useInpaintResult({
+        ...processed, id: record.id, name: prettyName(record.swarmPath) || "Inpaint.png", studioMetadata: outputTag(record),
         model: record.model, seed: record.seed, prompt: record.prompt, negativeprompt: record.negativePrompt,
       });
-      this.notify("Approved edit loaded as the new inpaint base.", "success");
+      this.queueReplacement(record, true, keepFinal);
+      this.notify("Approved edit returned to the working canvas.", "success");
     } catch (error) {
       this.notify(`Could not load the edited image: ${error instanceof Error ? error.message : String(error)}`, "error");
     } finally {
@@ -8182,10 +8276,11 @@ export class StudioApp {
     }
   }
 
-  private setEditorInpaintSource(source: EditorImage | null): void {
+  private setEditorInpaintSource(source: EditorImage | null, selection?: import("./expressions/editor").EditorSelection): void {
     if (!source) {
       if (!this.inpaintOpen) return;
       this.inpaintOpen = false;
+      this.inpaintParentMetadata = null;
       this.inpaintSourceDataUrl = "";
       this.inpaintSourceUrl = "";
       this.inpaintImageElement = null;
@@ -8200,19 +8295,22 @@ export class StudioApp {
     }
     const id = source.id || "editor-upload";
     if (this.inpaintOpen && this.inpaintSourceId === id && this.inpaintSourceDataUrl === source.image) return;
-    const output = source.id ? this.outputById(source.id) : null;
+    const contextId = source.id || source.parentId;
+    const output = contextId ? this.outputById(contextId) : null;
+    this.inpaintParentMetadata = source.studioMetadata ?? (output ? outputTag(output) : null);
     this.inpaintOpen = true;
+    this.inpaintInspector = "mask";
     this.inpaintSourceId = id;
     this.inpaintSourceUrl = source.image;
     this.inpaintSourceDataUrl = source.image;
     this.inpaintSourceName = source.name;
-    this.inpaintSourceOutputContext = output ? this.buildInpaintSourceContext(output) : { width: source.width, height: source.height };
+    this.inpaintSourceOutputContext = { ...(output ? this.buildInpaintSourceContext(output) : {}), width: source.width, height: source.height, ...(source.model ? {model:source.model} : {}) };
     this.inpaintSettingsOpen = false;
     this.inpaintHelpOpen = false;
     this.clearInpaintReview();
     this.resetInpaintGenerationConfigFromSource();
-    this.inpaintPrompt = output?.prompt || output?.sentPrompt || this.store.state.draft.prompt || "";
-    this.inpaintNegativePrompt = output?.negativePrompt || this.store.state.draft.negativePrompt || "";
+    this.inpaintPrompt = output?.prompt || output?.sentPrompt || source.prompt || this.store.state.draft.prompt || "";
+    this.inpaintNegativePrompt = output?.negativePrompt || source.negativeprompt || this.store.state.draft.negativePrompt || "";
     this.inpaintCreativity = clamp(this.store.state.draft.initImageCreativity || 0.5, 0, 1);
     this.inpaintEngine = "simple";
     this.inpaintBrushSize = 36;
@@ -8237,6 +8335,28 @@ export class StudioApp {
     this.inpaintProcessedMaskDirty = true;
     this.inpaintImportedMaskDataUrl = "";
     this.inpaintImportedMaskElement = null;
+    if (selection && selection.width === source.width && selection.height === source.height && selection.mask.length === source.width * source.height) {
+      const canvas = document.createElement("canvas");
+      canvas.width = selection.width; canvas.height = selection.height;
+      const ctx = canvas.getContext("2d")!;
+      const pixels = ctx.createImageData(canvas.width, canvas.height);
+      for (let i = 0; i < selection.mask.length; i++) {
+        const value = selection.mask[i]!;
+        pixels.data[i*4] = pixels.data[i*4+1] = pixels.data[i*4+2] = value;
+        pixels.data[i*4+3] = 255;
+      }
+      ctx.putImageData(pixels, 0, 0);
+      const maskUrl = canvas.toDataURL("image/png");
+      this.inpaintImportedMaskDataUrl = maskUrl;
+      const mask = new Image();
+      mask.onload = () => {
+        if (!this.inpaintOpen || this.inpaintSourceDataUrl !== source.image || this.inpaintImportedMaskDataUrl !== maskUrl) return;
+        this.inpaintImportedMaskElement = mask;
+        this.inpaintMaskDirty = this.inpaintProcessedMaskDirty = true;
+        if (this.view === "editor") this.render();
+      };
+      mask.src = maskUrl;
+    }
     if (this.view === "editor") this.render();
   }
 
@@ -8319,8 +8439,10 @@ export class StudioApp {
     const loaded = Boolean(this.inpaintImageElement?.complete && this.inpaintImageElement.naturalWidth > 0);
     const hasMask = this.inpaintHasMask();
     this.root.querySelectorAll<HTMLButtonElement>("[data-action='generate-inpaint']").forEach((button) => {
-      button.disabled = this.generating || !loaded || !hasMask;
+      button.disabled = this.generating || !loaded || !hasMask || this.inpaintResultReviewOpen;
     });
+    const ready=this.root.querySelector<HTMLElement>("[data-inpaint-ready]");if(ready)ready.textContent=hasMask?"Mask ready":"Draw or import a mask";
+    const invert=this.root.querySelector<HTMLButtonElement>("[data-action='inpaint-invert']");if(invert){invert.classList.toggle("is-active",this.inpaintInvert);invert.setAttribute("aria-pressed",String(this.inpaintInvert));}
     const clear = this.root.querySelector<HTMLButtonElement>("[data-action='inpaint-clear']");
     if (clear) clear.disabled = !hasMask;
     const exportButton = this.root.querySelector<HTMLButtonElement>("[data-action='export-inpaint-mask']");
@@ -8548,8 +8670,11 @@ export class StudioApp {
     const visibleMask = this.processedInpaintMask();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, placement.cssWidth, placement.cssHeight);
-    ctx.fillStyle = "rgba(10, 8, 13, 1)";
+    const matte=getComputedStyle(canvas).getPropertyValue("--surface-alt").trim();
+    ctx.fillStyle = matte || "#14121a";
     ctx.fillRect(0, 0, placement.cssWidth, placement.cssHeight);
+    const viewState=this.root.querySelector<HTMLElement>("[data-inpaint-view-state]");
+    if(viewState)viewState.textContent=`${this.inpaintShowMask ? "Mask visible" : "Mask hidden"} · zoom ${this.inpaintZoom.toFixed(2)}×`;
     ctx.drawImage(image, placement.offsetX, placement.offsetY, placement.imageWidth, placement.imageHeight);
     if (this.inpaintShowMask && visibleMask) {
       ctx.save();
@@ -8818,7 +8943,7 @@ export class StudioApp {
   }
 
   private async generateInpaint(): Promise<void> {
-    if (this.vacuumDeleteBusy || this.generating || this.expressionStudio?.busy || this.imageEditor?.busy) return;
+    if (this.vacuumDeleteBusy || this.generating || this.expressionStudio?.busy || this.imageEditor?.busy || this.finalizeWorkspace?.busy) return;
     if (!this.inpaintPrompt.trim()) {
       this.notify("Give the masked area a prompt first.", "error");
       return;
@@ -8890,7 +9015,7 @@ export class StudioApp {
       maskcompositeunthresholded: this.inpaintFeather > 0 ? true : undefined,
       forwardswarmdata: true,
     });
-    tagStudioRequest(request, "inpaint_variant", (() => { const source = this.store.state.outputs.find(output => output.id === this.inpaintSourceId); return source ? outputTag(source) : null; })());
+    tagStudioRequest(request, "inpaint_variant", (() => { const source = this.store.state.outputs.find(output => output.id === this.inpaintSourceId); return source ? outputTag(source) : this.inpaintParentMetadata; })());
     this.clearInpaintReview();
     this.inpaintAwaitingResult = true;
     this.generating = true;
@@ -8995,7 +9120,7 @@ export class StudioApp {
         else this.addLog(`Swarm did not report maskimage among queried parameters: ${[...paramsUsed].join(", ")}.`, "warn", "api");
       }
       this.addLog("Inpaint completed with 1 output. Review the result before replacing the current base.", "info", "api");
-      this.notify("Edited output indexed in Library. Approve it if you want to continue from the new base.", "success");
+      if (this.view !== "editor") this.notify("Edited output indexed in Library. Return to Editing to review it.", "success");
       this.notifyGenerationInBackground({ kind: "inpaint", count: 1 });
       this.inpaintPendingResultRecord = firstRecord;
       this.inpaintResultReviewOpen = true;

@@ -1,0 +1,5 @@
+# Editing UI2.1 | Shared SVGs
+
+Cumulative overlay on Editing UI2. The original Editing glyph geometry is unchanged and now resides in src/editor/icons.ts. Inpaint uses the shared brush, eraser, dashed rectangle, lasso, hand, undo, redo, inversion, help, upload and download glyphs. Native sizes are retained; stroke widths match Editing. Existing shared brush references in navigation and Library use the updated brush as well. Clear mask and settings retain their existing icons because they represent separate actions. No changes to masks, generation, shortcuts, review or document persistence.
+
+Validation: strict TypeScript, inpaint mask export contract and Atelier port contract passed. Actual mocked StudioApp browser fixture confirmed eight shared glyph geometries and stroke widths, Inpaint shortcuts and review layout at 1440, 390 and 320px. Full fixture completed at 1440 and 390; interrupted during final 320px expression test after Editing and Inpaint assertions passed. Vite production build and live Swarm/Tauri not rerun. No package version change.
