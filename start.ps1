@@ -5,7 +5,8 @@
     [switch]$VerboseRunner,
     [switch]$EmergencyStop,
     [switch]$RefreshDependencies,
-    [switch]$DesktopChild
+    [switch]$DesktopChild,
+    [switch]$CreateShortcuts
 )
 
 $ErrorActionPreference = "Stop"
@@ -662,13 +663,15 @@ if ($SetupFirewall) {
     Install-StudioFirewallRule
 }
 
-if (-not $NoShortcut) {
+# Desktop shortcuts are explicit setup, not a normal startup side effect.
+# Keep -NoShortcut compatible with existing launchers and updater restarts.
+if ($CreateShortcuts -and -not $NoShortcut) {
     $Desktop = [Environment]::GetFolderPath("Desktop")
     $ShortcutPath = Join-Path $Desktop "Swarm Studio.lnk"
     $Shell = New-Object -ComObject WScript.Shell
     $Shortcut = $Shell.CreateShortcut($ShortcutPath)
     $Shortcut.TargetPath = "powershell.exe"
-    $Shortcut.Arguments = "-NoLogo -ExecutionPolicy Bypass -File `"$Root\start.ps1`""
+    $Shortcut.Arguments = "-NoLogo -ExecutionPolicy Bypass -File `"$Root\start.ps1`" -NoShortcut"
     $Shortcut.WorkingDirectory = $Root
     $Icon = Join-Path $Root "src-tauri\icons\icon.ico"
     if (Test-Path $Icon) { $Shortcut.IconLocation = $Icon }
@@ -704,7 +707,7 @@ if (-not $SetupFirewall) {
     Write-Status "NETWORK" "Firewall unchanged. Use -SetupFirewall only if LAN access is blocked." DarkGray
 }
 Write-Status "LOG" ".swarm-studio-runner.log keeps captured dev + backend output." DarkGray
-Write-Status "PANIC" "Emergency Stop shortcut or .\start.ps1 -EmergencyStop kills the owned Swarm + Comfy tree." DarkGray
+Write-Status "PANIC" ".\start.ps1 -EmergencyStop kills the owned Swarm + Comfy tree. Use -CreateShortcuts to install desktop shortcuts." DarkGray
 if (-not $VerboseRunner) {
     Write-Status "TIP" "Use -VerboseRunner to show the raw dev stream live." DarkGray
 }

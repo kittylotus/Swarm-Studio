@@ -114,11 +114,17 @@ Run:
 The launcher:
 
 - installs JavaScript dependencies when needed
-- creates or refreshes the desktop shortcut
-- creates a separate **Swarm Studio - Emergency Stop** shortcut
 - starts the Tauri desktop app in one PowerShell window
 
-Normal launches do **not** modify Windows Firewall or open an elevated secondary shell.
+Normal launches do **not** create or refresh desktop shortcuts, modify Windows Firewall, or open an elevated secondary shell. Existing shortcuts are left untouched; you can delete either without Studio recreating it.
+
+To explicitly create or refresh both the **Swarm Studio** and **Swarm Studio - Emergency Stop** desktop shortcuts and start Studio, run:
+
+```powershell
+.\start.ps1 -CreateShortcuts
+```
+
+Run this only when you want the shortcuts. `-NoShortcut` remains supported by existing launchers and takes precedence if both switches are supplied.
 
 If Windows Firewall really is blocking phone/LAN access to port `1420`, run this once from the project folder:
 
@@ -134,7 +140,7 @@ For browser/PWA development, use:
 npm run dev
 ```
 
-If a Studio-owned Swarm / Comfy process tree starts crash-looping, use the **Swarm Studio - Emergency Stop** desktop shortcut or run:
+If a Studio-owned Swarm / Comfy process tree starts crash-looping, use the **Swarm Studio - Emergency Stop** desktop shortcut (if installed) or run:
 
 ```powershell
 .\start.ps1 -EmergencyStop
